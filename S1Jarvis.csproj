@@ -1,0 +1,162 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<Project ToolsVersion="15.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <Import Project="$(MSBuildExtensionsPath)\$(MSBuildToolsVersion)\Microsoft.Common.props" Condition="Exists('$(MSBuildExtensionsPath)\$(MSBuildToolsVersion)\Microsoft.Common.props')" />
+  <PropertyGroup>
+    <Configuration Condition=" '$(Configuration)' == '' ">Debug</Configuration>
+    <Platform Condition=" '$(Platform)' == '' ">AnyCPU</Platform>
+    <ProjectGuid>{ACD54FA8-8A8D-4170-903F-8E9E1B6733AA}</ProjectGuid>
+    <OutputType>Library</OutputType>
+    <AppDesignerFolder>Properties</AppDesignerFolder>
+    <RootNamespace>S1Jarvis</RootNamespace>
+    <AssemblyName>S1Jarvis</AssemblyName>
+    <TargetFrameworkVersion>v4.8</TargetFrameworkVersion>
+    <FileAlignment>512</FileAlignment>
+    <Deterministic>true</Deterministic>
+  </PropertyGroup>
+  <PropertyGroup Condition=" '$(Configuration)|$(Platform)' == 'Debug|AnyCPU' ">
+    <DebugSymbols>true</DebugSymbols>
+    <DebugType>full</DebugType>
+    <Optimize>false</Optimize>
+    <!-- Ίδια σύμβαση deployment με το S1Courier: το build πέφτει κατευθείαν
+         στο Soft1Core, ώστε το NETDLL να το βρίσκει χωρίς χειροκίνητο copy. -->
+    <OutputPath>..\..\..\Program Files\Soft1Core\</OutputPath>
+    <DefineConstants>DEBUG;TRACE</DefineConstants>
+    <ErrorReport>prompt</ErrorReport>
+    <WarningLevel>4</WarningLevel>
+    <PlatformTarget>x86</PlatformTarget>
+  </PropertyGroup>
+  <PropertyGroup Condition=" '$(Configuration)|$(Platform)' == 'Release|AnyCPU' ">
+    <DebugType>pdbonly</DebugType>
+    <Optimize>true</Optimize>
+    <OutputPath>bin\Release\</OutputPath>
+    <DefineConstants>TRACE</DefineConstants>
+    <ErrorReport>prompt</ErrorReport>
+    <WarningLevel>4</WarningLevel>
+    <PlatformTarget>x86</PlatformTarget>
+  </PropertyGroup>
+  <ItemGroup>
+    <Reference Include="PresentationCore" />
+    <Reference Include="PresentationFramework" />
+    <!-- Το SDK του Soft1 - ίδιο dll/hintpath με το S1Courier.
+         Αν φτιάχνεις άλλη δομή φακέλων, προσάρμοσε το HintPath. -->
+    <Reference Include="Softone.Lib, Version=1.0.0.0, Culture=neutral, PublicKeyToken=307c481590b30bd3, processorArchitecture=x86">
+      <SpecificVersion>False</SpecificVersion>
+      <HintPath>..\..\..\..\..\Program Files\Soft1Core\Softone.Lib.dll</HintPath>
+    </Reference>
+    <!-- Ίδιο dll/version με το ήδη deployed (από S1Courier) στο Soft1Core -
+         ΣΚΟΠΙΜΑ direct HintPath αντί για NuGet, ώστε να ΜΗΝ φέρει άλλο
+         version μέσα στο ίδιο process (δύο DLLs, ίδιο AppDomain). -->
+    <Reference Include="Newtonsoft.Json, Version=13.0.0.0, Culture=neutral, PublicKeyToken=30ad4fe6b2a6aeed">
+      <SpecificVersion>False</SpecificVersion>
+      <HintPath>..\..\..\..\..\Program Files\Soft1Core\Newtonsoft.Json.dll</HintPath>
+    </Reference>
+    <!-- ΝΕΟ 17/08, ρητό αίτημα χρήστη ("JARVISCOURIER" feature) - reuse
+         ΑΥΤΟΥΣΙΩΝ των ICourierProvider/ShipmentRequest/ShipmentResult/
+         CourierProviderFactory/4 courier providers από τον ήδη-deployed
+         S1Courier.dll (HintPath, ΙΔΙΟ idiom με Softone.Lib/Newtonsoft.Json
+         πιο πάνω - ΟΧΙ ProjectReference, ώστε να ΜΗΝ σέρνει μέσα ΟΛΑ τα
+         NuGet dependencies του S1Courier - απλά η ήδη-χτισμένη/deployed
+         assembly). ΔΕΝ χρησιμοποιούμε το S1Courier.Data.CourierRepository
+         (νεκρός κώδικας εκεί - raw SqlClient πάνω σε ΛΑΘΟΣ πίνακα
+         CCCCOURIER_PROVIDERS, ΟΧΙ τον πραγματικό CCCCRPROV) ούτε το
+         S1Courier.Access.LicenseGuard (δικό του entitlement S1COURIER -
+         ο Jarvis έχει ΔΙΚΟ ΤΟΥ, ξεχωριστό: JarvisLicenseGuard +
+         "JARVISCOURIER", βλ. Core/JarvisCourier.cs). -->
+    <Reference Include="S1Courier">
+      <SpecificVersion>False</SpecificVersion>
+      <HintPath>..\..\..\..\..\Program Files\Soft1Core\S1Courier.dll</HintPath>
+    </Reference>
+    <Reference Include="System" />
+    <Reference Include="System.Core" />
+    <Reference Include="System.Data" />
+    <Reference Include="System.Xaml" />
+    <Reference Include="System.Xml" />
+    <Reference Include="System.Xml.Linq" />
+    <Reference Include="System.Net.Http" />
+    <!-- Για XlsxWriter.cs (ZipArchive) - export σε .xlsx χωρίς εξωτερικό
+         NuGet dependency (π.χ. ClosedXML/EPPlus). -->
+    <Reference Include="System.IO.Compression" />
+    <Reference Include="Microsoft.CSharp" />
+    <Reference Include="WindowsBase" />
+    <!-- Για το JarvisHostForm.cs (fallback ElementHost wrapper). -->
+    <Reference Include="System.Windows.Forms" />
+    <Reference Include="WindowsFormsIntegration" />
+  </ItemGroup>
+  <ItemGroup>
+    <!-- PackageReference-style NuGet dependency (δουλεύει και σε classic,
+         μη-SDK-style projects όπως αυτό, από NuGet 4+/VS2017+). Floating
+         version ώστε το restore να τραβήξει ό,τι πιο πρόσφατο 1.0.x υπάρχει -
+         το πραγματικό resolved version φαίνεται μετά το πρώτο restore. -->
+    <PackageReference Include="Microsoft.Web.WebView2" Version="1.0.*" />
+    <!-- ΝΕΟ 17/08, ρητό αίτημα χρήστη - πρόσβαση Jarvis σε email (Office 365
+         πρώτα, βλ. JarvisEmailAccess.cs). Client credentials flow
+         (Application permission Mail.Read, ΟΧΙ Delegated) - compile-checked
+         ΞΕΧΩΡΙΣΤΑ πριν προστεθεί εδώ (throwaway net48 project + πραγματικό
+         Softone.Lib.dll, καμία σύγκρουση dependencies/versions βρέθηκε).
+         Extensions.Msal φέρνει ΚΑΙ το token cache (DPAPI-based) - δεν
+         χρειάζεται σε αυτό το flow (client-credentials, όχι interactive),
+         αλλά ΔΕΝ βλάπτει να μείνει αν χρειαστεί delegated flow αργότερα
+         (π.χ. Gmail/SMTP wizards). -->
+    <PackageReference Include="Microsoft.Identity.Client" Version="4.66.2" />
+  </ItemGroup>
+  <ItemGroup>
+    <Compile Include="Access\AccessCheckModels.cs" />
+    <Compile Include="Access\IAccessControl.cs" />
+    <Compile Include="Access\AccessConfig.cs" />
+    <Compile Include="Access\HttpAccessControl.cs" />
+    <Compile Include="Core\AgentProxyDtos.cs" />
+    <Compile Include="Core\DashboardPanels.cs" />
+    <Compile Include="Core\CsvWriter.cs" />
+    <Compile Include="Core\XlsxWriter.cs" />
+    <Compile Include="Core\DebugLog.cs" />
+    <Compile Include="Core\JarvisTools.cs" />
+    <Compile Include="Core\JarvisEmailAccess.cs" />
+    <Compile Include="Core\JarvisCourier.cs" />
+    <Compile Include="Core\JarvisItems.cs" />
+    <Compile Include="Core\DocumentReaders.cs" />
+    <Compile Include="Core\JarvisAgentClient.cs" />
+    <Compile Include="Access\JarvisLicenseGuard.cs" />
+    <Compile Include="Properties\AssemblyInfo.cs" />
+    <Compile Include="SoftoneIntegration\S1Init.cs" />
+    <Compile Include="SoftoneIntegration\JarvisObject.cs" />
+    <Compile Include="UI\JarvisShell.xaml.cs">
+      <DependentUpon>JarvisShell.xaml</DependentUpon>
+    </Compile>
+    <Compile Include="UI\JarvisHostForm.cs">
+      <SubType>Form</SubType>
+    </Compile>
+  </ItemGroup>
+  <ItemGroup>
+    <Page Include="UI\JarvisShell.xaml">
+      <Generator>MSBuild:Compile</Generator>
+      <SubType>Designer</SubType>
+    </Page>
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="app.config" />
+    <None Include="packages.config" />
+  </ItemGroup>
+  <ItemGroup>
+    <!-- ΑΛΛΑΓΗ 20/08, ρητό αίτημα χρήστη - "ολο το deploy να ειναι ενα
+         αρχειο": ΠΡΙΝ ήταν Content/CopyToOutputDirectory (loose αρχείο
+         δίπλα στο DLL, web\index.html). ΤΩΡΑ EmbeddedResource - μπαίνει
+         ΜΕΣΑ στο ίδιο το S1Jarvis.dll. LogicalName ΡΗΤΑ ορισμένο (όχι
+         namespace-inference) - πρέπει να ταιριάζει ΑΚΡΙΒΩΣ με τα literal
+         strings στο JarvisShell.xaml.cs::ServeEmbeddedWebResource. -->
+    <EmbeddedResource Include="UI\web\index.html">
+      <LogicalName>S1Jarvis.web.index.html</LogicalName>
+    </EmbeddedResource>
+    <!-- ΝΕΟ 18/08, ρητό αίτημα χρήστη - Chart.js (v4.4.4, τοπικό αντίγραφο,
+         ΟΧΙ CDN - το WebView2 μπορεί να μην έχει πάντα internet, ίδιο
+         σκεπτικό με τα υπόλοιπα vendored dlls). Φορτώνεται με <script src>
+         στο index.html (βλ. εκεί). ΑΛΛΑΓΗ 20/08: ίδιο idiom με το
+         index.html πιο πάνω - EmbeddedResource αντί για Content. -->
+    <EmbeddedResource Include="UI\web\vendor\chart.umd.min.js">
+      <LogicalName>S1Jarvis.web.vendor.chart.umd.min.js</LogicalName>
+    </EmbeddedResource>
+  </ItemGroup>
+  <ItemGroup>
+    <Folder Include="web\" />
+  </ItemGroup>
+  <Import Project="$(MSBuildToolsPath)\Microsoft.CSharp.targets" />
+</Project>

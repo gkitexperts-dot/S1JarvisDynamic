@@ -1,0 +1,73 @@
+<UserControl x:Class="S1Jarvis.UI.JarvisShell"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+             xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+             xmlns:wv2="clr-namespace:Microsoft.Web.WebView2.Wpf;assembly=Microsoft.Web.WebView2.Wpf"
+             mc:Ignorable="d"
+             d:DesignHeight="450" d:DesignWidth="650">
+
+    <!--
+        Phase 1: το πραγματικό chat UI (UI/web/index.html) μέσα σε WebView2.
+        Το C# code-behind (JarvisShell.xaml.cs) κάνει:
+          - EnsureCoreWebView2Async + Source = το τοπικό index.html
+          - WebMessageReceived: διαβάζει το prompt του χρήστη (Phase 2 θα το
+            περνάει στο Claude API tool-use loop)
+          - μετά το NavigationCompleted, injectάρει το personalized greeting
+            (PRSN/USERS fallback chain) μέσα στη σελίδα.
+
+        Browser mode (νέο 15/08, βλ. README) - ΔΕΥΤΕΡΟ, ΞΕΧΩΡΙΣΤΟ WebView2
+        (browserView) για πραγματικό browsing (ΟΧΙ iframe μέσα στο
+        index.html - πολλά sites μπλοκάρουν X-Frame-Options, iframe θα
+        έδειχνε άδεια σελίδα σε αρκετά πραγματικά sites). Grid 2 στηλών:
+        browserColumn (αριστερά, 0 κανονικά -> 70% όταν ενεργό) +
+        chatColumn (δεξιά, * - παίρνει ΟΛΟ το πλάτος κανονικά, 30% όταν
+        Browser mode ενεργό). Το ΔΕΞΙ "chatbox" του Browser mode ΔΕΝ είναι
+        ξεχωριστό native control - είναι ΝΕΑ κουρτίνα (#browserCurtain)
+        ΜΕΣΑ στο ήδη υπάρχον index.html/webView, που απλά συρρικνώνεται σε
+        30% πλάτος (βλ. JarvisShell.xaml.cs::OpenBrowserPane).
+    -->
+    <Grid x:Name="rootGrid" Background="#1E1E2E">
+        <Grid.ColumnDefinitions>
+            <ColumnDefinition x:Name="browserColumn" Width="0" />
+            <ColumnDefinition x:Name="chatColumn" Width="*" />
+        </Grid.ColumnDefinitions>
+
+        <!-- Αριστερή στήλη (70% όταν ανοιχτό) - address bar (native
+             TextBox/Button) + browserView. RenderTransform (TranslateTransform)
+             κάνει το "slide in from the left" animation - βλ. C#
+             OpenBrowserPane/CloseBrowserPane. Αν το animation αποδειχθεί
+             προβληματικό ζωντανά, το FALLBACK είναι να αγνοηθεί απλά το
+             Storyboard call (βλ. σχόλιο εκεί) - η στήλη/ορατότητα αλλάζουν
+             ήδη σωστά χωρίς αυτό, απλά χωρίς το οπτικό "sliding". -->
+        <Grid x:Name="browserPane" Grid.Column="0" Visibility="Collapsed" ClipToBounds="True">
+            <Grid.RenderTransform>
+                <TranslateTransform x:Name="browserPaneTransform" X="0" />
+            </Grid.RenderTransform>
+            <Grid.RowDefinitions>
+                <RowDefinition Height="Auto" />
+                <RowDefinition Height="*" />
+            </Grid.RowDefinitions>
+
+            <Border Grid.Row="0" Background="#2A2A3D" Padding="10,8" BorderBrush="#3A3A50" BorderThickness="0,0,0,1">
+                <Grid>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="Auto" />
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="Auto" />
+                        <ColumnDefinition Width="Auto" />
+                    </Grid.ColumnDefinitions>
+                    <Button x:Name="browserBackBtn" Grid.Column="0" Content="←" Width="28" Height="28" Margin="0,0,6,0" />
+                    <TextBox x:Name="browserAddressBar" Grid.Column="1" VerticalContentAlignment="Center"
+                             Padding="8,4" Background="#1E1E2E" Foreground="White" BorderBrush="#3A3A50" />
+                    <Button x:Name="browserGoBtn" Grid.Column="2" Content="Go" Width="44" Height="28" Margin="6,0,0,0" />
+                    <Button x:Name="browserCloseBtn" Grid.Column="3" Content="✕" Width="28" Height="28" Margin="6,0,0,0" />
+                </Grid>
+            </Border>
+
+            <wv2:WebView2 x:Name="browserView" Grid.Row="1" />
+        </Grid>
+
+        <wv2:WebView2 x:Name="webView" Grid.Column="1" />
+    </Grid>
+</UserControl>

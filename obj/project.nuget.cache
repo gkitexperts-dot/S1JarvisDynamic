@@ -1,0 +1,17 @@
+{
+  "version": 2,
+  "dgSpecHash": "1dlL6T8IuxQWQX1wA3S8YkOUnGoyOWohcw6MHGultKkKtJkbn3z7cOmgZrmYNHdieQRqL8BPnZOGjoBDFn1GFA==",
+  "success": true,
+  "projectFilePath": "C:\\Claude\\CodeExamples\\S1Jarvis\\S1Jarvis.csproj",
+  "expectedPackageFiles": [
+    "C:\\Users\\gkirkmalis.JETOIL.000\\.nuget\\packages\\microsoft.identity.client\\4.66.2\\microsoft.identity.client.4.66.2.nupkg.sha512",
+    "C:\\Users\\gkirkmalis.JETOIL.000\\.nuget\\packages\\microsoft.identitymodel.abstractions\\6.35.0\\microsoft.identitymodel.abstractions.6.35.0.nupkg.sha512",
+    "C:\\Users\\gkirkmalis.JETOIL.000\\.nuget\\packages\\microsoft.web.webview2\\1.0.4129.50\\microsoft.web.webview2.1.0.4129.50.nupkg.sha512",
+    "C:\\Users\\gkirkmalis.JETOIL.000\\.nuget\\packages\\system.buffers\\4.5.1\\system.buffers.4.5.1.nupkg.sha512",
+    "C:\\Users\\gkirkmalis.JETOIL.000\\.nuget\\packages\\system.diagnostics.diagnosticsource\\6.0.1\\system.diagnostics.diagnosticsource.6.0.1.nupkg.sha512",
+    "C:\\Users\\gkirkmalis.JETOIL.000\\.nuget\\packages\\system.memory\\4.5.4\\system.memory.4.5.4.nupkg.sha512",
+    "C:\\Users\\gkirkmalis.JETOIL.000\\.nuget\\packages\\system.numerics.vectors\\4.5.0\\system.numerics.vectors.4.5.0.nupkg.sha512",
+    "C:\\Users\\gkirkmalis.JETOIL.000\\.nuget\\packages\\system.runtime.compilerservices.unsafe\\6.0.0\\system.runtime.compilerservices.unsafe.6.0.0.nupkg.sha512"
+  ],
+  "logs": []
+}
