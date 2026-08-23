@@ -13,9 +13,8 @@ namespace S1Jarvis.Access.Verilic
     }
 
     /// <summary>
-    /// Local installation state for one Verilic product. Key material is opaque
-    /// here on purpose; the proof algorithm owns its format. The whole payload
-    /// is DPAPI protected before it is written to disk.
+    /// Local installation state for one Verilic product. Key material and
+    /// activation retry state are protected together with DPAPI before disk.
     /// </summary>
     internal sealed class VerilicInstallationState
     {
@@ -33,16 +32,22 @@ namespace S1Jarvis.Access.Verilic
 
         [JsonProperty("privateKeyMaterial")]
         public byte[] PrivateKeyMaterial { get; set; }
+
+        [JsonProperty("activationCompleted")]
+        public bool ActivationCompleted { get; set; }
+
+        [JsonProperty("activationIdempotencyKey")]
+        public string ActivationIdempotencyKey { get; set; }
     }
 
     /// <summary>
     /// .NET Framework 4.8 compatible DPAPI store for Verilic installation
-    /// identity and private proof material. The caller must explicitly choose
-    /// CurrentUser or LocalMachine protection and the storage directory.
+    /// identity and private proof material. The caller explicitly chooses the
+    /// DPAPI scope and storage directory.
     ///
-    /// Missing state may create a new installation id. Corrupt or undecryptable
-    /// state never auto-regenerates because silently changing installation
-    /// identity could bypass server lifecycle/revocation expectations.
+    /// Missing state may create a provisional local installation id. Corrupt or
+    /// undecryptable state never auto-regenerates. After successful activation,
+    /// the provisional id must be replaced by the authoritative server id.
     /// </summary>
     internal sealed class VerilicInstallationStateStore
     {
@@ -121,7 +126,9 @@ namespace S1Jarvis.Access.Verilic
                 ProductCode = normalizedProduct,
                 InstallationId = CreateInstallationId(),
                 KeyAlgorithm = null,
-                PrivateKeyMaterial = null
+                PrivateKeyMaterial = null,
+                ActivationCompleted = false,
+                ActivationIdempotencyKey = null
             };
 
             Save(created);
@@ -138,6 +145,16 @@ namespace S1Jarvis.Access.Verilic
                 throw new InvalidDataException(
                     "Unsupported Verilic installation state version.");
             RequireIdentifier(state.InstallationId, "installationId");
+
+            if (!string.IsNullOrEmpty(state.ActivationIdempotencyKey))
+                RequireIdentifier(state.ActivationIdempotencyKey, "activationIdempotencyKey");
+
+            if (state.ActivationCompleted &&
+                (!string.Equals(state.KeyAlgorithm, "ES256", StringComparison.Ordinal) ||
+                 state.PrivateKeyMaterial == null ||
+                 state.PrivateKeyMaterial.Length == 0))
+                throw new InvalidDataException(
+                    "Completed Verilic activation requires an ES256 installation key.");
 
             Directory.CreateDirectory(_baseDirectory);
             string path = GetStatePath(normalizedProduct);
@@ -200,7 +217,7 @@ namespace S1Jarvis.Access.Verilic
             using (var rng = RandomNumberGenerator.Create())
                 rng.GetBytes(bytes);
 
-            return "ins_" + ToHex(bytes);
+            return "pending_" + ToHex(bytes);
         }
 
         private static string ToHex(byte[] bytes)
@@ -258,6 +275,16 @@ namespace S1Jarvis.Access.Verilic
                     "Verilic installation state product binding mismatch.");
 
             RequireIdentifier(state.InstallationId, "installationId");
+
+            if (!string.IsNullOrEmpty(state.ActivationIdempotencyKey))
+                RequireIdentifier(state.ActivationIdempotencyKey, "activationIdempotencyKey");
+
+            if (state.ActivationCompleted &&
+                (!string.Equals(state.KeyAlgorithm, "ES256", StringComparison.Ordinal) ||
+                 state.PrivateKeyMaterial == null ||
+                 state.PrivateKeyMaterial.Length == 0))
+                throw new InvalidDataException(
+                    "Completed Verilic activation state is missing its ES256 key.");
         }
     }
 }
