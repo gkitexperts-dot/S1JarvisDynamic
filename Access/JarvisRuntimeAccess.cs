@@ -92,6 +92,19 @@ namespace S1Jarvis.Access
                     : null
             };
         }
+
+        public static JarvisAgentRoutingDecision FromVerilic(
+            VerilicAiRoutingResult result)
+        {
+            if (result == null || !result.Success ||
+                string.IsNullOrWhiteSpace(result.AgentAccountRef))
+                return None();
+
+            return new JarvisAgentRoutingDecision
+            {
+                AgentAccountRef = result.AgentAccountRef.Trim()
+            };
+        }
     }
 
     internal sealed class JarvisRuntimeAccessResult
