@@ -72,26 +72,24 @@ namespace S1Jarvis.Access
     }
 
     /// <summary>
-    /// Cutover provider: Verilic is the only licensing authority. The legacy
-    /// Nexus call is made only after Verilic Allowed=true and is consumed only
-    /// as an opaque AI-routing lookup. A Verilic deny never falls back to the
-    /// legacy entitlement decision.
+    /// Cutover provider: Verilic is the only licensing authority and the only
+    /// runtime AI-routing source. A licensing denial stops immediately and never
+    /// falls back to legacy Nexus authorization or routing.
     /// </summary>
     internal sealed class SplitVerilicRuntimeAccessProvider :
         IJarvisRuntimeAccessProvider
     {
         private readonly IVerilicRuntimeLicenceProvider _licensing;
-        private readonly Func<XSupport, string, AccessCheckResponse>
-            _legacyRoutingLookup;
+        private readonly IVerilicRuntimeAiRoutingProvider _routing;
 
         public SplitVerilicRuntimeAccessProvider(
             IVerilicRuntimeLicenceProvider licensing,
-            Func<XSupport, string, AccessCheckResponse> legacyRoutingLookup)
+            IVerilicRuntimeAiRoutingProvider routing)
         {
             _licensing = licensing ??
                 throw new ArgumentNullException(nameof(licensing));
-            _legacyRoutingLookup = legacyRoutingLookup ??
-                throw new ArgumentNullException(nameof(legacyRoutingLookup));
+            _routing = routing ??
+                throw new ArgumentNullException(nameof(routing));
         }
 
         public JarvisRuntimeAccessResult Check(
@@ -117,26 +115,22 @@ namespace S1Jarvis.Access
                     JarvisAgentRoutingDecision.None());
             }
 
-            AccessCheckResponse legacyRouting;
+            VerilicAiRoutingResult routingResult;
             try
             {
-                legacyRouting =
-                    _legacyRoutingLookup(xSupport, productCode);
+                routingResult = _routing.Resolve(
+                    xSupport,
+                    productCode);
             }
             catch
             {
-                legacyRouting = null;
+                routingResult = null;
             }
-
-            JarvisAgentRoutingDecision routing =
-                legacyRouting == null
-                    ? JarvisAgentRoutingDecision.None()
-                    : JarvisAgentRoutingDecision.FromLegacy(
-                        legacyRouting);
 
             return JarvisRuntimeAccessResult.Create(
                 licence,
-                routing);
+                JarvisAgentRoutingDecision.FromVerilic(
+                    routingResult));
         }
     }
 }
