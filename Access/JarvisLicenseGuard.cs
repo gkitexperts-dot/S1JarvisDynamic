@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using Softone;
+using S1Jarvis.Access.Verilic;
 
 namespace S1Jarvis.Access
 {
@@ -8,7 +9,7 @@ namespace S1Jarvis.Access
     // JarvisLicenseGuard
     //
     // Runtime access boundary for the Jarvis product family. The legacy Nexus
-    // lookup remains cached for the transitional mode and, after Verilic
+    // lookup remains cached for transitional legacy mode and, after Verilic
     // cutover, for opaque AI-routing resolution only.
     // ══════════════════════════════════════════════════════════════════════
     internal static class JarvisLicenseGuard
@@ -19,12 +20,43 @@ namespace S1Jarvis.Access
         private static readonly Dictionary<string, (AccessCheckResponse result, DateTime at)> _cache =
             new Dictionary<string, (AccessCheckResponse, DateTime)>();
 
-        // Step 12F composition remains intentionally on the legacy provider
-        // until the Verilic endpoint and activated installation are explicitly
-        // ready for cutover. The SplitVerilicRuntimeAccessProvider is the
-        // cutover implementation and never falls back after a Verilic deny.
         private static readonly IJarvisRuntimeAccessProvider _runtimeAccessProvider =
-            new LegacyNexusRuntimeAccessProvider(CheckLegacyAccessSilent);
+            CreateRuntimeAccessProvider();
+
+        private static IJarvisRuntimeAccessProvider CreateRuntimeAccessProvider()
+        {
+            try
+            {
+                VerilicRuntimeConfiguration configuration =
+                    VerilicRuntimeConfiguration.Load();
+
+                if (configuration.Mode == VerilicRuntimeMode.Legacy)
+                    return new LegacyNexusRuntimeAccessProvider(
+                        CheckLegacyAccessSilent);
+
+                var stateStore = new VerilicInstallationStateStore(
+                    configuration.StateDirectory,
+                    configuration.ProtectionScope);
+
+                IVerilicRuntimeLicenceProvider licensing =
+                    new VerilicRuntimeLicenceProvider(
+                        stateStore,
+                        configuration.VerificationUri,
+                        configuration.ProductVersion,
+                        configuration.ResolveProductId);
+
+                return new SplitVerilicRuntimeAccessProvider(
+                    licensing,
+                    CheckLegacyAccessSilent);
+            }
+            catch
+            {
+                // If Verilic mode was explicitly requested but its configuration
+                // cannot be composed, never fall back to legacy authorization.
+                return new FailClosedRuntimeAccessProvider(
+                    "runtime_configuration_invalid");
+            }
+        }
 
         public static JarvisRuntimeAccessResult CheckRuntimeAccessSilent(
             XSupport xSupport,
@@ -50,9 +82,8 @@ namespace S1Jarvis.Access
 
         /// <summary>
         /// Compatibility API for the existing JarvisShell call sites. The
-        /// response shape stays unchanged, but its licensing Allowed value now
-        /// comes from the configured runtime access provider. This lets Step 12
-        /// cut over the authority without a broad UI rewrite.
+        /// response shape stays unchanged, but its licensing Allowed value comes
+        /// from the configured runtime access provider.
         /// </summary>
         public static AccessCheckResponse CheckAccessSilent(
             XSupport xSupport,
