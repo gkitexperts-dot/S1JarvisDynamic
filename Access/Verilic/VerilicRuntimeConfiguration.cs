@@ -13,13 +13,11 @@ namespace S1Jarvis.Access.Verilic
 
     /// <summary>
     /// External, non-secret composition settings for the in-process Verilic
-    /// client. Environment variables are used deliberately because S1Jarvis is
-    /// loaded by the Soft1 host and cannot safely own the host executable's
-    /// app.config. Missing configuration never silently enables Verilic.
-    ///
-    /// Registered ProductIds are runtime composition data and are required in
-    /// Verilic mode. VendorId/LicenceIds are activation-only references: they
-    /// may be absent for products that are not being activated on this client.
+    /// client. A per-user local configuration file is authoritative when it
+    /// exists so Soft1 startup mode does not affect licensing composition.
+    /// Process environment variables remain supported as a development and
+    /// migration fallback only. Missing configuration never silently enables
+    /// Verilic.
     /// </summary>
     internal sealed class VerilicRuntimeConfiguration
     {
@@ -96,7 +94,71 @@ namespace S1Jarvis.Access.Verilic
 
         public static VerilicRuntimeConfiguration Load()
         {
-            string modeText = Environment.GetEnvironmentVariable(ModeVariable);
+            VerilicLocalConfiguration local = VerilicLocalConfigurationStore.Load();
+            if (local != null)
+                return LoadLocal(local);
+
+            return LoadProcessEnvironment();
+        }
+
+        internal static void ValidateLocalConfiguration(
+            VerilicLocalConfiguration local)
+        {
+            if (local == null)
+                throw new ArgumentNullException(nameof(local));
+
+            LoadLocal(local);
+        }
+
+        private static VerilicRuntimeConfiguration LoadLocal(
+            VerilicLocalConfiguration local)
+        {
+            return Create(
+                local.Mode,
+                local.Origin,
+                local.StateDirectory,
+                local.DpapiScope,
+                local.VendorId,
+                local.JarvisProductId,
+                local.JarvisLicenceId,
+                local.CourierProductId,
+                local.CourierLicenceId,
+                local.DocReaderProductId,
+                local.DocReaderLicenceId,
+                "local Verilic configuration");
+        }
+
+        private static VerilicRuntimeConfiguration LoadProcessEnvironment()
+        {
+            return Create(
+                Environment.GetEnvironmentVariable(ModeVariable),
+                Environment.GetEnvironmentVariable(OriginVariable),
+                Environment.GetEnvironmentVariable(StateDirectoryVariable),
+                Environment.GetEnvironmentVariable(DpapiScopeVariable),
+                Environment.GetEnvironmentVariable(VendorIdVariable),
+                Environment.GetEnvironmentVariable("S1JARVIS_VERILIC_PRODUCT_ID"),
+                Environment.GetEnvironmentVariable("S1JARVIS_VERILIC_LICENCE_ID"),
+                Environment.GetEnvironmentVariable("S1JARVISCOURIER_VERILIC_PRODUCT_ID"),
+                Environment.GetEnvironmentVariable("S1JARVISCOURIER_VERILIC_LICENCE_ID"),
+                Environment.GetEnvironmentVariable("S1JARVISDOCREADER_VERILIC_PRODUCT_ID"),
+                Environment.GetEnvironmentVariable("S1JARVISDOCREADER_VERILIC_LICENCE_ID"),
+                "process environment");
+        }
+
+        private static VerilicRuntimeConfiguration Create(
+            string modeText,
+            string originText,
+            string stateDirectoryText,
+            string scopeText,
+            string vendorIdText,
+            string jarvisProductIdText,
+            string jarvisLicenceIdText,
+            string courierProductIdText,
+            string courierLicenceIdText,
+            string docReaderProductIdText,
+            string docReaderLicenceIdText,
+            string sourceName)
+        {
             if (string.IsNullOrWhiteSpace(modeText) ||
                 string.Equals(modeText.Trim(), "legacy", StringComparison.OrdinalIgnoreCase))
             {
@@ -113,38 +175,26 @@ namespace S1Jarvis.Access.Verilic
 
             if (!string.Equals(modeText.Trim(), "verilic", StringComparison.OrdinalIgnoreCase))
                 throw new InvalidOperationException(
-                    "S1Jarvis Verilic runtime mode is invalid.");
+                    "S1Jarvis Verilic runtime mode is invalid in " + sourceName + ".");
 
-            Uri origin = RequireHttpsOrigin(
-                Environment.GetEnvironmentVariable(OriginVariable));
+            Uri origin = RequireHttpsOrigin(originText);
 
-            string stateDirectory = Environment.GetEnvironmentVariable(
-                StateDirectoryVariable);
+            string stateDirectory = stateDirectoryText;
             if (string.IsNullOrWhiteSpace(stateDirectory))
-            {
-                stateDirectory = Path.Combine(
-                    Environment.GetFolderPath(
-                        Environment.SpecialFolder.LocalApplicationData),
-                    "S1Jarvis",
-                    "Verilic");
-            }
+                stateDirectory = VerilicLocalConfigurationStore.GetDefaultDirectory();
 
-            VerilicInstallationProtectionScope scope = ParseProtectionScope(
-                Environment.GetEnvironmentVariable(DpapiScopeVariable));
+            VerilicInstallationProtectionScope scope = ParseProtectionScope(scopeText);
 
             var productIds = new Dictionary<string, string>(StringComparer.Ordinal)
             {
                 [JarvisProducts.Jarvis] = RequireIdentifier(
-                    Environment.GetEnvironmentVariable(
-                        "S1JARVIS_VERILIC_PRODUCT_ID"),
+                    jarvisProductIdText,
                     "S1JARVIS_VERILIC_PRODUCT_ID"),
                 [JarvisProducts.JarvisCourier] = RequireIdentifier(
-                    Environment.GetEnvironmentVariable(
-                        "S1JARVISCOURIER_VERILIC_PRODUCT_ID"),
+                    courierProductIdText,
                     "S1JARVISCOURIER_VERILIC_PRODUCT_ID"),
                 [JarvisProducts.JarvisDocReader] = RequireIdentifier(
-                    Environment.GetEnvironmentVariable(
-                        "S1JARVISDOCREADER_VERILIC_PRODUCT_ID"),
+                    docReaderProductIdText,
                     "S1JARVISDOCREADER_VERILIC_PRODUCT_ID")
             };
 
@@ -152,24 +202,21 @@ namespace S1Jarvis.Access.Verilic
             AddOptionalIdentifier(
                 licenceIds,
                 JarvisProducts.Jarvis,
-                Environment.GetEnvironmentVariable(
-                    "S1JARVIS_VERILIC_LICENCE_ID"),
+                jarvisLicenceIdText,
                 "S1JARVIS_VERILIC_LICENCE_ID");
             AddOptionalIdentifier(
                 licenceIds,
                 JarvisProducts.JarvisCourier,
-                Environment.GetEnvironmentVariable(
-                    "S1JARVISCOURIER_VERILIC_LICENCE_ID"),
+                courierLicenceIdText,
                 "S1JARVISCOURIER_VERILIC_LICENCE_ID");
             AddOptionalIdentifier(
                 licenceIds,
                 JarvisProducts.JarvisDocReader,
-                Environment.GetEnvironmentVariable(
-                    "S1JARVISDOCREADER_VERILIC_LICENCE_ID"),
+                docReaderLicenceIdText,
                 "S1JARVISDOCREADER_VERILIC_LICENCE_ID");
 
             string vendorId = OptionalIdentifier(
-                Environment.GetEnvironmentVariable(VendorIdVariable),
+                vendorIdText,
                 VendorIdVariable);
 
             return new VerilicRuntimeConfiguration(
