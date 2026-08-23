@@ -145,13 +145,28 @@ namespace S1Jarvis.Access
                     JarvisProducts.Jarvis,
                     "Η άδεια χρήσης δεν είναι διαθέσιμη.");
 
+            bool baseJarvisRequiresRouting =
+                string.Equals(
+                    Licence.ToolName,
+                    JarvisProducts.Jarvis,
+                    StringComparison.Ordinal);
+            bool routingAvailable =
+                AgentRouting != null && AgentRouting.Available;
+            bool operationallyAllowed =
+                Licence.Allowed &&
+                (!baseJarvisRequiresRouting || routingAvailable);
+
             return new AccessCheckResponse
             {
-                Allowed = Licence.Allowed,
+                Allowed = operationallyAllowed,
                 ToolName = Licence.ToolName,
-                Message = Licence.Message,
+                Message = Licence.Allowed &&
+                          baseJarvisRequiresRouting &&
+                          !routingAvailable
+                    ? "Η άδεια είναι ενεργή, αλλά η δρομολόγηση AI δεν είναι διαθέσιμη."
+                    : Licence.Message,
                 ValidUntil = Licence.ValidUntil,
-                AgentAccountRef = Licence.Allowed && AgentRouting != null
+                AgentAccountRef = operationallyAllowed && routingAvailable
                     ? AgentRouting.AgentAccountRef
                     : null
             };
