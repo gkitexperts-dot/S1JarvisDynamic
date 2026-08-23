@@ -77,6 +77,7 @@
     <Compile Include="Access\Verilic\VerilicLicenceHttpTransport.cs" />
     <Compile Include="Access\Verilic\VerilicAiRoutingHttpTransport.cs" />
     <Compile Include="Access\Verilic\VerilicInstallationStateStore.cs" />
+    <Compile Include="Access\Verilic\VerilicLocalConfigurationStore.cs" />
     <Compile Include="Access\Verilic\VerilicEs256RequestAuthorizer.cs" />
     <Compile Include="Access\Verilic\VerilicActivationClient.cs" />
     <Compile Include="Access\Verilic\VerilicActivationCoordinator.cs" />
