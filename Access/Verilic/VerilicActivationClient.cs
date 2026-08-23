@@ -105,6 +105,7 @@ namespace S1Jarvis.Access.Verilic
         {
             VerilicInstallationState state = _stateStore.GetOrCreateIdentity(request.ProductCode);
             BindProductId(state, request.ProductId);
+            BindLicenceId(state, request.LicenceId);
 
             if (state.ActivationCompleted)
             {
@@ -166,6 +167,7 @@ namespace S1Jarvis.Access.Verilic
                 return VerilicActivationResult.Denied("activation_response_invalid");
 
             state.VerilicProductId = request.ProductId;
+            state.VerilicLicenceId = request.LicenceId;
             state.InstallationId = completion.InstallationId;
             state.ActivationCompleted = true;
             state.ActivationIdempotencyKey = null;
@@ -193,6 +195,33 @@ namespace S1Jarvis.Access.Verilic
 
             if (!string.Equals(state.VerilicProductId, productId, StringComparison.Ordinal))
                 throw new InvalidDataException("Verilic installation ProductId binding mismatch.");
+        }
+
+        private void BindLicenceId(VerilicInstallationState state, string licenceId)
+        {
+            if (!state.ActivationCompleted &&
+                string.IsNullOrWhiteSpace(state.VerilicLicenceId))
+            {
+                state.VerilicLicenceId = licenceId;
+                _stateStore.Save(state);
+                return;
+            }
+
+            if (string.Equals(state.VerilicLicenceId, licenceId, StringComparison.Ordinal))
+                return;
+
+            // Licence rotation is operator-controlled because Activate is only
+            // called explicitly. Reusing a completed local installation here
+            // would keep verification pinned to the old server-side LicenceId.
+            // Preserve the installation proof key, but clear all activation
+            // completion/challenge state so a fresh server installation can be
+            // issued against the newly configured licence.
+            state.VerilicLicenceId = licenceId;
+            state.ActivationCompleted = false;
+            state.ActivationIdempotencyKey = null;
+            state.ActivationChallengeId = null;
+            state.ActivationChallengeToken = null;
+            _stateStore.Save(state);
         }
 
         private async Task<ActivationChallengeResponse> CreateChallengeAsync(
