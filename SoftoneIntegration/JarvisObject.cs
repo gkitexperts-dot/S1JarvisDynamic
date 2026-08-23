@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Windows;
 using Softone;
 using S1Jarvis.Access;
@@ -14,6 +15,13 @@ namespace S1Jarvis.SoftoneIntegration
     [WorksOn("CCCJARVIS")]
     public class JarvisObject : TXCode
     {
+        private static readonly string[] VerilicActivationProducts =
+        {
+            JarvisProducts.Jarvis,
+            JarvisProducts.JarvisCourier,
+            JarvisProducts.JarvisDocReader
+        };
+
         // Static, ίδια σύμβαση με S1Courier's _courierPage/_manifestPage -
         // κρατάει reference στο ζωντανό control όσο είναι ανοιχτό το object.
         private static FrameworkElement _shell;
@@ -42,10 +50,86 @@ namespace S1Jarvis.SoftoneIntegration
             }
         }
 
-        // Explicit operator entrypoints for Verilic activation. These methods
-        // are deliberately never called from OnFormLoad/startup. Activation
-        // establishes installation identity only; normal runtime verification
-        // remains authoritative for Allowed/Denied.
+        // Native Soft1-side operator command. Intended to be bound to a normal
+        // Soft1 form/admin action, outside the Jarvis WPF/WebView UI. It is
+        // deliberately never called from OnFormLoad/startup.
+        public string ActivateVerilicAll()
+        {
+            MessageBoxResult confirmation = MessageBox.Show(
+                "Θα δημιουργηθούν τα τοπικά Verilic installation identities και θα ενεργοποιηθούν οι ρυθμισμένες test/demo άδειες για αυτόν τον Windows user. Συνέχεια;",
+                "Verilic licensing activation",
+                MessageBoxButton.YesNo,
+                MessageBoxImage.Warning);
+
+            if (confirmation != MessageBoxResult.Yes)
+                return "Verilic activation cancelled.";
+
+            try
+            {
+                VerilicRuntimeConfiguration configuration =
+                    VerilicRuntimeConfiguration.Load();
+
+                if (configuration.Mode != VerilicRuntimeMode.Verilic)
+                    return "Verilic activation: runtime_mode_legacy";
+
+                var inspector = new VerilicReadinessInspector(configuration);
+                var coordinator = new VerilicActivationCoordinator(configuration);
+                var messages = new List<string>();
+
+                foreach (string productCode in VerilicActivationProducts)
+                {
+                    VerilicProductReadiness before = inspector.Inspect(productCode);
+
+                    if (before.RuntimeReady)
+                    {
+                        messages.Add(productCode + ": already_activated");
+                        continue;
+                    }
+
+                    if (!before.ActivationReferencesConfigured)
+                    {
+                        messages.Add(productCode + ": activation_references_missing");
+                        return ShowActivationSummary(messages, true);
+                    }
+
+                    VerilicActivationResult result = coordinator.Activate(productCode);
+                    if (result == null || !result.Success)
+                    {
+                        messages.Add(productCode + ": denied (" +
+                            SafeReason(result == null ? null : result.ReasonCode) + ")");
+                        return ShowActivationSummary(messages, true);
+                    }
+
+                    VerilicProductReadiness after = inspector.Inspect(productCode);
+                    if (!after.RuntimeReady)
+                    {
+                        messages.Add(productCode + ": local_readiness_incomplete");
+                        return ShowActivationSummary(messages, true);
+                    }
+
+                    messages.Add(productCode +
+                        (result.WasAlreadyCompleted
+                            ? ": already_completed"
+                            : ": activated"));
+                }
+
+                return ShowActivationSummary(messages, false);
+            }
+            catch
+            {
+                string message =
+                    "Verilic activation failed: activation_configuration_invalid";
+                MessageBox.Show(
+                    message,
+                    "Verilic licensing",
+                    MessageBoxButton.OK,
+                    MessageBoxImage.Error);
+                return message;
+            }
+        }
+
+        // Individual explicit entrypoints remain available for maintenance and
+        // controlled troubleshooting. They are not invoked automatically.
         public string ActivateVerilicJarvis()
         {
             return ActivateVerilicProduct(JarvisProducts.Jarvis);
@@ -105,10 +189,26 @@ namespace S1Jarvis.SoftoneIntegration
             }
             catch
             {
-                // Never expose configuration, transport or cryptographic
-                // exception details through the Soft1 operator surface.
                 return "Η ενεργοποίηση Verilic δεν ολοκληρώθηκε. Κωδικός: activation_failed";
             }
+        }
+
+        private static string ShowActivationSummary(
+            IEnumerable<string> messages,
+            bool isError)
+        {
+            string text = "Verilic activation result:" +
+                          Environment.NewLine +
+                          "- " +
+                          string.Join(Environment.NewLine + "- ", messages);
+
+            MessageBox.Show(
+                text,
+                "Verilic licensing",
+                MessageBoxButton.OK,
+                isError ? MessageBoxImage.Error : MessageBoxImage.Information);
+
+            return text;
         }
 
         private static string FormatReadiness(
