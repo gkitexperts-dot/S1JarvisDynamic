@@ -16,6 +16,10 @@ namespace S1Jarvis.Access.Verilic
     /// client. Environment variables are used deliberately because S1Jarvis is
     /// loaded by the Soft1 host and cannot safely own the host executable's
     /// app.config. Missing configuration never silently enables Verilic.
+    ///
+    /// Registered ProductIds are runtime composition data and are required in
+    /// Verilic mode. VendorId/LicenceIds are activation-only references: they
+    /// may be absent for products that are not being activated on this client.
     /// </summary>
     internal sealed class VerilicRuntimeConfiguration
     {
@@ -76,12 +80,21 @@ namespace S1Jarvis.Access.Verilic
                 "No Verilic ProductId is configured for the Jarvis product.");
         }
 
+        public string ResolveActivationVendorId()
+        {
+            if (string.IsNullOrWhiteSpace(VendorId))
+                throw new InvalidOperationException(
+                    "No Verilic VendorId is configured for activation.");
+
+            return VendorId;
+        }
+
         public string ResolveLicenceId(string productCode)
         {
             return ResolveMappedIdentifier(
                 _licenceIds,
                 productCode,
-                "No Verilic LicenceId is configured for the Jarvis product.");
+                "No Verilic LicenceId is configured for activation of this Jarvis product.");
         }
 
         public static VerilicRuntimeConfiguration Load()
@@ -138,23 +151,27 @@ namespace S1Jarvis.Access.Verilic
                     "S1JARVISDOCREADER_VERILIC_PRODUCT_ID")
             };
 
-            var licenceIds = new Dictionary<string, string>(StringComparer.Ordinal)
-            {
-                [JarvisProducts.Jarvis] = RequireIdentifier(
-                    Environment.GetEnvironmentVariable(
-                        "S1JARVIS_VERILIC_LICENCE_ID"),
+            var licenceIds = new Dictionary<string, string>(StringComparer.Ordinal);
+            AddOptionalIdentifier(
+                licenceIds,
+                JarvisProducts.Jarvis,
+                Environment.GetEnvironmentVariable(
                     "S1JARVIS_VERILIC_LICENCE_ID"),
-                [JarvisProducts.JarvisCourier] = RequireIdentifier(
-                    Environment.GetEnvironmentVariable(
-                        "S1JARVISCOURIER_VERILIC_LICENCE_ID"),
+                "S1JARVIS_VERILIC_LICENCE_ID");
+            AddOptionalIdentifier(
+                licenceIds,
+                JarvisProducts.JarvisCourier,
+                Environment.GetEnvironmentVariable(
                     "S1JARVISCOURIER_VERILIC_LICENCE_ID"),
-                [JarvisProducts.JarvisDocReader] = RequireIdentifier(
-                    Environment.GetEnvironmentVariable(
-                        "S1JARVISDOCREADER_VERILIC_LICENCE_ID"),
-                    "S1JARVISDOCREADER_VERILIC_LICENCE_ID")
-            };
+                "S1JARVISCOURIER_VERILIC_LICENCE_ID");
+            AddOptionalIdentifier(
+                licenceIds,
+                JarvisProducts.JarvisDocReader,
+                Environment.GetEnvironmentVariable(
+                    "S1JARVISDOCREADER_VERILIC_LICENCE_ID"),
+                "S1JARVISDOCREADER_VERILIC_LICENCE_ID");
 
-            string vendorId = RequireIdentifier(
+            string vendorId = OptionalIdentifier(
                 Environment.GetEnvironmentVariable(VendorIdVariable),
                 VendorIdVariable);
 
@@ -167,6 +184,25 @@ namespace S1Jarvis.Access.Verilic
                 licenceIds,
                 vendorId,
                 GetProductVersion());
+        }
+
+        private static void AddOptionalIdentifier(
+            Dictionary<string, string> values,
+            string productCode,
+            string value,
+            string variableName)
+        {
+            string normalized = OptionalIdentifier(value, variableName);
+            if (!string.IsNullOrEmpty(normalized))
+                values[productCode] = normalized;
+        }
+
+        private static string OptionalIdentifier(string value, string variableName)
+        {
+            if (string.IsNullOrWhiteSpace(value))
+                return null;
+
+            return RequireIdentifier(value, variableName);
         }
 
         private static string ResolveMappedIdentifier(
