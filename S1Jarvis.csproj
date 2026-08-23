@@ -102,12 +102,22 @@
     <Compile Include="UI\JarvisShell.xaml.cs">
       <DependentUpon>JarvisShell.xaml</DependentUpon>
     </Compile>
+    <Compile Include="UI\VerilicMaintenanceShell.xaml.cs">
+      <DependentUpon>VerilicMaintenanceShell.xaml</DependentUpon>
+    </Compile>
     <Compile Include="UI\JarvisHostForm.cs">
+      <SubType>Form</SubType>
+    </Compile>
+    <Compile Include="UI\VerilicMaintenanceHostForm.cs">
       <SubType>Form</SubType>
     </Compile>
   </ItemGroup>
   <ItemGroup>
     <Page Include="UI\JarvisShell.xaml">
+      <Generator>MSBuild:Compile</Generator>
+      <SubType>Designer</SubType>
+    </Page>
+    <Page Include="UI\VerilicMaintenanceShell.xaml">
       <Generator>MSBuild:Compile</Generator>
       <SubType>Designer</SubType>
     </Page>
