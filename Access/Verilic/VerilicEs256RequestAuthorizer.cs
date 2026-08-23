@@ -102,7 +102,16 @@ namespace S1Jarvis.Access.Verilic
 
         internal static byte[] GeneratePrivateKeyMaterial(out string publicJwk)
         {
-            using (CngKey key = CngKey.Create(CngAlgorithm.ECDsaP256))
+            var creationParameters = new CngKeyCreationParameters
+            {
+                ExportPolicy = CngExportPolicies.AllowExport |
+                               CngExportPolicies.AllowPlaintextExport
+            };
+
+            using (CngKey key = CngKey.Create(
+                CngAlgorithm.ECDsaP256,
+                null,
+                creationParameters))
             {
                 byte[] privateMaterial = key.Export(CngKeyBlobFormat.EccPrivateBlob);
                 publicJwk = ExportPublicJwk(key);
