@@ -105,6 +105,7 @@
     <Compile Include="Access\AccessConfig.cs" />
     <Compile Include="Access\HttpAccessControl.cs" />
     <Compile Include="Access\JarvisRuntimeAccess.cs" />
+    <Compile Include="Access\JarvisRuntimeAccessProvider.cs" />
     <Compile Include="Access\JarvisProducts.cs" />
     <Compile Include="Core\AgentProxyDtos.cs" />
     <Compile Include="Core\DashboardPanels.cs" />
