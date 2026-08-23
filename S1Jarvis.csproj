@@ -137,6 +137,9 @@
     <Compile Include="UI\JarvisShell.xaml.cs">
       <DependentUpon>JarvisShell.xaml</DependentUpon>
     </Compile>
+    <Compile Include="UI\JarvisShell.VerilicActivation.cs">
+      <DependentUpon>JarvisShell.xaml</DependentUpon>
+    </Compile>
     <Compile Include="UI\JarvisHostForm.cs">
       <SubType>Form</SubType>
     </Compile>
