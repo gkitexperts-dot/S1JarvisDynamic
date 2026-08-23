@@ -8,9 +8,9 @@ namespace S1Jarvis.Access
     // ══════════════════════════════════════════════════════════════════════
     // JarvisLicenseGuard
     //
-    // Runtime access boundary for the Jarvis product family. The legacy Nexus
-    // lookup remains cached for transitional legacy mode and, after Verilic
-    // cutover, for opaque AI-routing resolution only.
+    // Runtime access boundary for the Jarvis product family. Legacy mode keeps
+    // the existing combined Nexus lookup. Verilic mode composes authoritative
+    // licensing plus signed AI-routing resolution with no legacy fallback.
     // ══════════════════════════════════════════════════════════════════════
     internal static class JarvisLicenseGuard
     {
@@ -45,9 +45,16 @@ namespace S1Jarvis.Access
                         configuration.ProductVersion,
                         configuration.ResolveProductId);
 
+                IVerilicRuntimeAiRoutingProvider routing =
+                    new VerilicRuntimeAiRoutingProvider(
+                        stateStore,
+                        configuration.RoutingUri,
+                        configuration.ProductVersion,
+                        configuration.ResolveProductId);
+
                 return new SplitVerilicRuntimeAccessProvider(
                     licensing,
-                    CheckLegacyAccessSilent);
+                    routing);
             }
             catch
             {
