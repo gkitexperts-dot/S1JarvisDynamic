@@ -110,6 +110,7 @@
     <Compile Include="Access\JarvisProducts.cs" />
     <Compile Include="Access\Verilic\VerilicLicenceModels.cs" />
     <Compile Include="Access\Verilic\VerilicLicenceHttpTransport.cs" />
+    <Compile Include="Access\Verilic\VerilicAiRoutingHttpTransport.cs" />
     <Compile Include="Access\Verilic\VerilicInstallationStateStore.cs" />
     <Compile Include="Access\Verilic\VerilicEs256RequestAuthorizer.cs" />
     <Compile Include="Access\Verilic\VerilicActivationClient.cs" />
