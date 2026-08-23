@@ -113,6 +113,7 @@
     <Compile Include="Access\Verilic\VerilicInstallationStateStore.cs" />
     <Compile Include="Access\Verilic\VerilicEs256RequestAuthorizer.cs" />
     <Compile Include="Access\Verilic\VerilicActivationClient.cs" />
+    <Compile Include="Access\Verilic\VerilicActivationCoordinator.cs" />
     <Compile Include="Access\Verilic\VerilicRuntimeLicenceProvider.cs" />
     <Compile Include="Access\Verilic\VerilicRuntimeConfiguration.cs" />
     <Compile Include="Core\AgentProxyDtos.cs" />
