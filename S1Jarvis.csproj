@@ -104,6 +104,8 @@
     <Compile Include="Access\IAccessControl.cs" />
     <Compile Include="Access\AccessConfig.cs" />
     <Compile Include="Access\HttpAccessControl.cs" />
+    <Compile Include="Access\JarvisRuntimeAccess.cs" />
+    <Compile Include="Access\JarvisProducts.cs" />
     <Compile Include="Core\AgentProxyDtos.cs" />
     <Compile Include="Core\DashboardPanels.cs" />
     <Compile Include="Core\CsvWriter.cs" />
@@ -140,7 +142,7 @@
     <!-- ΑΛΛΑΓΗ 20/08, ρητό αίτημα χρήστη - "ολο το deploy να ειναι ενα
          αρχειο": ΠΡΙΝ ήταν Content/CopyToOutputDirectory (loose αρχείο
          δίπλα στο DLL, web\index.html). ΤΩΡΑ EmbeddedResource - μπαίνει
-         ΜΕΣΑ στο ίδιο το S1Jarvis.dll. LogicalName ΡΗΤΑ ορισμένο (όχι
+         ΜΕΣΑ στο ίδιο το S1Jarvis.dll (βλ. S1Jarvis.csproj). LogicalName ΡΗΤΑ ορισμένο (όχι
          namespace-inference) - πρέπει να ταιριάζει ΑΚΡΙΒΩΣ με τα literal
          strings στο JarvisShell.xaml.cs::ServeEmbeddedWebResource. -->
     <EmbeddedResource Include="UI\web\index.html">
