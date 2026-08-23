@@ -13,14 +13,23 @@ namespace S1Jarvis.Access.Verilic
     /// installation. The commercial Jarvis product code is mapped explicitly to
     /// the registered Verilic ProductId; the two identities are never assumed to
     /// be equal.
+    ///
+    /// Successful server decisions may be cached in memory only until the
+    /// earliest server/client re-verification bound. Denials are never cached.
     /// </summary>
     internal sealed class VerilicRuntimeLicenceProvider :
         IVerilicRuntimeLicenceProvider
     {
+        private static readonly TimeSpan MaximumAllowCacheDuration =
+            TimeSpan.FromMinutes(5);
+
         private readonly VerilicInstallationStateStore _stateStore;
         private readonly Uri _verificationUri;
         private readonly string _productVersion;
         private readonly Func<string, string> _productIdResolver;
+        private readonly object _cacheLock = new object();
+        private readonly Dictionary<string, CachedAllowDecision> _allowCache =
+            new Dictionary<string, CachedAllowDecision>(StringComparer.Ordinal);
 
         public VerilicRuntimeLicenceProvider(
             VerilicInstallationStateStore stateStore,
@@ -103,6 +112,15 @@ namespace S1Jarvis.Access.Verilic
                         productCode,
                         "installation_key_invalid");
 
+                string cacheKey = BuildCacheKey(
+                    productCode,
+                    productId,
+                    state.InstallationId);
+                JarvisLicenceAccessDecision cached =
+                    TryGetCachedAllow(cacheKey, DateTime.UtcNow);
+                if (cached != null)
+                    return cached;
+
                 // The existing net48 authorizer snapshots its proof ProductId
                 // from ProductCode. Give it a proof-only view containing the
                 // registered Verilic ProductId while keeping persistent state
@@ -133,9 +151,19 @@ namespace S1Jarvis.Access.Verilic
                                 RequestedFeatures = new List<string>()
                             });
 
-                    return JarvisLicenceAccessDecision.FromVerilic(
-                        productCode,
-                        result);
+                    JarvisLicenceAccessDecision decision =
+                        JarvisLicenceAccessDecision.FromVerilic(
+                            productCode,
+                            result);
+
+                    if (decision.Allowed)
+                        TryCacheAllow(
+                            cacheKey,
+                            decision,
+                            result,
+                            DateTime.UtcNow);
+
+                    return decision;
                 }
             }
             catch
@@ -144,6 +172,85 @@ namespace S1Jarvis.Access.Verilic
                     productCode,
                     "verification_failed");
             }
+        }
+
+        private JarvisLicenceAccessDecision TryGetCachedAllow(
+            string cacheKey,
+            DateTime nowUtc)
+        {
+            lock (_cacheLock)
+            {
+                CachedAllowDecision cached;
+                if (!_allowCache.TryGetValue(cacheKey, out cached))
+                    return null;
+
+                if (cached.ExpiresAtUtc <= nowUtc)
+                {
+                    _allowCache.Remove(cacheKey);
+                    return null;
+                }
+
+                return cached.Decision;
+            }
+        }
+
+        private void TryCacheAllow(
+            string cacheKey,
+            JarvisLicenceAccessDecision decision,
+            VerilicVerifyLicenceResult result,
+            DateTime nowUtc)
+        {
+            if (decision == null || !decision.Allowed || result == null ||
+                !result.Allowed || !result.RefreshAfterUtc.HasValue)
+                return;
+
+            DateTime refreshAfterUtc =
+                result.RefreshAfterUtc.Value.ToUniversalTime();
+            if (refreshAfterUtc <= nowUtc)
+                return;
+
+            DateTime expiresAtUtc = refreshAfterUtc;
+
+            if (result.ValidUntilUtc.HasValue)
+            {
+                DateTime validUntilUtc =
+                    result.ValidUntilUtc.Value.ToUniversalTime();
+                if (validUntilUtc <= nowUtc)
+                    return;
+                if (validUntilUtc < expiresAtUtc)
+                    expiresAtUtc = validUntilUtc;
+            }
+
+            DateTime clientMaximumUtc =
+                nowUtc.Add(MaximumAllowCacheDuration);
+            if (clientMaximumUtc < expiresAtUtc)
+                expiresAtUtc = clientMaximumUtc;
+
+            if (expiresAtUtc <= nowUtc)
+                return;
+
+            lock (_cacheLock)
+            {
+                _allowCache[cacheKey] = new CachedAllowDecision
+                {
+                    Decision = decision,
+                    ExpiresAtUtc = expiresAtUtc
+                };
+            }
+        }
+
+        private static string BuildCacheKey(
+            string productCode,
+            string productId,
+            string installationId)
+        {
+            return productCode + "\n" + productId + "\n" + installationId;
+        }
+
+        private sealed class CachedAllowDecision
+        {
+            public JarvisLicenceAccessDecision Decision { get; set; }
+            public DateTime ExpiresAtUtc { get; set; }
         }
     }
 }
