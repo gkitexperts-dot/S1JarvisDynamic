@@ -7,10 +7,9 @@ namespace S1Jarvis.Access
     // ══════════════════════════════════════════════════════════════════════
     // JarvisLicenseGuard
     //
-    // Ίδιο σκεπτικό με S1Courier.Access.LicenseGuard: per-key cache (5 λεπτά),
-    // FAIL-CLOSED. Ο Jarvis έχει ΕΝΑ entry point (το JarvisShell όταν φορτώνει)
-    // οπότε χρησιμοποιούμε μόνο τη "silent" παραλλαγή - το UI δείχνει το
-    // αποτέλεσμα inline μέσα στη σελίδα (WebView2), όχι σε popup.
+    // Runtime access boundary for the Jarvis product family. The legacy Nexus
+    // lookup remains cached for the transitional mode and, after Verilic
+    // cutover, for opaque AI-routing resolution only.
     // ══════════════════════════════════════════════════════════════════════
     internal static class JarvisLicenseGuard
     {
@@ -20,36 +19,60 @@ namespace S1Jarvis.Access
         private static readonly Dictionary<string, (AccessCheckResponse result, DateTime at)> _cache =
             new Dictionary<string, (AccessCheckResponse, DateTime)>();
 
-        // Step 12 boundary: runtime callers consume a provider rather than the
-        // legacy combined Nexus response directly. For now the provider wraps
-        // CheckAccessSilent so caching, fail-closed behaviour and HTTP semantics
-        // remain exactly as before.
+        // Step 12F composition remains intentionally on the legacy provider
+        // until the Verilic endpoint and activated installation are explicitly
+        // ready for cutover. The SplitVerilicRuntimeAccessProvider is the
+        // cutover implementation and never falls back after a Verilic deny.
         private static readonly IJarvisRuntimeAccessProvider _runtimeAccessProvider =
-            new LegacyNexusRuntimeAccessProvider(CheckAccessSilent);
+            new LegacyNexusRuntimeAccessProvider(CheckLegacyAccessSilent);
 
         public static JarvisRuntimeAccessResult CheckRuntimeAccessSilent(
             XSupport xSupport,
             string productCode = null)
         {
-            return _runtimeAccessProvider.Check(
-                xSupport,
-                productCode ?? JarvisProducts.Jarvis);
+            try
+            {
+                return _runtimeAccessProvider.Check(
+                    xSupport,
+                    productCode ?? JarvisProducts.Jarvis);
+            }
+            catch
+            {
+                string effectiveProduct =
+                    productCode ?? JarvisProducts.Jarvis;
+                return JarvisRuntimeAccessResult.Create(
+                    JarvisLicenceAccessDecision.Deny(
+                        effectiveProduct,
+                        "runtime_access_failed"),
+                    JarvisAgentRoutingDecision.None());
+            }
         }
 
-        // toolName προαιρετικό - default AccessConfig.ToolName ("S1JARVIS",
-        // ο γενικός έλεγχος στο NavigationCompleted) ώστε ο υπάρχων call
-        // site να ΜΗΝ αλλάξει καθόλου. ΝΕΟ 15/08: περνιέται ρητά
-        // "JARVISDOCREADER" για το DR feature - ΞΕΧΩΡΙΣΤΟ entitlement (βλ.
-        // README Roadmap #6), ΔΙΚΟ ΤΟΥ toolName (ΟΧΙ το "DOCREADER" του
-        // standalone S1DocReader προϊόντος - ξεχωριστό εμπορικό SKU/agent,
-        // βλ. AccessConfig.DocReaderToolName) - ΙΔΙΟ Nexus backend,
-        // διαφορετικό toolName ώστε να ενεργοποιείται/απενεργοποιείται
-        // ανεξάρτητα ανά πελάτη. Το cache key ΠΕΡΙΛΑΜΒΑΝΕΙ
-        // το toolName (όχι πια το static AccessConfig.ToolName) - χωρίς αυτό,
-        // ο δεύτερος έλεγχος (DOCREADER) θα διάβαζε λάθος το cached
-        // αποτέλεσμα του πρώτου (S1JARVIS) για τον ΙΔΙΟ χρήστη/serial.
-        public static AccessCheckResponse CheckAccessSilent(XSupport xSupport, string toolName = null)
+        /// <summary>
+        /// Compatibility API for the existing JarvisShell call sites. The
+        /// response shape stays unchanged, but its licensing Allowed value now
+        /// comes from the configured runtime access provider. This lets Step 12
+        /// cut over the authority without a broad UI rewrite.
+        /// </summary>
+        public static AccessCheckResponse CheckAccessSilent(
+            XSupport xSupport,
+            string toolName = null)
         {
+            return CheckRuntimeAccessSilent(
+                    xSupport,
+                    toolName ?? JarvisProducts.Jarvis)
+                .ToLegacyCompatibilityResponse();
+        }
+
+        private static AccessCheckResponse CheckLegacyAccessSilent(
+            XSupport xSupport,
+            string toolName)
+        {
+            if (xSupport == null)
+                return AccessCheckResponse.Deny(
+                    toolName,
+                    "Αποτυχία ελέγχου άδειας χρήσης.");
+
             toolName = toolName ?? AccessConfig.ToolName;
             var info = xSupport.ConnectionInfo;
 
@@ -63,13 +86,15 @@ namespace S1Jarvis.Access
                     return cached.result;
                 }
 
-                var result = DoCheck(xSupport, toolName);
+                var result = DoLegacyCheck(xSupport, toolName);
                 _cache[key] = (result, DateTime.Now);
                 return result;
             }
         }
 
-        private static AccessCheckResponse DoCheck(XSupport xSupport, string toolName)
+        private static AccessCheckResponse DoLegacyCheck(
+            XSupport xSupport,
+            string toolName)
         {
             try
             {
@@ -81,18 +106,19 @@ namespace S1Jarvis.Access
 
                 return access.CheckAccess(new AccessCheckRequest
                 {
-                    Serial      = info.SerialNum?.ToString(),
+                    Serial = info.SerialNum?.ToString(),
                     CompanyCode = info.CompanyId.ToString(),
-                    BranchCode  = info.BranchId.ToString(),
+                    BranchCode = info.BranchId.ToString(),
                     Soft1UserId = info.UserId.ToString(),
-                    ToolName    = toolName,
+                    ToolName = toolName,
                 });
             }
-            catch (Exception ex)
+            catch
             {
+                // Do not surface transport/internal exception details to the UI.
                 return AccessCheckResponse.Deny(
                     toolName,
-                    "Αποτυχία ελέγχου άδειας χρήσης: " + ex.Message);
+                    "Αποτυχία ελέγχου άδειας χρήσης.");
             }
         }
 
