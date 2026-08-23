@@ -1,5 +1,6 @@
 using System;
 using System.Globalization;
+using System.IO;
 using System.Net;
 using System.Net.Http;
 using System.Net.Http.Headers;
@@ -41,19 +42,10 @@ namespace S1Jarvis.Access.Verilic
         }
     }
 
-    /// <summary>
-    /// .NET Framework 4.8 in-process activation flow for Verilic.
-    /// ProductCode is the local Jarvis SKU/state key; ProductId is the
-    /// registered Verilic product identity used by the server protocol.
-    /// Activation establishes installation identity only and never grants
-    /// runtime licence access by itself.
-    /// </summary>
     internal sealed class VerilicActivationClient
     {
         private const string Algorithm = "ES256";
-        private const string ActivationCanonicalVersion =
-            "VERILIC-ACTIVATION-V1";
-
+        private const string ActivationCanonicalVersion = "VERILIC-ACTIVATION-V1";
         private static readonly HttpClient Http = new HttpClient();
 
         private readonly Uri _challengeUri;
@@ -66,34 +58,20 @@ namespace S1Jarvis.Access.Verilic
             ServicePointManager.SecurityProtocol |= SecurityProtocolType.Tls12;
         }
 
-        public VerilicActivationClient(
-            Uri licensingOrigin,
-            VerilicInstallationStateStore stateStore,
-            int timeoutSeconds = 15)
+        public VerilicActivationClient(Uri licensingOrigin, VerilicInstallationStateStore stateStore, int timeoutSeconds = 15)
         {
             if (licensingOrigin == null)
                 throw new ArgumentNullException(nameof(licensingOrigin));
-            if (!licensingOrigin.IsAbsoluteUri ||
-                !string.Equals(
-                    licensingOrigin.Scheme,
-                    Uri.UriSchemeHttps,
-                    StringComparison.OrdinalIgnoreCase))
-                throw new ArgumentException(
-                    "Verilic activation requires an absolute HTTPS origin.",
-                    nameof(licensingOrigin));
+            if (!licensingOrigin.IsAbsoluteUri || !string.Equals(licensingOrigin.Scheme, Uri.UriSchemeHttps, StringComparison.OrdinalIgnoreCase))
+                throw new ArgumentException("Verilic activation requires an absolute HTTPS origin.", nameof(licensingOrigin));
             if (stateStore == null)
                 throw new ArgumentNullException(nameof(stateStore));
             if (timeoutSeconds <= 0 || timeoutSeconds > 120)
                 throw new ArgumentOutOfRangeException(nameof(timeoutSeconds));
 
-            var origin = new Uri(
-                licensingOrigin.GetLeftPart(UriPartial.Authority) + "/");
-            _challengeUri = new Uri(
-                origin,
-                "api/licensing/v1/activations/challenge");
-            _completionUri = new Uri(
-                origin,
-                "api/licensing/v1/activations");
+            var origin = new Uri(licensingOrigin.GetLeftPart(UriPartial.Authority) + "/");
+            _challengeUri = new Uri(origin, "api/licensing/v1/activations/challenge");
+            _completionUri = new Uri(origin, "api/licensing/v1/activations");
             _stateStore = stateStore;
             _timeout = TimeSpan.FromSeconds(timeoutSeconds);
         }
@@ -103,38 +81,29 @@ namespace S1Jarvis.Access.Verilic
             try
             {
                 ValidateRequest(request);
-                return Task.Run(() => ActivateCoreAsync(request))
-                    .GetAwaiter()
-                    .GetResult();
+                return Task.Run(() => ActivateCoreAsync(request)).GetAwaiter().GetResult();
             }
             catch (ArgumentException)
             {
-                return VerilicActivationResult.Denied(
-                    "activation_request_invalid");
+                return VerilicActivationResult.Denied("activation_request_invalid");
             }
             catch (InvalidDataException)
             {
-                return VerilicActivationResult.Denied(
-                    "activation_state_invalid");
+                return VerilicActivationResult.Denied("activation_state_invalid");
             }
             catch (CryptographicException)
             {
-                return VerilicActivationResult.Denied(
-                    "activation_key_invalid");
+                return VerilicActivationResult.Denied("activation_key_invalid");
             }
             catch
             {
-                return VerilicActivationResult.Denied(
-                    "activation_transport_failed");
+                return VerilicActivationResult.Denied("activation_transport_failed");
             }
         }
 
-        private async Task<VerilicActivationResult> ActivateCoreAsync(
-            VerilicActivationRequest request)
+        private async Task<VerilicActivationResult> ActivateCoreAsync(VerilicActivationRequest request)
         {
-            VerilicInstallationState state =
-                _stateStore.GetOrCreateIdentity(request.ProductCode);
-
+            VerilicInstallationState state = _stateStore.GetOrCreateIdentity(request.ProductCode);
             BindProductId(state, request.ProductId);
 
             if (state.ActivationCompleted)
@@ -148,34 +117,21 @@ namespace S1Jarvis.Access.Verilic
                 };
             }
 
-            bool stateChanged = EnsurePendingKeyAndIdempotency(state);
-            if (stateChanged)
+            if (EnsurePendingKeyAndIdempotency(state))
                 _stateStore.Save(state);
 
-            string publicJwk =
-                VerilicEs256RequestAuthorizer.ExportPublicJwk(
-                    state.PrivateKeyMaterial);
-            string publicKeyThumbprint =
-                ComputePublicKeyThumbprint(publicJwk);
+            string publicJwk = VerilicEs256RequestAuthorizer.ExportPublicJwk(state.PrivateKeyMaterial);
+            string publicKeyThumbprint = ComputePublicKeyThumbprint(publicJwk);
 
             if (string.IsNullOrEmpty(state.ActivationChallengeId))
             {
-                ActivationChallengeResponse challenge =
-                    await CreateChallengeAsync(
-                        request,
-                        state,
-                        publicJwk);
-
+                ActivationChallengeResponse challenge = await CreateChallengeAsync(request, state, publicJwk);
                 if (challenge == null)
-                    return VerilicActivationResult.Denied(
-                        "activation_transport_failed");
+                    return VerilicActivationResult.Denied("activation_transport_failed");
                 if (!challenge.Success)
-                    return VerilicActivationResult.Denied(
-                        challenge.ReasonCode);
-                if (string.IsNullOrWhiteSpace(challenge.ChallengeId) ||
-                    string.IsNullOrWhiteSpace(challenge.ChallengeToken))
-                    return VerilicActivationResult.Denied(
-                        "activation_response_invalid");
+                    return VerilicActivationResult.Denied(challenge.ReasonCode);
+                if (string.IsNullOrWhiteSpace(challenge.ChallengeId) || string.IsNullOrWhiteSpace(challenge.ChallengeToken))
+                    return VerilicActivationResult.Denied("activation_response_invalid");
 
                 state.ActivationChallengeId = challenge.ChallengeId;
                 state.ActivationChallengeToken = challenge.ChallengeToken;
@@ -192,35 +148,23 @@ namespace S1Jarvis.Access.Verilic
             var completionRequest = new ActivationCompletionRequestBody
             {
                 ChallengeToken = state.ActivationChallengeToken,
-                Proof = new ActivationCompletionProofBody
-                {
-                    Algorithm = Algorithm,
-                    Signature = signature
-                },
+                Proof = new ActivationCompletionProofBody { Algorithm = Algorithm, Signature = signature },
                 ProductVersion = request.ProductVersion,
                 DeviceSignalHash = request.DeviceSignalHash ?? string.Empty
             };
 
-            ActivationCompletionResponse completion =
-                await PostJsonAsync<
-                    ActivationCompletionRequestBody,
-                    ActivationCompletionResponse>(
-                        _completionUri,
-                        completionRequest,
-                        null);
+            ActivationCompletionResponse completion = await PostJsonAsync<ActivationCompletionRequestBody, ActivationCompletionResponse>(
+                _completionUri,
+                completionRequest,
+                null);
 
             if (completion == null)
-                return VerilicActivationResult.Denied(
-                    "activation_transport_failed");
+                return VerilicActivationResult.Denied("activation_transport_failed");
             if (!completion.Success)
-                return VerilicActivationResult.Denied(
-                    completion.ReasonCode);
+                return VerilicActivationResult.Denied(completion.ReasonCode);
             if (!ValidIdentifier(completion.InstallationId, 200))
-                return VerilicActivationResult.Denied(
-                    "activation_response_invalid");
+                return VerilicActivationResult.Denied("activation_response_invalid");
 
-            // The server-generated installation id is authoritative. Keep the
-            // ProductId binding with it and only then clear resumable state.
             state.VerilicProductId = request.ProductId;
             state.InstallationId = completion.InstallationId;
             state.ActivationCompleted = true;
@@ -232,17 +176,13 @@ namespace S1Jarvis.Access.Verilic
             return new VerilicActivationResult
             {
                 Success = true,
-                ReasonCode = string.IsNullOrWhiteSpace(completion.ReasonCode)
-                    ? "activation_completed"
-                    : completion.ReasonCode,
+                ReasonCode = string.IsNullOrWhiteSpace(completion.ReasonCode) ? "activation_completed" : completion.ReasonCode,
                 InstallationId = completion.InstallationId,
                 WasAlreadyCompleted = completion.WasAlreadyCompleted
             };
         }
 
-        private void BindProductId(
-            VerilicInstallationState state,
-            string productId)
+        private void BindProductId(VerilicInstallationState state, string productId)
         {
             if (string.IsNullOrWhiteSpace(state.VerilicProductId))
             {
@@ -251,12 +191,8 @@ namespace S1Jarvis.Access.Verilic
                 return;
             }
 
-            if (!string.Equals(
-                    state.VerilicProductId,
-                    productId,
-                    StringComparison.Ordinal))
-                throw new InvalidDataException(
-                    "Verilic installation ProductId binding mismatch.");
+            if (!string.Equals(state.VerilicProductId, productId, StringComparison.Ordinal))
+                throw new InvalidDataException("Verilic installation ProductId binding mismatch.");
         }
 
         private async Task<ActivationChallengeResponse> CreateChallengeAsync(
@@ -273,18 +209,13 @@ namespace S1Jarvis.Access.Verilic
                 ProofAlgorithm = Algorithm
             };
 
-            return await PostJsonAsync<
-                ActivationChallengeRequestBody,
-                ActivationChallengeResponse>(
-                    _challengeUri,
-                    body,
-                    state.ActivationIdempotencyKey);
+            return await PostJsonAsync<ActivationChallengeRequestBody, ActivationChallengeResponse>(
+                _challengeUri,
+                body,
+                state.ActivationIdempotencyKey);
         }
 
-        private async Task<TResponse> PostJsonAsync<TRequest, TResponse>(
-            Uri uri,
-            TRequest body,
-            string idempotencyKey)
+        private async Task<TResponse> PostJsonAsync<TRequest, TResponse>(Uri uri, TRequest body, string idempotencyKey)
             where TResponse : class
         {
             string json = JsonConvert.SerializeObject(body);
@@ -293,32 +224,21 @@ namespace S1Jarvis.Access.Verilic
             using (var request = new HttpRequestMessage(HttpMethod.Post, uri))
             {
                 request.Content = new ByteArrayContent(bodyBytes);
-                request.Content.Headers.ContentType =
-                    new MediaTypeHeaderValue("application/json")
-                    {
-                        CharSet = "utf-8"
-                    };
+                request.Content.Headers.ContentType = new MediaTypeHeaderValue("application/json") { CharSet = "utf-8" };
 
-                if (!string.IsNullOrEmpty(idempotencyKey) &&
-                    !request.Headers.TryAddWithoutValidation(
-                        "Idempotency-Key",
-                        idempotencyKey))
-                    throw new InvalidOperationException(
-                        "Unable to add activation idempotency header.");
+                if (!string.IsNullOrEmpty(idempotencyKey) && !request.Headers.TryAddWithoutValidation("Idempotency-Key", idempotencyKey))
+                    throw new InvalidOperationException("Unable to add activation idempotency header.");
 
                 using (var cts = new CancellationTokenSource(_timeout))
-                using (HttpResponseMessage response =
-                    await Http.SendAsync(request, cts.Token))
+                using (HttpResponseMessage response = await Http.SendAsync(request, cts.Token))
                 {
-                    string responseJson =
-                        await response.Content.ReadAsStringAsync();
+                    string responseJson = await response.Content.ReadAsStringAsync();
                     if (string.IsNullOrWhiteSpace(responseJson))
                         return null;
 
                     try
                     {
-                        return JsonConvert.DeserializeObject<TResponse>(
-                            responseJson);
+                        return JsonConvert.DeserializeObject<TResponse>(responseJson);
                     }
                     catch (JsonException)
                     {
@@ -328,36 +248,28 @@ namespace S1Jarvis.Access.Verilic
             }
         }
 
-        private static bool EnsurePendingKeyAndIdempotency(
-            VerilicInstallationState state)
+        private static bool EnsurePendingKeyAndIdempotency(VerilicInstallationState state)
         {
             bool hasAlgorithm = !string.IsNullOrEmpty(state.KeyAlgorithm);
-            bool hasKey = state.PrivateKeyMaterial != null &&
-                          state.PrivateKeyMaterial.Length > 0;
+            bool hasKey = state.PrivateKeyMaterial != null && state.PrivateKeyMaterial.Length > 0;
 
             if (hasAlgorithm != hasKey)
-                throw new CryptographicException(
-                    "Verilic pending installation key state is incomplete.");
-            if (hasAlgorithm &&
-                !string.Equals(state.KeyAlgorithm, Algorithm, StringComparison.Ordinal))
-                throw new CryptographicException(
-                    "Unsupported Verilic installation key algorithm.");
+                throw new CryptographicException("Verilic pending installation key state is incomplete.");
+            if (hasAlgorithm && !string.Equals(state.KeyAlgorithm, Algorithm, StringComparison.Ordinal))
+                throw new CryptographicException("Unsupported Verilic installation key algorithm.");
 
             bool changed = false;
             if (!hasKey)
             {
                 string ignoredPublicJwk;
-                state.PrivateKeyMaterial =
-                    VerilicEs256RequestAuthorizer.GeneratePrivateKeyMaterial(
-                        out ignoredPublicJwk);
+                state.PrivateKeyMaterial = VerilicEs256RequestAuthorizer.GeneratePrivateKeyMaterial(out ignoredPublicJwk);
                 state.KeyAlgorithm = Algorithm;
                 changed = true;
             }
 
             if (string.IsNullOrEmpty(state.ActivationIdempotencyKey))
             {
-                state.ActivationIdempotencyKey =
-                    CreateOpaqueValue("actreq", 24);
+                state.ActivationIdempotencyKey = CreateOpaqueValue("actreq", 24);
                 changed = true;
             }
 
@@ -376,12 +288,9 @@ namespace S1Jarvis.Access.Verilic
                 !string.Equals(crv, "P-256", StringComparison.Ordinal) ||
                 string.IsNullOrWhiteSpace(x) ||
                 string.IsNullOrWhiteSpace(y))
-                throw new CryptographicException(
-                    "Invalid Verilic P-256 public JWK.");
+                throw new CryptographicException("Invalid Verilic P-256 public JWK.");
 
-            string canonical =
-                "{\"crv\":\"P-256\",\"kty\":\"EC\",\"x\":\"" +
-                x + "\",\"y\":\"" + y + "\"}";
+            string canonical = "{\"crv\":\"P-256\",\"kty\":\"EC\",\"x\":\"" + x + "\",\"y\":\"" + y + "\"}";
             return Sha256Base64Url(Encoding.UTF8.GetBytes(canonical));
         }
 
@@ -401,22 +310,15 @@ namespace S1Jarvis.Access.Verilic
                 publicKeyThumbprint.Trim());
 
             byte[] signature;
-            using (CngKey key = CngKey.Import(
-                privateKeyMaterial,
-                CngKeyBlobFormat.EccPrivateBlob))
+            using (CngKey key = CngKey.Import(privateKeyMaterial, CngKeyBlobFormat.EccPrivateBlob))
             using (var ecdsa = new ECDsaCng(key))
             {
-                signature = ecdsa.SignData(
-                    Encoding.UTF8.GetBytes(canonical),
-                    HashAlgorithmName.SHA256);
+                signature = ecdsa.SignData(Encoding.UTF8.GetBytes(canonical), HashAlgorithmName.SHA256);
             }
 
-            byte[] p1363 = signature.Length == 64
-                ? signature
-                : DerToP1363(signature);
+            byte[] p1363 = signature.Length == 64 ? signature : DerToP1363(signature);
             if (p1363.Length != 64)
-                throw new CryptographicException(
-                    "Invalid ES256 activation signature size.");
+                throw new CryptographicException("Invalid ES256 activation signature size.");
 
             return Base64UrlEncode(p1363);
         }
@@ -424,21 +326,18 @@ namespace S1Jarvis.Access.Verilic
         private static byte[] DerToP1363(byte[] der)
         {
             if (der == null || der.Length < 8)
-                throw new CryptographicException(
-                    "Invalid DER ECDSA signature.");
+                throw new CryptographicException("Invalid DER ECDSA signature.");
 
             int offset = 0;
             RequireTag(der, ref offset, 0x30);
             int sequenceLength = ReadLength(der, ref offset);
             if (sequenceLength != der.Length - offset)
-                throw new CryptographicException(
-                    "Invalid DER ECDSA sequence length.");
+                throw new CryptographicException("Invalid DER ECDSA sequence length.");
 
             byte[] r = ReadInteger(der, ref offset);
             byte[] s = ReadInteger(der, ref offset);
             if (offset != der.Length)
-                throw new CryptographicException(
-                    "Unexpected DER ECDSA data.");
+                throw new CryptographicException("Unexpected DER ECDSA data.");
 
             var result = new byte[64];
             CopyInteger(r, result, 0);
@@ -451,8 +350,7 @@ namespace S1Jarvis.Access.Verilic
             RequireTag(value, ref offset, 0x02);
             int length = ReadLength(value, ref offset);
             if (length <= 0 || offset + length > value.Length)
-                throw new CryptographicException(
-                    "Invalid DER ECDSA integer.");
+                throw new CryptographicException("Invalid DER ECDSA integer.");
 
             var result = new byte[length];
             Buffer.BlockCopy(value, offset, result, 0, length);
@@ -460,54 +358,37 @@ namespace S1Jarvis.Access.Verilic
             return result;
         }
 
-        private static void CopyInteger(
-            byte[] integer,
-            byte[] destination,
-            int destinationOffset)
+        private static void CopyInteger(byte[] integer, byte[] destination, int destinationOffset)
         {
             int sourceOffset = 0;
-            while (sourceOffset < integer.Length - 1 &&
-                   integer[sourceOffset] == 0)
+            while (sourceOffset < integer.Length - 1 && integer[sourceOffset] == 0)
                 sourceOffset++;
 
             int length = integer.Length - sourceOffset;
             if (length > 32)
-                throw new CryptographicException(
-                    "ECDSA integer exceeds P-256 size.");
+                throw new CryptographicException("ECDSA integer exceeds P-256 size.");
 
-            Buffer.BlockCopy(
-                integer,
-                sourceOffset,
-                destination,
-                destinationOffset + 32 - length,
-                length);
+            Buffer.BlockCopy(integer, sourceOffset, destination, destinationOffset + 32 - length, length);
         }
 
-        private static void RequireTag(
-            byte[] value,
-            ref int offset,
-            byte expected)
+        private static void RequireTag(byte[] value, ref int offset, byte expected)
         {
             if (offset >= value.Length || value[offset++] != expected)
-                throw new CryptographicException(
-                    "Invalid DER ECDSA tag.");
+                throw new CryptographicException("Invalid DER ECDSA tag.");
         }
 
         private static int ReadLength(byte[] value, ref int offset)
         {
             if (offset >= value.Length)
-                throw new CryptographicException(
-                    "Invalid DER ECDSA length.");
+                throw new CryptographicException("Invalid DER ECDSA length.");
 
             int first = value[offset++];
             if ((first & 0x80) == 0)
                 return first;
 
             int byteCount = first & 0x7F;
-            if (byteCount <= 0 || byteCount > 2 ||
-                offset + byteCount > value.Length)
-                throw new CryptographicException(
-                    "Invalid DER ECDSA length.");
+            if (byteCount <= 0 || byteCount > 2 || offset + byteCount > value.Length)
+                throw new CryptographicException("Invalid DER ECDSA length.");
 
             int length = 0;
             for (int index = 0; index < byteCount; index++)
@@ -523,15 +404,10 @@ namespace S1Jarvis.Access.Verilic
 
         private static string Base64UrlEncode(byte[] value)
         {
-            return Convert.ToBase64String(value)
-                .TrimEnd('=')
-                .Replace('+', '-')
-                .Replace('/', '_');
+            return Convert.ToBase64String(value).TrimEnd('=').Replace('+', '-').Replace('/', '_');
         }
 
-        private static string CreateOpaqueValue(
-            string prefix,
-            int byteCount)
+        private static string CreateOpaqueValue(string prefix, int byteCount)
         {
             var bytes = new byte[byteCount];
             using (var rng = RandomNumberGenerator.Create())
@@ -539,64 +415,38 @@ namespace S1Jarvis.Access.Verilic
 
             var text = new StringBuilder(prefix + "_");
             for (int index = 0; index < bytes.Length; index++)
-                text.Append(bytes[index].ToString(
-                    "x2",
-                    CultureInfo.InvariantCulture));
+                text.Append(bytes[index].ToString("x2", CultureInfo.InvariantCulture));
             return text.ToString();
         }
 
-        private static void ValidateRequest(
-            VerilicActivationRequest request)
+        private static void ValidateRequest(VerilicActivationRequest request)
         {
             if (request == null)
                 throw new ArgumentNullException(nameof(request));
 
-            RequireIdentifier(
-                request.VendorId,
-                nameof(request.VendorId),
-                200);
-            RequireIdentifier(
-                request.ProductCode,
-                nameof(request.ProductCode),
-                200);
-            RequireIdentifier(
-                request.ProductId,
-                nameof(request.ProductId),
-                200);
-            RequireIdentifier(
-                request.LicenceId,
-                nameof(request.LicenceId),
-                200);
-            RequireIdentifier(
-                request.ProductVersion,
-                nameof(request.ProductVersion),
-                200);
+            RequireIdentifier(request.VendorId, nameof(request.VendorId), 200);
+            RequireIdentifier(request.ProductCode, nameof(request.ProductCode), 200);
+            RequireIdentifier(request.ProductId, nameof(request.ProductId), 200);
+            RequireIdentifier(request.LicenceId, nameof(request.LicenceId), 200);
+            RequireIdentifier(request.ProductVersion, nameof(request.ProductVersion), 200);
         }
 
-        private static string RequireIdentifier(
-            string value,
-            string name,
-            int maximumLength)
+        private static string RequireIdentifier(string value, string name, int maximumLength)
         {
             if (!ValidIdentifier(value, maximumLength))
-                throw new ArgumentException(
-                    "A valid licensing identifier is required.", name);
+                throw new ArgumentException("A valid licensing identifier is required.", name);
             return value.Trim();
         }
 
-        private static bool ValidIdentifier(
-            string value,
-            int maximumLength)
+        private static bool ValidIdentifier(string value, int maximumLength)
         {
-            if (string.IsNullOrWhiteSpace(value) ||
-                value.Length > maximumLength)
+            if (string.IsNullOrWhiteSpace(value) || value.Length > maximumLength)
                 return false;
 
             string normalized = value.Trim();
             for (int index = 0; index < normalized.Length; index++)
             {
-                if (char.IsControl(normalized[index]) ||
-                    char.IsWhiteSpace(normalized[index]))
+                if (char.IsControl(normalized[index]) || char.IsWhiteSpace(normalized[index]))
                     return false;
             }
             return true;
@@ -606,16 +456,12 @@ namespace S1Jarvis.Access.Verilic
         {
             [JsonProperty("vendorId")]
             public string VendorId { get; set; }
-
             [JsonProperty("productId")]
             public string ProductId { get; set; }
-
             [JsonProperty("licenceId")]
             public string LicenceId { get; set; }
-
             [JsonProperty("publicKeyJwk")]
             public string PublicKeyJwk { get; set; }
-
             [JsonProperty("proofAlgorithm")]
             public string ProofAlgorithm { get; set; }
         }
@@ -624,19 +470,14 @@ namespace S1Jarvis.Access.Verilic
         {
             [JsonProperty("success")]
             public bool Success { get; set; }
-
             [JsonProperty("reasonCode")]
             public string ReasonCode { get; set; }
-
             [JsonProperty("challengeId")]
             public string ChallengeId { get; set; }
-
             [JsonProperty("challengeToken")]
             public string ChallengeToken { get; set; }
-
             [JsonProperty("expiresAtUtc")]
             public DateTime? ExpiresAtUtc { get; set; }
-
             [JsonProperty("wasReused")]
             public bool WasReused { get; set; }
         }
@@ -645,13 +486,10 @@ namespace S1Jarvis.Access.Verilic
         {
             [JsonProperty("challengeToken")]
             public string ChallengeToken { get; set; }
-
             [JsonProperty("proof")]
             public ActivationCompletionProofBody Proof { get; set; }
-
             [JsonProperty("productVersion")]
             public string ProductVersion { get; set; }
-
             [JsonProperty("deviceSignalHash")]
             public string DeviceSignalHash { get; set; }
         }
@@ -660,7 +498,6 @@ namespace S1Jarvis.Access.Verilic
         {
             [JsonProperty("algorithm")]
             public string Algorithm { get; set; }
-
             [JsonProperty("signature")]
             public string Signature { get; set; }
         }
@@ -669,13 +506,10 @@ namespace S1Jarvis.Access.Verilic
         {
             [JsonProperty("success")]
             public bool Success { get; set; }
-
             [JsonProperty("reasonCode")]
             public string ReasonCode { get; set; }
-
             [JsonProperty("installationId")]
             public string InstallationId { get; set; }
-
             [JsonProperty("wasAlreadyCompleted")]
             public bool WasAlreadyCompleted { get; set; }
         }
