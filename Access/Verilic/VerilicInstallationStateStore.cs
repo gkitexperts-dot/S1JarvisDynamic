@@ -14,7 +14,7 @@ namespace S1Jarvis.Access.Verilic
 
     /// <summary>
     /// Local installation state for one Verilic product. Key material and
-    /// activation retry state are protected together with DPAPI before disk.
+    /// resumable activation state are protected together with DPAPI before disk.
     /// </summary>
     internal sealed class VerilicInstallationState
     {
@@ -38,6 +38,12 @@ namespace S1Jarvis.Access.Verilic
 
         [JsonProperty("activationIdempotencyKey")]
         public string ActivationIdempotencyKey { get; set; }
+
+        [JsonProperty("activationChallengeId")]
+        public string ActivationChallengeId { get; set; }
+
+        [JsonProperty("activationChallengeToken")]
+        public string ActivationChallengeToken { get; set; }
     }
 
     /// <summary>
@@ -128,7 +134,9 @@ namespace S1Jarvis.Access.Verilic
                 KeyAlgorithm = null,
                 PrivateKeyMaterial = null,
                 ActivationCompleted = false,
-                ActivationIdempotencyKey = null
+                ActivationIdempotencyKey = null,
+                ActivationChallengeId = null,
+                ActivationChallengeToken = null
             };
 
             Save(created);
@@ -145,9 +153,13 @@ namespace S1Jarvis.Access.Verilic
                 throw new InvalidDataException(
                     "Unsupported Verilic installation state version.");
             RequireIdentifier(state.InstallationId, "installationId");
+            ValidateOptionalIdentifier(state.ActivationIdempotencyKey, "activationIdempotencyKey");
+            ValidateOptionalIdentifier(state.ActivationChallengeId, "activationChallengeId");
 
-            if (!string.IsNullOrEmpty(state.ActivationIdempotencyKey))
-                RequireIdentifier(state.ActivationIdempotencyKey, "activationIdempotencyKey");
+            if (string.IsNullOrEmpty(state.ActivationChallengeId) !=
+                string.IsNullOrEmpty(state.ActivationChallengeToken))
+                throw new InvalidDataException(
+                    "Verilic pending challenge state is incomplete.");
 
             if (state.ActivationCompleted &&
                 (!string.Equals(state.KeyAlgorithm, "ES256", StringComparison.Ordinal) ||
@@ -259,6 +271,12 @@ namespace S1Jarvis.Access.Verilic
             return normalized;
         }
 
+        private static void ValidateOptionalIdentifier(string value, string name)
+        {
+            if (!string.IsNullOrEmpty(value))
+                RequireIdentifier(value, name);
+        }
+
         private static void ValidateLoadedState(
             VerilicInstallationState state,
             string expectedProductCode)
@@ -275,9 +293,13 @@ namespace S1Jarvis.Access.Verilic
                     "Verilic installation state product binding mismatch.");
 
             RequireIdentifier(state.InstallationId, "installationId");
+            ValidateOptionalIdentifier(state.ActivationIdempotencyKey, "activationIdempotencyKey");
+            ValidateOptionalIdentifier(state.ActivationChallengeId, "activationChallengeId");
 
-            if (!string.IsNullOrEmpty(state.ActivationIdempotencyKey))
-                RequireIdentifier(state.ActivationIdempotencyKey, "activationIdempotencyKey");
+            if (string.IsNullOrEmpty(state.ActivationChallengeId) !=
+                string.IsNullOrEmpty(state.ActivationChallengeToken))
+                throw new InvalidDataException(
+                    "Verilic pending challenge state is incomplete.");
 
             if (state.ActivationCompleted &&
                 (!string.Equals(state.KeyAlgorithm, "ES256", StringComparison.Ordinal) ||
