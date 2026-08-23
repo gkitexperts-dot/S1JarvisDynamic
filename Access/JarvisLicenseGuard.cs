@@ -20,20 +20,20 @@ namespace S1Jarvis.Access
         private static readonly Dictionary<string, (AccessCheckResponse result, DateTime at)> _cache =
             new Dictionary<string, (AccessCheckResponse, DateTime)>();
 
-        // Transitional seam for Step 12: callers that are migrated to Verilic
-        // should consume licensing and AI routing as separate decisions. The
-        // current implementation still derives both from the legacy Nexus
-        // response so runtime behavior is unchanged until the Verilic transport
-        // is introduced in a later batch.
+        // Step 12 boundary: runtime callers consume a provider rather than the
+        // legacy combined Nexus response directly. For now the provider wraps
+        // CheckAccessSilent so caching, fail-closed behaviour and HTTP semantics
+        // remain exactly as before.
+        private static readonly IJarvisRuntimeAccessProvider _runtimeAccessProvider =
+            new LegacyNexusRuntimeAccessProvider(CheckAccessSilent);
+
         public static JarvisRuntimeAccessResult CheckRuntimeAccessSilent(
             XSupport xSupport,
             string productCode = null)
         {
-            AccessCheckResponse legacy = CheckAccessSilent(
+            return _runtimeAccessProvider.Check(
                 xSupport,
                 productCode ?? JarvisProducts.Jarvis);
-
-            return JarvisRuntimeAccessResult.FromLegacy(legacy);
         }
 
         // toolName προαιρετικό - default AccessConfig.ToolName ("S1JARVIS",
