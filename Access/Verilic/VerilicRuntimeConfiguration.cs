@@ -61,15 +61,12 @@ namespace S1Jarvis.Access.Verilic
 
         public Uri VerificationUri
         {
-            get
-            {
-                if (LicensingOrigin == null)
-                    return null;
+            get { return BuildApiUri("api/licensing/v1/verify"); }
+        }
 
-                var origin = new Uri(
-                    LicensingOrigin.GetLeftPart(UriPartial.Authority) + "/");
-                return new Uri(origin, "api/licensing/v1/verify");
-            }
+        public Uri RoutingUri
+        {
+            get { return BuildApiUri("api/jarvis-ai/routing/resolve"); }
         }
 
         public string ResolveProductId(string productCode)
@@ -184,6 +181,16 @@ namespace S1Jarvis.Access.Verilic
                 licenceIds,
                 vendorId,
                 GetProductVersion());
+        }
+
+        private Uri BuildApiUri(string relativePath)
+        {
+            if (LicensingOrigin == null)
+                return null;
+
+            var origin = new Uri(
+                LicensingOrigin.GetLeftPart(UriPartial.Authority) + "/");
+            return new Uri(origin, relativePath);
         }
 
         private static void AddOptionalIdentifier(
