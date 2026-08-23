@@ -10,8 +10,9 @@ namespace S1Jarvis.Access.Verilic
 
     /// <summary>
     /// Authoritative Verilic runtime licensing check for an already activated
-    /// installation. Missing/incomplete local activation state fails closed
-    /// before any network request is attempted.
+    /// installation. The commercial Jarvis product code is mapped explicitly to
+    /// the registered Verilic ProductId; the two identities are never assumed to
+    /// be equal.
     /// </summary>
     internal sealed class VerilicRuntimeLicenceProvider :
         IVerilicRuntimeLicenceProvider
@@ -19,11 +20,13 @@ namespace S1Jarvis.Access.Verilic
         private readonly VerilicInstallationStateStore _stateStore;
         private readonly Uri _verificationUri;
         private readonly string _productVersion;
+        private readonly Func<string, string> _productIdResolver;
 
         public VerilicRuntimeLicenceProvider(
             VerilicInstallationStateStore stateStore,
             Uri verificationUri,
-            string productVersion)
+            string productVersion,
+            Func<string, string> productIdResolver)
         {
             _stateStore = stateStore ??
                 throw new ArgumentNullException(nameof(stateStore));
@@ -43,9 +46,12 @@ namespace S1Jarvis.Access.Verilic
                 throw new ArgumentException(
                     "A product version is required.",
                     nameof(productVersion));
+            if (productIdResolver == null)
+                throw new ArgumentNullException(nameof(productIdResolver));
 
             _verificationUri = verificationUri;
             _productVersion = productVersion.Trim();
+            _productIdResolver = productIdResolver;
         }
 
         public JarvisLicenceAccessDecision Check(string productCode)
@@ -57,18 +63,27 @@ namespace S1Jarvis.Access.Verilic
 
             try
             {
+                string productId = _productIdResolver(productCode);
+                if (string.IsNullOrWhiteSpace(productId))
+                    return JarvisLicenceAccessDecision.Deny(
+                        productCode,
+                        "product_binding_invalid");
+
                 VerilicInstallationState state =
                     _stateStore.Load(productCode);
 
-                if (state == null)
+                if (state == null || !state.ActivationCompleted)
                     return JarvisLicenceAccessDecision.Deny(
                         productCode,
                         "installation_not_activated");
 
-                if (!state.ActivationCompleted)
+                if (!string.Equals(
+                        state.VerilicProductId,
+                        productId,
+                        StringComparison.Ordinal))
                     return JarvisLicenceAccessDecision.Deny(
                         productCode,
-                        "installation_not_activated");
+                        "product_binding_invalid");
 
                 if (string.IsNullOrWhiteSpace(state.InstallationId) ||
                     state.InstallationId.StartsWith(
@@ -88,8 +103,20 @@ namespace S1Jarvis.Access.Verilic
                         productCode,
                         "installation_key_invalid");
 
+                // The existing net48 authorizer snapshots its proof ProductId
+                // from ProductCode. Give it a proof-only view containing the
+                // registered Verilic ProductId while keeping persistent state
+                // keyed by the stable Jarvis commercial code.
+                var proofState = new VerilicInstallationState
+                {
+                    ProductCode = productId,
+                    InstallationId = state.InstallationId,
+                    KeyAlgorithm = state.KeyAlgorithm,
+                    PrivateKeyMaterial = state.PrivateKeyMaterial
+                };
+
                 using (var authorizer =
-                    new VerilicEs256RequestAuthorizer(state))
+                    new VerilicEs256RequestAuthorizer(proofState))
                 {
                     IVerilicLicenceTransport transport =
                         new VerilicLicenceHttpTransport(
@@ -100,7 +127,7 @@ namespace S1Jarvis.Access.Verilic
                         transport.Verify(
                             new VerilicVerifyLicenceRequest
                             {
-                                ProductId = productCode,
+                                ProductId = productId,
                                 InstallationId = state.InstallationId,
                                 ProductVersion = _productVersion,
                                 RequestedFeatures = new List<string>()
