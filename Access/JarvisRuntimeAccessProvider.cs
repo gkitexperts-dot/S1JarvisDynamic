@@ -43,6 +43,35 @@ namespace S1Jarvis.Access
     }
 
     /// <summary>
+    /// Used when Verilic mode was explicitly requested but its composition is
+    /// invalid. This is deliberately different from legacy mode: explicit
+    /// Verilic configuration failure never falls back to Nexus authorization.
+    /// </summary>
+    internal sealed class FailClosedRuntimeAccessProvider :
+        IJarvisRuntimeAccessProvider
+    {
+        private readonly string _reasonCode;
+
+        public FailClosedRuntimeAccessProvider(string reasonCode)
+        {
+            _reasonCode = string.IsNullOrWhiteSpace(reasonCode)
+                ? "runtime_configuration_invalid"
+                : reasonCode;
+        }
+
+        public JarvisRuntimeAccessResult Check(
+            XSupport xSupport,
+            string productCode)
+        {
+            return JarvisRuntimeAccessResult.Create(
+                JarvisLicenceAccessDecision.Deny(
+                    productCode,
+                    _reasonCode),
+                JarvisAgentRoutingDecision.None());
+        }
+    }
+
+    /// <summary>
     /// Cutover provider: Verilic is the only licensing authority. The legacy
     /// Nexus call is made only after Verilic Allowed=true and is consumed only
     /// as an opaque AI-routing lookup. A Verilic deny never falls back to the
