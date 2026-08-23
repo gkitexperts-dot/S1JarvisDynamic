@@ -16,6 +16,7 @@ namespace S1Jarvis.Access.Verilic
     {
         public string VendorId { get; set; }
         public string ProductCode { get; set; }
+        public string ProductId { get; set; }
         public string LicenceId { get; set; }
         public string ProductVersion { get; set; }
         public string DeviceSignalHash { get; set; }
@@ -42,8 +43,10 @@ namespace S1Jarvis.Access.Verilic
 
     /// <summary>
     /// .NET Framework 4.8 in-process activation flow for Verilic.
-    /// Activation establishes installation identity only; it is not a runtime
-    /// licence authorization decision.
+    /// ProductCode is the local Jarvis SKU/state key; ProductId is the
+    /// registered Verilic product identity used by the server protocol.
+    /// Activation establishes installation identity only and never grants
+    /// runtime licence access by itself.
     /// </summary>
     internal sealed class VerilicActivationClient
     {
@@ -109,6 +112,16 @@ namespace S1Jarvis.Access.Verilic
                 return VerilicActivationResult.Denied(
                     "activation_request_invalid");
             }
+            catch (InvalidDataException)
+            {
+                return VerilicActivationResult.Denied(
+                    "activation_state_invalid");
+            }
+            catch (CryptographicException)
+            {
+                return VerilicActivationResult.Denied(
+                    "activation_key_invalid");
+            }
             catch
             {
                 return VerilicActivationResult.Denied(
@@ -121,6 +134,8 @@ namespace S1Jarvis.Access.Verilic
         {
             VerilicInstallationState state =
                 _stateStore.GetOrCreateIdentity(request.ProductCode);
+
+            BindProductId(state, request.ProductId);
 
             if (state.ActivationCompleted)
             {
@@ -170,7 +185,7 @@ namespace S1Jarvis.Access.Verilic
             string signature = SignActivationCompletion(
                 state.PrivateKeyMaterial,
                 state.ActivationChallengeToken,
-                request.ProductCode,
+                request.ProductId,
                 state.ActivationChallengeId,
                 publicKeyThumbprint);
 
@@ -204,8 +219,9 @@ namespace S1Jarvis.Access.Verilic
                 return VerilicActivationResult.Denied(
                     "activation_response_invalid");
 
-            // The server-generated installation id is authoritative. Only after
-            // persisting it do we clear resumable challenge/idempotency state.
+            // The server-generated installation id is authoritative. Keep the
+            // ProductId binding with it and only then clear resumable state.
+            state.VerilicProductId = request.ProductId;
             state.InstallationId = completion.InstallationId;
             state.ActivationCompleted = true;
             state.ActivationIdempotencyKey = null;
@@ -224,6 +240,25 @@ namespace S1Jarvis.Access.Verilic
             };
         }
 
+        private void BindProductId(
+            VerilicInstallationState state,
+            string productId)
+        {
+            if (string.IsNullOrWhiteSpace(state.VerilicProductId))
+            {
+                state.VerilicProductId = productId;
+                _stateStore.Save(state);
+                return;
+            }
+
+            if (!string.Equals(
+                    state.VerilicProductId,
+                    productId,
+                    StringComparison.Ordinal))
+                throw new InvalidDataException(
+                    "Verilic installation ProductId binding mismatch.");
+        }
+
         private async Task<ActivationChallengeResponse> CreateChallengeAsync(
             VerilicActivationRequest request,
             VerilicInstallationState state,
@@ -232,7 +267,7 @@ namespace S1Jarvis.Access.Verilic
             var body = new ActivationChallengeRequestBody
             {
                 VendorId = request.VendorId,
-                ProductId = request.ProductCode,
+                ProductId = request.ProductId,
                 LicenceId = request.LicenceId,
                 PublicKeyJwk = publicJwk,
                 ProofAlgorithm = Algorithm
@@ -321,7 +356,8 @@ namespace S1Jarvis.Access.Verilic
 
             if (string.IsNullOrEmpty(state.ActivationIdempotencyKey))
             {
-                state.ActivationIdempotencyKey = CreateOpaqueValue("actreq", 24);
+                state.ActivationIdempotencyKey =
+                    CreateOpaqueValue("actreq", 24);
                 changed = true;
             }
 
@@ -493,7 +529,9 @@ namespace S1Jarvis.Access.Verilic
                 .Replace('/', '_');
         }
 
-        private static string CreateOpaqueValue(string prefix, int byteCount)
+        private static string CreateOpaqueValue(
+            string prefix,
+            int byteCount)
         {
             var bytes = new byte[byteCount];
             using (var rng = RandomNumberGenerator.Create())
@@ -501,18 +539,38 @@ namespace S1Jarvis.Access.Verilic
 
             var text = new StringBuilder(prefix + "_");
             for (int index = 0; index < bytes.Length; index++)
-                text.Append(bytes[index].ToString("x2", CultureInfo.InvariantCulture));
+                text.Append(bytes[index].ToString(
+                    "x2",
+                    CultureInfo.InvariantCulture));
             return text.ToString();
         }
 
-        private static void ValidateRequest(VerilicActivationRequest request)
+        private static void ValidateRequest(
+            VerilicActivationRequest request)
         {
             if (request == null)
                 throw new ArgumentNullException(nameof(request));
-            RequireIdentifier(request.VendorId, nameof(request.VendorId), 200);
-            RequireIdentifier(request.ProductCode, nameof(request.ProductCode), 200);
-            RequireIdentifier(request.LicenceId, nameof(request.LicenceId), 200);
-            RequireIdentifier(request.ProductVersion, nameof(request.ProductVersion), 200);
+
+            RequireIdentifier(
+                request.VendorId,
+                nameof(request.VendorId),
+                200);
+            RequireIdentifier(
+                request.ProductCode,
+                nameof(request.ProductCode),
+                200);
+            RequireIdentifier(
+                request.ProductId,
+                nameof(request.ProductId),
+                200);
+            RequireIdentifier(
+                request.LicenceId,
+                nameof(request.LicenceId),
+                200);
+            RequireIdentifier(
+                request.ProductVersion,
+                nameof(request.ProductVersion),
+                200);
         }
 
         private static string RequireIdentifier(
@@ -526,9 +584,12 @@ namespace S1Jarvis.Access.Verilic
             return value.Trim();
         }
 
-        private static bool ValidIdentifier(string value, int maximumLength)
+        private static bool ValidIdentifier(
+            string value,
+            int maximumLength)
         {
-            if (string.IsNullOrWhiteSpace(value) || value.Length > maximumLength)
+            if (string.IsNullOrWhiteSpace(value) ||
+                value.Length > maximumLength)
                 return false;
 
             string normalized = value.Trim();
