@@ -29,6 +29,36 @@ namespace S1Jarvis.UI
             RefreshState();
         }
 
+        private void ImportUserConfiguration_Click(object sender, RoutedEventArgs e)
+        {
+            MessageBoxResult confirmation = MessageBox.Show(
+                "Import the non-secret Verilic configuration from this Windows user's saved environment settings? This writes only runtime identifiers and settings to the local S1Jarvis Verilic configuration file. It never imports keys, proofs or tokens.",
+                "Verilic licensing",
+                MessageBoxButton.YesNo,
+                MessageBoxImage.Question);
+
+            if (confirmation != MessageBoxResult.Yes)
+                return;
+
+            try
+            {
+                VerilicLocalConfiguration imported =
+                    VerilicLocalConfigurationStore.ReadWindowsUserEnvironment();
+
+                VerilicRuntimeConfiguration.ValidateLocalConfiguration(imported);
+                VerilicLocalConfigurationStore.Save(imported);
+
+                RefreshState();
+                resultText.Text =
+                    "Local Verilic configuration imported successfully. Runtime configuration is now independent of the Soft1 process environment.";
+            }
+            catch
+            {
+                resultText.Text =
+                    "Windows user configuration is incomplete or invalid. No local Verilic configuration was written.";
+            }
+        }
+
         private void RefreshState()
         {
             try
@@ -39,7 +69,7 @@ namespace S1Jarvis.UI
                 {
                     _inspector = null;
                     _coordinator = null;
-                    modeStatusText.Text = "Verilic mode is not enabled for this Windows user.";
+                    modeStatusText.Text = "Verilic mode is not enabled in local configuration or the current process environment.";
                     SetUnavailable();
                     return;
                 }
