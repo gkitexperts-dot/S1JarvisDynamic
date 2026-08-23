@@ -21,7 +21,10 @@
                     <TextBlock Text="Controlled activation and local readiness for the S1 Jarvis product family."
                                Foreground="#B8B8C8" Margin="0,4,0,0" />
                 </StackPanel>
-                <Button Grid.Column="1" Content="Refresh" Padding="16,7" Margin="12,0,0,0" Click="Refresh_Click" />
+                <StackPanel Grid.Column="1" Orientation="Horizontal">
+                    <Button Content="Import Windows user config" Padding="16,7" Margin="12,0,0,0" Click="ImportUserConfiguration_Click" />
+                    <Button Content="Refresh" Padding="16,7" Margin="8,0,0,0" Click="Refresh_Click" />
+                </StackPanel>
             </Grid>
         </Border>
 
