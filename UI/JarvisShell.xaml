@@ -7,39 +7,12 @@
              mc:Ignorable="d"
              d:DesignHeight="450" d:DesignWidth="650">
 
-    <!--
-        Phase 1: το πραγματικό chat UI (UI/web/index.html) μέσα σε WebView2.
-        Το C# code-behind (JarvisShell.xaml.cs) κάνει:
-          - EnsureCoreWebView2Async + Source = το τοπικό index.html
-          - WebMessageReceived: διαβάζει το prompt του χρήστη (Phase 2 θα το
-            περνάει στο Claude API tool-use loop)
-          - μετά το NavigationCompleted, injectάρει το personalized greeting
-            (PRSN/USERS fallback chain) μέσα στη σελίδα.
-
-        Browser mode (νέο 15/08, βλ. README) - ΔΕΥΤΕΡΟ, ΞΕΧΩΡΙΣΤΟ WebView2
-        (browserView) για πραγματικό browsing (ΟΧΙ iframe μέσα στο
-        index.html - πολλά sites μπλοκάρουν X-Frame-Options, iframe θα
-        έδειχνε άδεια σελίδα σε αρκετά πραγματικά sites). Grid 2 στηλών:
-        browserColumn (αριστερά, 0 κανονικά -> 70% όταν ενεργό) +
-        chatColumn (δεξιά, * - παίρνει ΟΛΟ το πλάτος κανονικά, 30% όταν
-        Browser mode ενεργό). Το ΔΕΞΙ "chatbox" του Browser mode ΔΕΝ είναι
-        ξεχωριστό native control - είναι ΝΕΑ κουρτίνα (#browserCurtain)
-        ΜΕΣΑ στο ήδη υπάρχον index.html/webView, που απλά συρρικνώνεται σε
-        30% πλάτος (βλ. JarvisShell.xaml.cs::OpenBrowserPane).
-    -->
     <Grid x:Name="rootGrid" Background="#1E1E2E">
         <Grid.ColumnDefinitions>
             <ColumnDefinition x:Name="browserColumn" Width="0" />
             <ColumnDefinition x:Name="chatColumn" Width="*" />
         </Grid.ColumnDefinitions>
 
-        <!-- Αριστερή στήλη (70% όταν ανοιχτό) - address bar (native
-             TextBox/Button) + browserView. RenderTransform (TranslateTransform)
-             κάνει το "slide in from the left" animation - βλ. C#
-             OpenBrowserPane/CloseBrowserPane. Αν το animation αποδειχθεί
-             προβληματικό ζωντανά, το FALLBACK είναι να αγνοηθεί απλά το
-             Storyboard call (βλ. σχόλιο εκεί) - η στήλη/ορατότητα αλλάζουν
-             ήδη σωστά χωρίς αυτό, απλά χωρίς το οπτικό "sliding". -->
         <Grid x:Name="browserPane" Grid.Column="0" Visibility="Collapsed" ClipToBounds="True">
             <Grid.RenderTransform>
                 <TranslateTransform x:Name="browserPaneTransform" X="0" />
@@ -69,5 +42,16 @@
         </Grid>
 
         <wv2:WebView2 x:Name="webView" Grid.Column="1" />
+
+        <Button x:Name="verilicActivationBtn"
+                Grid.Column="1"
+                HorizontalAlignment="Right"
+                VerticalAlignment="Top"
+                Margin="12"
+                Padding="10,5"
+                Panel.ZIndex="20"
+                Visibility="Collapsed"
+                Content="Activate Verilic licensing"
+                Click="VerilicActivationBtn_Click" />
     </Grid>
 </UserControl>
