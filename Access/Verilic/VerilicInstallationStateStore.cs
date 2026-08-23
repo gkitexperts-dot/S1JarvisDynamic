@@ -15,7 +15,10 @@ namespace S1Jarvis.Access.Verilic
     /// <summary>
     /// Local installation state for one commercial Jarvis product. ProductCode
     /// is the stable Jarvis SKU code; VerilicProductId is the registered Verilic
-    /// product identifier. Key material and resumable activation state are
+    /// product identifier. VerilicLicenceId records the exact licence that the
+    /// server-side installation was activated against so an explicit operator
+    /// re-activation can safely detect licence rotation instead of reusing a
+    /// stale local installation. Key material and resumable activation state are
     /// protected together with DPAPI before disk.
     /// </summary>
     internal sealed class VerilicInstallationState
@@ -28,6 +31,9 @@ namespace S1Jarvis.Access.Verilic
 
         [JsonProperty("verilicProductId")]
         public string VerilicProductId { get; set; }
+
+        [JsonProperty("verilicLicenceId")]
+        public string VerilicLicenceId { get; set; }
 
         [JsonProperty("installationId")]
         public string InstallationId { get; set; }
@@ -136,6 +142,7 @@ namespace S1Jarvis.Access.Verilic
                 Version = 1,
                 ProductCode = normalizedProduct,
                 VerilicProductId = null,
+                VerilicLicenceId = null,
                 InstallationId = CreateInstallationId(),
                 KeyAlgorithm = null,
                 PrivateKeyMaterial = null,
@@ -160,6 +167,7 @@ namespace S1Jarvis.Access.Verilic
                     "Unsupported Verilic installation state version.");
             RequireIdentifier(state.InstallationId, "installationId");
             ValidateOptionalIdentifier(state.VerilicProductId, "verilicProductId");
+            ValidateOptionalIdentifier(state.VerilicLicenceId, "verilicLicenceId");
             ValidateOptionalIdentifier(state.ActivationIdempotencyKey, "activationIdempotencyKey");
             ValidateOptionalIdentifier(state.ActivationChallengeId, "activationChallengeId");
 
@@ -302,6 +310,7 @@ namespace S1Jarvis.Access.Verilic
 
             RequireIdentifier(state.InstallationId, "installationId");
             ValidateOptionalIdentifier(state.VerilicProductId, "verilicProductId");
+            ValidateOptionalIdentifier(state.VerilicLicenceId, "verilicLicenceId");
             ValidateOptionalIdentifier(state.ActivationIdempotencyKey, "activationIdempotencyKey");
             ValidateOptionalIdentifier(state.ActivationChallengeId, "activationChallengeId");
 
@@ -310,6 +319,9 @@ namespace S1Jarvis.Access.Verilic
                 throw new InvalidDataException(
                     "Verilic pending challenge state is incomplete.");
 
+            // Existing v1 states created before licence-binding persistence do
+            // not contain VerilicLicenceId. They remain readable so the next
+            // explicit operator activation can migrate them safely.
             if (state.ActivationCompleted &&
                 (string.IsNullOrWhiteSpace(state.VerilicProductId) ||
                  !string.Equals(state.KeyAlgorithm, "ES256", StringComparison.Ordinal) ||
