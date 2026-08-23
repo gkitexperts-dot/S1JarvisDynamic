@@ -75,6 +75,10 @@ namespace S1Jarvis.Access
     /// Cutover provider: Verilic is the only licensing authority and the only
     /// runtime AI-routing source. A licensing denial stops immediately and never
     /// falls back to legacy Nexus authorization or routing.
+    ///
+    /// AI routing is resolved only for the base Jarvis product. Courier and
+    /// DocReader are independent child licence gates and reuse the base Jarvis
+    /// AI routing already established by the shell.
     /// </summary>
     internal sealed class SplitVerilicRuntimeAccessProvider :
         IJarvisRuntimeAccessProvider
@@ -112,6 +116,16 @@ namespace S1Jarvis.Access
                     licence ?? JarvisLicenceAccessDecision.Deny(
                         productCode,
                         "verification_failed"),
+                    JarvisAgentRoutingDecision.None());
+            }
+
+            if (!string.Equals(
+                    productCode,
+                    JarvisProducts.Jarvis,
+                    StringComparison.Ordinal))
+            {
+                return JarvisRuntimeAccessResult.Create(
+                    licence,
                     JarvisAgentRoutingDecision.None());
             }
 
