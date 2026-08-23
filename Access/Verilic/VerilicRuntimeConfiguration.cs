@@ -23,8 +23,10 @@ namespace S1Jarvis.Access.Verilic
         private const string OriginVariable = "S1JARVIS_VERILIC_ORIGIN";
         private const string StateDirectoryVariable = "S1JARVIS_VERILIC_STATE_DIR";
         private const string DpapiScopeVariable = "S1JARVIS_VERILIC_DPAPI_SCOPE";
+        private const string VendorIdVariable = "S1JARVIS_VERILIC_VENDOR_ID";
 
         private readonly Dictionary<string, string> _productIds;
+        private readonly Dictionary<string, string> _licenceIds;
 
         private VerilicRuntimeConfiguration(
             VerilicRuntimeMode mode,
@@ -32,6 +34,8 @@ namespace S1Jarvis.Access.Verilic
             string stateDirectory,
             VerilicInstallationProtectionScope protectionScope,
             Dictionary<string, string> productIds,
+            Dictionary<string, string> licenceIds,
+            string vendorId,
             string productVersion)
         {
             Mode = mode;
@@ -39,6 +43,8 @@ namespace S1Jarvis.Access.Verilic
             StateDirectory = stateDirectory;
             ProtectionScope = protectionScope;
             _productIds = productIds ?? new Dictionary<string, string>(StringComparer.Ordinal);
+            _licenceIds = licenceIds ?? new Dictionary<string, string>(StringComparer.Ordinal);
+            VendorId = vendorId;
             ProductVersion = productVersion;
         }
 
@@ -46,6 +52,7 @@ namespace S1Jarvis.Access.Verilic
         public Uri LicensingOrigin { get; private set; }
         public string StateDirectory { get; private set; }
         public VerilicInstallationProtectionScope ProtectionScope { get; private set; }
+        public string VendorId { get; private set; }
         public string ProductVersion { get; private set; }
 
         public Uri VerificationUri
@@ -63,14 +70,18 @@ namespace S1Jarvis.Access.Verilic
 
         public string ResolveProductId(string productCode)
         {
-            string productId;
-            if (string.IsNullOrWhiteSpace(productCode) ||
-                !_productIds.TryGetValue(productCode, out productId) ||
-                string.IsNullOrWhiteSpace(productId))
-                throw new InvalidOperationException(
-                    "No Verilic ProductId is configured for the Jarvis product.");
+            return ResolveMappedIdentifier(
+                _productIds,
+                productCode,
+                "No Verilic ProductId is configured for the Jarvis product.");
+        }
 
-            return productId;
+        public string ResolveLicenceId(string productCode)
+        {
+            return ResolveMappedIdentifier(
+                _licenceIds,
+                productCode,
+                "No Verilic LicenceId is configured for the Jarvis product.");
         }
 
         public static VerilicRuntimeConfiguration Load()
@@ -84,6 +95,8 @@ namespace S1Jarvis.Access.Verilic
                     null,
                     null,
                     VerilicInstallationProtectionScope.CurrentUser,
+                    null,
+                    null,
                     null,
                     GetProductVersion());
             }
@@ -125,13 +138,49 @@ namespace S1Jarvis.Access.Verilic
                     "S1JARVISDOCREADER_VERILIC_PRODUCT_ID")
             };
 
+            var licenceIds = new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                [JarvisProducts.Jarvis] = RequireIdentifier(
+                    Environment.GetEnvironmentVariable(
+                        "S1JARVIS_VERILIC_LICENCE_ID"),
+                    "S1JARVIS_VERILIC_LICENCE_ID"),
+                [JarvisProducts.JarvisCourier] = RequireIdentifier(
+                    Environment.GetEnvironmentVariable(
+                        "S1JARVISCOURIER_VERILIC_LICENCE_ID"),
+                    "S1JARVISCOURIER_VERILIC_LICENCE_ID"),
+                [JarvisProducts.JarvisDocReader] = RequireIdentifier(
+                    Environment.GetEnvironmentVariable(
+                        "S1JARVISDOCREADER_VERILIC_LICENCE_ID"),
+                    "S1JARVISDOCREADER_VERILIC_LICENCE_ID")
+            };
+
+            string vendorId = RequireIdentifier(
+                Environment.GetEnvironmentVariable(VendorIdVariable),
+                VendorIdVariable);
+
             return new VerilicRuntimeConfiguration(
                 VerilicRuntimeMode.Verilic,
                 origin,
                 Path.GetFullPath(stateDirectory),
                 scope,
                 productIds,
+                licenceIds,
+                vendorId,
                 GetProductVersion());
+        }
+
+        private static string ResolveMappedIdentifier(
+            Dictionary<string, string> values,
+            string productCode,
+            string errorMessage)
+        {
+            string value;
+            if (string.IsNullOrWhiteSpace(productCode) ||
+                !values.TryGetValue(productCode, out value) ||
+                string.IsNullOrWhiteSpace(value))
+                throw new InvalidOperationException(errorMessage);
+
+            return value;
         }
 
         private static Uri RequireHttpsOrigin(string value)
@@ -164,7 +213,7 @@ namespace S1Jarvis.Access.Verilic
         {
             if (string.IsNullOrWhiteSpace(value) || value.Length > 200)
                 throw new InvalidOperationException(
-                    variableName + " must contain the registered Verilic ProductId.");
+                    variableName + " must contain a registered Verilic identifier.");
 
             string normalized = value.Trim();
             for (int index = 0; index < normalized.Length; index++)
@@ -172,7 +221,7 @@ namespace S1Jarvis.Access.Verilic
                 if (char.IsControl(normalized[index]) ||
                     char.IsWhiteSpace(normalized[index]))
                     throw new InvalidOperationException(
-                        variableName + " contains an invalid ProductId.");
+                        variableName + " contains an invalid Verilic identifier.");
             }
 
             return normalized;
