@@ -61,6 +61,31 @@ namespace S1Jarvis.SoftoneIntegration
             return ActivateVerilicProduct(JarvisProducts.JarvisDocReader);
         }
 
+        // Read-only local readiness summary. It never activates, verifies over
+        // the network or returns configuration identifiers/private material.
+        public string GetVerilicReadiness()
+        {
+            try
+            {
+                VerilicRuntimeConfiguration configuration =
+                    VerilicRuntimeConfiguration.Load();
+
+                if (configuration.Mode != VerilicRuntimeMode.Verilic)
+                    return "Verilic readiness: runtime_mode_legacy";
+
+                var inspector = new VerilicReadinessInspector(configuration);
+                return string.Join(
+                    Environment.NewLine,
+                    FormatReadiness("Jarvis", inspector.Inspect(JarvisProducts.Jarvis)),
+                    FormatReadiness("Courier", inspector.Inspect(JarvisProducts.JarvisCourier)),
+                    FormatReadiness("DocReader", inspector.Inspect(JarvisProducts.JarvisDocReader)));
+            }
+            catch
+            {
+                return "Verilic readiness: configuration_invalid";
+            }
+        }
+
         private static string ActivateVerilicProduct(string productCode)
         {
             try
@@ -84,6 +109,27 @@ namespace S1Jarvis.SoftoneIntegration
                 // exception details through the Soft1 operator surface.
                 return "Η ενεργοποίηση Verilic δεν ολοκληρώθηκε. Κωδικός: activation_failed";
             }
+        }
+
+        private static string FormatReadiness(
+            string label,
+            VerilicProductReadiness readiness)
+        {
+            if (readiness == null)
+                return label + ": readiness_failed";
+
+            return label + ": " + SafeReason(readiness.ReasonCode) +
+                   " | product=" + Flag(readiness.ProductConfigured) +
+                   " | activationRefs=" + Flag(readiness.ActivationReferencesConfigured) +
+                   " | state=" + Flag(readiness.StatePresent) +
+                   " | activated=" + Flag(readiness.ActivationCompleted) +
+                   " | binding=" + Flag(readiness.ProductBindingMatches) +
+                   " | runtimeReady=" + Flag(readiness.RuntimeReady);
+        }
+
+        private static string Flag(bool value)
+        {
+            return value ? "yes" : "no";
         }
 
         private static string SafeReason(string reasonCode)
