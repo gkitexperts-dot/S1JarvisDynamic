@@ -44,7 +44,7 @@ namespace S1Jarvis.Access.Verilic
                 return _client.Activate(
                     new VerilicActivationRequest
                     {
-                        VendorId = _configuration.VendorId,
+                        VendorId = _configuration.ResolveActivationVendorId(),
                         ProductCode = productCode,
                         ProductId = _configuration.ResolveProductId(productCode),
                         LicenceId = _configuration.ResolveLicenceId(productCode),
