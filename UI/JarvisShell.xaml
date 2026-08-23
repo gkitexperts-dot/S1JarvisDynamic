@@ -5,8 +5,7 @@
              xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
              xmlns:wv2="clr-namespace:Microsoft.Web.WebView2.Wpf;assembly=Microsoft.Web.WebView2.Wpf"
              mc:Ignorable="d"
-             d:DesignHeight="450" d:DesignWidth="650"
-             Loaded="VerilicActivationControl_Loaded">
+             d:DesignHeight="450" d:DesignWidth="650">
 
     <Grid x:Name="rootGrid" Background="#1E1E2E">
         <Grid.ColumnDefinitions>
@@ -43,16 +42,5 @@
         </Grid>
 
         <wv2:WebView2 x:Name="webView" Grid.Column="1" />
-
-        <Button x:Name="verilicActivationBtn"
-                Grid.Column="1"
-                HorizontalAlignment="Right"
-                VerticalAlignment="Top"
-                Margin="12"
-                Padding="10,5"
-                Panel.ZIndex="20"
-                Visibility="Collapsed"
-                Content="Activate Verilic licensing"
-                Click="VerilicActivationBtn_Click" />
     </Grid>
 </UserControl>
