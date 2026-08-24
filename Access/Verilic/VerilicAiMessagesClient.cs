@@ -7,7 +7,6 @@ using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 using Newtonsoft.Json;
-using Newtonsoft.Json.Linq;
 using Softone;
 using S1Jarvis.Core;
 
@@ -16,15 +15,18 @@ namespace S1Jarvis.Access.Verilic
     /// <summary>
     /// Sends Jarvis provider requests through the signed Verilic messages
     /// endpoint. Provider credentials, authoritative AgentAccountRef and the
-    /// configured model remain server-side. The client contributes only its
-    /// activated installation proof, Soft1 identity, logical Jarvis agent and
-    /// provider request JSON. AgentName selects a logical role only; Verilic
-    /// remains authoritative for the effective account/provider/model target.
+    /// configured model remain server-side. The caller must provide the logical
+    /// Jarvis agent explicitly; this client never infers routing from prompt text,
+    /// tools or provider payload structure. Verilic remains authoritative for the
+    /// effective account/provider/model target.
     /// </summary>
     internal sealed class VerilicAiMessagesClient
     {
         private static readonly HttpClient Http = new HttpClient();
         private static readonly TimeSpan Timeout = TimeSpan.FromSeconds(90);
+        private static readonly HashSet<string> AllowedAgents = new HashSet<string>(
+            new[] { "Jarvis", "Atlas", "Forge", "Compass", "Echo", "Sprint", "Scout", "Sage" },
+            StringComparer.OrdinalIgnoreCase);
 
         // Non-secret runtime snapshot for the in-process UAT harness. The
         // Jarvis UI runs one provider turn at a time, so the latest successful
@@ -91,6 +93,7 @@ namespace S1Jarvis.Access.Verilic
 
         public async Task<AgentProxyResponse> SendAsync(
             XSupport xSupport,
+            string agentName,
             string providerRequestJson,
             CancellationToken cancellationToken)
         {
@@ -98,9 +101,11 @@ namespace S1Jarvis.Access.Verilic
                 return Failure("messages_identity_missing");
             if (string.IsNullOrWhiteSpace(providerRequestJson))
                 return Failure("provider_request_invalid");
-
-            string agentName = ResolveLogicalAgentName(providerRequestJson);
             if (string.IsNullOrWhiteSpace(agentName))
+                return Failure("routing_agent_invalid");
+
+            agentName = agentName.Trim();
+            if (!AllowedAgents.Contains(agentName))
                 return Failure("routing_agent_invalid");
 
             try
@@ -231,113 +236,6 @@ namespace S1Jarvis.Access.Verilic
             {
                 return Failure("messages_transport_failed");
             }
-        }
-
-        /// <summary>
-        /// Resolves the logical Jarvis role from structural request evidence
-        /// first, and only then from legacy prompt markers. This avoids false
-        /// matches when a general system prompt mentions another mode by name
-        /// (the exact bug that routed an item-creation UAT turn to Scout).
-        /// Provider/account/model still remain authoritative on Verilic.
-        /// </summary>
-        private static string ResolveLogicalAgentName(string providerRequestJson)
-        {
-            try
-            {
-                JObject request = JObject.Parse(providerRequestJson);
-                HashSet<string> tools = ReadToolNames(request["tools"]);
-                string systemText = ReadSystemText(request["system"]);
-
-                // Dedicated curtains have unmistakable structural tool sets.
-                if (tools.Contains("open_url") && tools.Contains("read_page_content"))
-                    return "Scout";
-                if (tools.Contains("show_courier_documents"))
-                    return "Sprint";
-                if (tools.Contains("filter_email_inbox") ||
-                    tools.Contains("filter_calendar") ||
-                    tools.Contains("show_calendar_entries"))
-                    return "Echo";
-
-                // Main-chat routed domains. Item tools exist only when the
-                // item domain is active (or in Browser, already handled above).
-                if (tools.Contains("get_item_template") || tools.Contains("create_item"))
-                    return "Forge";
-                if (tools.Contains("create_trader_from_aade"))
-                    return "Compass";
-
-                // Help does not have a unique enough tool signature today, so
-                // keep its explicit mode marker as a narrow legacy fallback.
-                if (Contains(systemText, "HELP MODE"))
-                    return "Sage";
-
-                // Transitional fallbacks for routed domains whose common tool
-                // sets overlap with Atlas. These are evaluated only after all
-                // structural signatures above, so descriptive references to
-                // Browser/Item modes cannot steal the route anymore.
-                if (Contains(systemText, "ΑΝΟΙΓΜΑ/ΔΗΜΙΟΥΡΓΙΑ ΕΙΔΟΥΣ"))
-                    return "Forge";
-                if (Contains(systemText, "ΑΝΟΙΓΜΑ/ΔΗΜΙΟΥΡΓΙΑ ΣΥΝΑΛΛΑΣΣΟΜΕΝΟΥ ΜΕ ΑΦΜ"))
-                    return "Compass";
-                if (Contains(systemText, "EMAIL MODE") || Contains(systemText, "- EMAIL ("))
-                    return "Echo";
-                if (Contains(systemText, "COURIER MODE"))
-                    return "Sprint";
-                if (Contains(systemText, "BROWSER MODE"))
-                    return "Scout";
-
-                return "Atlas";
-            }
-            catch
-            {
-                return null;
-            }
-        }
-
-        private static HashSet<string> ReadToolNames(JToken toolsToken)
-        {
-            var names = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-            JArray tools = toolsToken as JArray;
-            if (tools == null)
-                return names;
-
-            foreach (JToken tool in tools)
-            {
-                string name = tool?["name"]?.ToString();
-                if (!string.IsNullOrWhiteSpace(name))
-                    names.Add(name.Trim());
-            }
-            return names;
-        }
-
-        private static string ReadSystemText(JToken system)
-        {
-            if (system == null)
-                return string.Empty;
-            if (system.Type == JTokenType.String)
-                return system.ToString();
-
-            var builder = new StringBuilder();
-            JArray blocks = system as JArray;
-            if (blocks == null)
-                return system.ToString();
-
-            foreach (JToken block in blocks)
-            {
-                string text = block?["text"]?.ToString();
-                if (!string.IsNullOrEmpty(text))
-                {
-                    if (builder.Length > 0)
-                        builder.Append('\n');
-                    builder.Append(text);
-                }
-            }
-            return builder.ToString();
-        }
-
-        private static bool Contains(string text, string marker)
-        {
-            return !string.IsNullOrEmpty(text) &&
-                   text.IndexOf(marker, StringComparison.OrdinalIgnoreCase) >= 0;
         }
 
         private static AgentProxyResponse Failure(string reasonCode)
