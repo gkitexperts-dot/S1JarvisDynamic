@@ -39,10 +39,13 @@ namespace S1Jarvis.UI
             Width = 10;
             Height = 10;
 
+            var shell = new JarvisShell(JarvisCore.XSupport);
+            shell.EnableProviderHealthCheck();
+
             var host = new ElementHost
             {
                 Dock = DockStyle.Fill,
-                Child = new JarvisShell(JarvisCore.XSupport)
+                Child = shell
             };
 
             Controls.Add(host);
