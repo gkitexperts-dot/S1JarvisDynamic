@@ -1,4 +1,5 @@
 using System;
+using System.Text;
 using System.Threading.Tasks;
 using System.Windows;
 using S1Jarvis.Access;
@@ -28,10 +29,6 @@ namespace S1Jarvis.UI
 
             try
             {
-                // The existing NavigationCompleted flow performs the
-                // authoritative licence + AI-routing checks and only then sets
-                // _agentAccountRef. Wait for that controlled startup flow to
-                // finish instead of bypassing it here.
                 for (int attempt = 0; attempt < 150; attempt++)
                 {
                     if (!string.IsNullOrWhiteSpace(_agentAccountRef) &&
@@ -51,10 +48,6 @@ namespace S1Jarvis.UI
             }
             catch
             {
-                // Startup health feedback must never be able to crash the
-                // in-process Soft1 host. Real AI requests remain authoritative
-                // and will surface their own failure if this optional probe
-                // itself cannot complete.
                 try
                 {
                     await ShowProviderHealthStatusAsync(
@@ -65,10 +58,6 @@ namespace S1Jarvis.UI
             }
         }
 
-        // Reusable by startup and by the deterministic HEALTH command.
-        // It always re-resolves the authoritative Verilic route and performs
-        // a fresh signed provider probe; no provider credential is exposed to
-        // the client.
         private async Task RefreshProviderHealthStatusAsync(bool explicitCommand)
         {
             string message;
@@ -88,7 +77,7 @@ namespace S1Jarvis.UI
                 }
 
                 await ShowProviderHealthStatusAsync(
-                    explicitCommand ? "AI agent: έλεγχος..." : "AI provider: έλεγχος σύνδεσης...",
+                    explicitCommand ? "AI agents: έλεγχος..." : "AI provider: έλεγχος σύνδεσης...",
                     "checking");
 
                 JarvisRuntimeAccessResult runtime = await Task.Run(() =>
@@ -129,7 +118,10 @@ namespace S1Jarvis.UI
                 if (result.Ready)
                 {
                     model = result.Model ?? model;
-                    message = "AI provider: συνδεδεμένος · " + model;
+                    string provider = string.IsNullOrWhiteSpace(result.Provider)
+                        ? "provider"
+                        : result.Provider;
+                    message = "AI provider: συνδεδεμένος · " + provider + " · " + model;
                     state = "ready";
                 }
                 else
@@ -140,7 +132,7 @@ namespace S1Jarvis.UI
 
                 await ShowProviderHealthStatusAsync(message, state);
                 if (explicitCommand)
-                    PostProviderHealthCommandResult(message, state);
+                    PostProviderHealthCommandResult(result, message, state);
             }
             catch
             {
@@ -151,6 +143,43 @@ namespace S1Jarvis.UI
                 if (explicitCommand)
                     PostProviderHealthCommandResult(message, state);
             }
+        }
+
+        private void PostProviderHealthCommandResult(
+            JarvisAgentHealthResult result,
+            string fallbackMessage,
+            string state)
+        {
+            if (webView == null || webView.CoreWebView2 == null)
+                return;
+
+            if (result == null || result.Targets == null || result.Targets.Count == 0)
+            {
+                PostProviderHealthCommandResult(fallbackMessage, state);
+                return;
+            }
+
+            var text = new StringBuilder();
+            text.AppendLine("**AI HEALTH**");
+            text.AppendLine();
+            text.AppendLine("| Agent | Status | Provider | Model | Routing |");
+            text.AppendLine("|---|---|---|---|---|");
+
+            foreach (JarvisAgentHealthTargetResult target in result.Targets)
+            {
+                string status = target.Ready ? "✓ Connected" : "✖ " + FriendlyTargetReason(target.ReasonCode);
+                string provider = string.IsNullOrWhiteSpace(target.Provider) ? "—" : target.Provider;
+                string model = string.IsNullOrWhiteSpace(target.Model) ? "—" : target.Model;
+                string routing = target.Inherited ? "Inherited" : "Dedicated";
+                text.Append("| ").Append(target.Agent ?? "—")
+                    .Append(" | ").Append(status)
+                    .Append(" | ").Append(provider)
+                    .Append(" | ").Append(model)
+                    .Append(" | ").Append(routing)
+                    .AppendLine(" |");
+            }
+
+            webView.CoreWebView2.PostWebMessageAsString(text.ToString().TrimEnd());
         }
 
         private void PostProviderHealthCommandResult(string message, string state)
@@ -165,9 +194,21 @@ namespace S1Jarvis.UI
             webView.CoreWebView2.PostWebMessageAsString(prefix + text);
         }
 
-        // Once a conversation/interaction begins, a successful startup badge
-        // is only noise. Error state is deliberately kept visible so the
-        // operator sees the problem above the active chat box.
+        private static string FriendlyTargetReason(string reason)
+        {
+            if (string.IsNullOrWhiteSpace(reason)) return "Unavailable";
+            if (reason == "provider_ready") return "Connected";
+            if (reason == "provider_timeout") return "Timeout";
+            if (reason == "provider_auth_failed") return "Credential";
+            if (reason == "provider_model_missing") return "No model";
+            if (reason == "provider_rate_limited") return "Rate limit";
+            if (reason == "provider_credits_exhausted") return "No credits";
+            if (reason == "provider_customer_mismatch") return "Customer mismatch";
+            if (reason == "provider_credential_unavailable") return "Credential unavailable";
+            if (reason == "agent_account_unavailable") return "Account unavailable";
+            return reason;
+        }
+
         private async Task HideProviderHealthIfReadyAsync()
         {
             if (!string.Equals(_providerHealthState, "ready", StringComparison.Ordinal) ||
@@ -183,45 +224,51 @@ namespace S1Jarvis.UI
             JarvisAgentHealthResult result,
             string model)
         {
-            if (result.CreditsExhausted)
-                return "AI provider: τα credits έχουν εξαντληθεί · " + model;
+            string provider = result == null || string.IsNullOrWhiteSpace(result.Provider)
+                ? string.Empty
+                : " · " + result.Provider;
+            string suffix = provider +
+                (string.IsNullOrWhiteSpace(model) ? string.Empty : " · " + model);
 
-            string reason = result.ReasonCode ?? string.Empty;
+            if (result != null && result.CreditsExhausted)
+                return "AI provider: τα credits έχουν εξαντληθεί" + suffix;
+
+            string reason = result?.ReasonCode ?? string.Empty;
             if (reason == "provider_timeout")
-                return "AI provider: timeout σύνδεσης · " + model;
+                return "AI provider: timeout σύνδεσης" + suffix;
             if (reason == "provider_model_missing")
-                return "AI provider: δεν έχει οριστεί μοντέλο";
+                return "AI provider: δεν έχει οριστεί μοντέλο" + provider;
             if (reason == "provider_auth_failed")
-                return "AI provider: μη έγκυρο provider credential · " + model;
+                return "AI provider: μη έγκυρο provider credential" + suffix;
             if (reason == "provider_model_or_request_invalid")
-                return "AI provider: μη έγκυρο μοντέλο ή provider request · " + model;
+                return "AI provider: μη έγκυρο μοντέλο ή provider request" + suffix;
             if (reason == "provider_rate_limited")
-                return "AI provider: προσωρινό rate limit · " + model;
+                return "AI provider: προσωρινό rate limit" + suffix;
             if (reason == "provider_upstream_error")
-                return "AI provider: προσωρινό σφάλμα provider · " + model;
+                return "AI provider: προσωρινό σφάλμα provider" + suffix;
             if (reason == "provider_unsupported")
-                return "AI provider: μη υποστηριζόμενος provider · " + model;
+                return "AI provider: μη υποστηριζόμενος provider" + suffix;
             if (reason == "provider_credential_unavailable")
-                return "AI provider: credential μη διαθέσιμο στον Verilic · " + model;
+                return "AI provider: credential μη διαθέσιμο στον Verilic" + suffix;
             if (reason == "agent_account_unavailable")
-                return "AI provider: agent account μη διαθέσιμο · " + model;
+                return "AI provider: agent account μη διαθέσιμο" + suffix;
             if (reason == "provider_routing_changed")
-                return "AI provider: η δρομολόγηση άλλαξε · " + (result.Model ?? model);
+                return "AI provider: η δρομολόγηση άλλαξε" + suffix;
             if (reason.StartsWith("routing_", StringComparison.Ordinal) ||
                 reason.StartsWith("licence_", StringComparison.Ordinal) ||
                 reason.StartsWith("installation_", StringComparison.Ordinal) ||
                 reason.StartsWith("proof_", StringComparison.Ordinal))
-                return "AI provider: Verilic " + reason + " · " + model;
+                return "AI provider: Verilic " + reason + suffix;
             if (reason.StartsWith("provider_health_http_", StringComparison.Ordinal))
                 return "AI provider: Verilic HTTP " +
-                    reason.Substring("provider_health_http_".Length) + " · " + model;
+                    reason.Substring("provider_health_http_".Length) + suffix;
             if (reason == "provider_health_configuration_invalid" ||
                 reason == "provider_health_installation_invalid" ||
                 reason == "provider_health_response_invalid" ||
                 reason == "provider_health_failed")
-                return "AI provider: αποτυχία Verilic health check · " + model;
+                return "AI provider: αποτυχία Verilic health check" + suffix;
 
-            return "AI provider: πρόβλημα σύνδεσης · " + model;
+            return "AI provider: πρόβλημα σύνδεσης" + suffix;
         }
 
         private async Task ShowProviderHealthStatusAsync(
@@ -245,39 +292,34 @@ namespace S1Jarvis.UI
                 "(function(){" +
                 "var id='jarvis-provider-health';" +
                 "var el=document.getElementById(id);" +
-                "if(!el){" +
-                "el=document.createElement('div');" +
-                "el.id=id;" +
-                "el.style.position='fixed';" +
-                "el.style.zIndex='2147483647';" +
-                "el.style.padding='7px 11px';" +
-                "el.style.borderRadius='8px';" +
-                "el.style.fontFamily='Segoe UI, sans-serif';" +
-                "el.style.fontSize='12px';" +
-                "el.style.border='1px solid rgba(255,255,255,.14)';" +
-                "el.style.background='rgba(27,28,47,.94)';" +
-                "el.style.backdropFilter='blur(6px)';" +
-                "el.style.pointerEvents='none';" +
-                "document.body.appendChild(el);" +
-                "}" +
-                "el.style.display='block';" +
-                "el.textContent=\"" + safeMessage + "\";" +
+                "if(!el){el=document.createElement('div');el.id=id;" +
+                "el.style.zIndex='2147483647';el.style.padding='7px 11px';" +
+                "el.style.borderRadius='8px';el.style.fontFamily='Segoe UI, sans-serif';" +
+                "el.style.fontSize='12px';el.style.border='1px solid rgba(255,255,255,.14)';" +
+                "el.style.background='rgba(27,28,47,.94)';el.style.backdropFilter='blur(6px)';" +
+                "el.style.pointerEvents='none';}" +
+                "el.style.display='block';el.textContent=\"" + safeMessage + "\";" +
                 "el.setAttribute('data-state',\"" + safeState + "\");" +
                 "el.style.color=(\"" + safeState + "\"==='ready')?'#9be8c2':" +
                 "((\"" + safeState + "\"==='error')?'#ffb4ab':'#c9c9d6');" +
                 "function visible(n){if(!n)return false;var s=getComputedStyle(n),r=n.getBoundingClientRect();" +
                 "return s.display!=='none'&&s.visibility!=='hidden'&&r.width>40&&r.height>20&&r.bottom>0&&r.top<innerHeight;}" +
-                "function place(){" +
-                "var all=Array.from(document.querySelectorAll('.composer,[class*=\"composer\"]'));" +
-                "var boxes=all.filter(visible);" +
-                "var box=boxes.length?boxes[boxes.length-1]:null;" +
+                "var app=document.getElementById('app');" +
+                "var active=app&&app.classList.contains('active');" +
+                "if(!active){" +
+                "var transcript=document.getElementById('transcript');" +
+                "if(el.parentNode!==app){if(el.parentNode)el.parentNode.removeChild(el);app.insertBefore(el,transcript);}" +
+                "el.style.position='static';el.style.width='min(520px,94vw)';el.style.marginTop='10px';" +
+                "el.style.left='auto';el.style.right='auto';el.style.top='auto';el.style.bottom='auto';return;}" +
+                "if(el.parentNode!==document.body){if(el.parentNode)el.parentNode.removeChild(el);document.body.appendChild(el);}" +
+                "el.style.position='fixed';el.style.marginTop='0';" +
+                "var selectors=['#courierCurtain.open .courier-composer','#emailCurtain.open .email-composer'," +
+                "'#helpCurtain.open .help-composer','#browserCurtain.open .browser-composer','.app.active .composer'];" +
+                "var box=null;for(var i=0;i<selectors.length&&!box;i++){var n=document.querySelector(selectors[i]);if(visible(n))box=n;}" +
                 "if(box){var r=box.getBoundingClientRect();var w=Math.min(Math.max(260,r.width),520);" +
                 "el.style.width=w+'px';el.style.left=Math.max(12,r.left+(r.width-w)/2)+'px';" +
-                "el.style.right='auto';el.style.bottom='auto';" +
-                "el.style.top=Math.max(12,r.top-el.offsetHeight-8)+'px';}" +
+                "el.style.right='auto';el.style.bottom='auto';el.style.top=Math.max(12,r.top-el.offsetHeight-8)+'px';}" +
                 "else{el.style.width='auto';el.style.left='auto';el.style.right='18px';el.style.top='14px';}" +
-                "}" +
-                "place();setTimeout(place,0);" +
                 "})();";
 
             await webView.CoreWebView2.ExecuteScriptAsync(script);
