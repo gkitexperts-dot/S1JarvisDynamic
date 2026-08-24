@@ -72,6 +72,7 @@ namespace S1Jarvis.Access
     internal sealed class JarvisAgentRoutingDecision
     {
         public string AgentAccountRef { get; private set; }
+        public string Model { get; private set; }
         public string ReasonCode { get; private set; }
 
         public bool Available => !string.IsNullOrWhiteSpace(AgentAccountRef);
@@ -96,6 +97,9 @@ namespace S1Jarvis.Access
                 AgentAccountRef = response.Allowed
                     ? response.AgentAccountRef
                     : null,
+                Model = response.Allowed
+                    ? response.AiModel
+                    : null,
                 ReasonCode = null
             };
         }
@@ -113,6 +117,9 @@ namespace S1Jarvis.Access
             return new JarvisAgentRoutingDecision
             {
                 AgentAccountRef = result.AgentAccountRef.Trim(),
+                Model = string.IsNullOrWhiteSpace(result.Model)
+                    ? null
+                    : result.Model.Trim(),
                 ReasonCode = string.IsNullOrWhiteSpace(result.ReasonCode)
                     ? null
                     : result.ReasonCode.Trim()
@@ -190,6 +197,9 @@ namespace S1Jarvis.Access
                 ValidUntil = Licence.ValidUntil,
                 AgentAccountRef = operationallyAllowed && routingAvailable
                     ? AgentRouting.AgentAccountRef
+                    : null,
+                AiModel = operationallyAllowed && routingAvailable
+                    ? AgentRouting.Model
                     : null
             };
         }
