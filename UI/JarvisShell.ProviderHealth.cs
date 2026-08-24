@@ -179,6 +179,21 @@ namespace S1Jarvis.UI
                     .AppendLine(" |");
             }
 
+            if (!string.IsNullOrWhiteSpace(result.DiagnosticCode) ||
+                !string.IsNullOrWhiteSpace(result.DiagnosticMessage))
+            {
+                text.AppendLine();
+                text.Append("Provider diagnostic: ");
+                if (!string.IsNullOrWhiteSpace(result.DiagnosticCode))
+                    text.Append(result.DiagnosticCode);
+                if (!string.IsNullOrWhiteSpace(result.DiagnosticMessage))
+                {
+                    if (!string.IsNullOrWhiteSpace(result.DiagnosticCode))
+                        text.Append(": ");
+                    text.Append(result.DiagnosticMessage);
+                }
+            }
+
             webView.CoreWebView2.PostWebMessageAsString(text.ToString().TrimEnd());
         }
 
@@ -228,7 +243,8 @@ namespace S1Jarvis.UI
                 ? string.Empty
                 : " · " + result.Provider;
             string suffix = provider +
-                (string.IsNullOrWhiteSpace(model) ? string.Empty : " · " + model);
+                (string.IsNullOrWhiteSpace(model) ? string.Empty : " · " + model) +
+                BuildProviderDiagnosticSuffix(result);
 
             if (result != null && result.CreditsExhausted)
                 return "AI provider: τα credits έχουν εξαντληθεί" + suffix;
@@ -271,6 +287,25 @@ namespace S1Jarvis.UI
             return "AI provider: πρόβλημα σύνδεσης" + suffix;
         }
 
+        private static string BuildProviderDiagnosticSuffix(JarvisAgentHealthResult result)
+        {
+            if (result == null ||
+                (string.IsNullOrWhiteSpace(result.DiagnosticCode) &&
+                 string.IsNullOrWhiteSpace(result.DiagnosticMessage)))
+                return string.Empty;
+
+            var text = new StringBuilder(" | ");
+            if (!string.IsNullOrWhiteSpace(result.DiagnosticCode))
+                text.Append(result.DiagnosticCode);
+            if (!string.IsNullOrWhiteSpace(result.DiagnosticMessage))
+            {
+                if (!string.IsNullOrWhiteSpace(result.DiagnosticCode))
+                    text.Append(": ");
+                text.Append(result.DiagnosticMessage);
+            }
+            return text.ToString();
+        }
+
         private async Task ShowProviderHealthStatusAsync(
             string message,
             string state)
@@ -279,7 +314,7 @@ namespace S1Jarvis.UI
             _providerHealthState = state;
             int separator = message.LastIndexOf(" · ", StringComparison.Ordinal);
             _providerHealthModel = separator >= 0 && separator + 3 < message.Length
-                ? message.Substring(separator + 3)
+                ? message.Substring(separator + 3).Split(new[] { " | " }, StringSplitOptions.None)[0]
                 : null;
 
             if (webView == null || webView.CoreWebView2 == null)
