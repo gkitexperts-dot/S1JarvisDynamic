@@ -160,7 +160,7 @@ namespace S1Jarvis.UI
             }
 
             var text = new StringBuilder();
-            text.AppendLine("**AI HEALTH**");
+            text.AppendLine("### AI HEALTH");
             text.AppendLine();
             text.AppendLine("| Agent | Status | Provider | Model | Routing |");
             text.AppendLine("|---|---|---|---|---|");
