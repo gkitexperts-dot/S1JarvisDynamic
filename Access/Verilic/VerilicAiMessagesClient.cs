@@ -48,6 +48,10 @@ namespace S1Jarvis.Access.Verilic
             public int UsageInputTokens { get; set; }
             public int UsageOutputTokens { get; set; }
             public string RawResponseJson { get; set; }
+            public string Agent { get; set; }
+            public string Provider { get; set; }
+            public string Model { get; set; }
+            public string Routing { get; set; }
         }
 
         static VerilicAiMessagesClient()
@@ -176,7 +180,11 @@ namespace S1Jarvis.Access.Verilic
                             ResponseText = result.ResponseText,
                             RawResponseJson = result.RawResponseJson ?? string.Empty,
                             UsageInputTokens = result.UsageInputTokens,
-                            UsageOutputTokens = result.UsageOutputTokens
+                            UsageOutputTokens = result.UsageOutputTokens,
+                            RuntimeAgent = result.Agent,
+                            RuntimeProvider = result.Provider,
+                            RuntimeModel = result.Model,
+                            RuntimeRouting = result.Routing
                         };
                     }
                 }
