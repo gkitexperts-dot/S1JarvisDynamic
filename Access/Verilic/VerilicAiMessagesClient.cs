@@ -6,6 +6,7 @@ using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 using Newtonsoft.Json;
+using Newtonsoft.Json.Linq;
 using Softone;
 using S1Jarvis.Core;
 
@@ -15,7 +16,9 @@ namespace S1Jarvis.Access.Verilic
     /// Sends Jarvis provider requests through the signed Verilic messages
     /// endpoint. Provider credentials, authoritative AgentAccountRef and the
     /// configured model remain server-side. The client contributes only its
-    /// activated installation proof, Soft1 identity and provider request JSON.
+    /// activated installation proof, Soft1 identity, logical Jarvis agent and
+    /// provider request JSON. AgentName selects a logical role only; Verilic
+    /// remains authoritative for the effective account/provider/model target.
     /// </summary>
     internal sealed class VerilicAiMessagesClient
     {
@@ -32,6 +35,7 @@ namespace S1Jarvis.Access.Verilic
             public string CompanyCode { get; set; }
             public string BranchCode { get; set; }
             public string Soft1UserId { get; set; }
+            public string AgentName { get; set; }
             public string ProviderRequestJson { get; set; }
         }
 
@@ -61,6 +65,10 @@ namespace S1Jarvis.Access.Verilic
                 return Failure("messages_identity_missing");
             if (string.IsNullOrWhiteSpace(providerRequestJson))
                 return Failure("provider_request_invalid");
+
+            string agentName = ResolveLogicalAgentName(providerRequestJson);
+            if (string.IsNullOrWhiteSpace(agentName))
+                return Failure("routing_agent_invalid");
 
             try
             {
@@ -101,6 +109,7 @@ namespace S1Jarvis.Access.Verilic
                     CompanyCode = info.CompanyId.ToString(),
                     BranchCode = info.BranchId.ToString(),
                     Soft1UserId = info.UserId.ToString(),
+                    AgentName = agentName,
                     ProviderRequestJson = providerRequestJson
                 };
 
@@ -185,6 +194,77 @@ namespace S1Jarvis.Access.Verilic
             }
         }
 
+        /// <summary>
+        /// The existing Jarvis tool loop already shapes a distinct system prompt
+        /// for each logical agent. Until the large legacy JarvisAgentClient is
+        /// decomposed, derive the non-secret logical role from those stable prompt
+        /// markers so the signed request can carry AgentName without making the
+        /// client authoritative for provider/account/model. Priority mirrors the
+        /// existing active-agent selection: Forge, Compass, Echo, then Atlas for
+        /// the free main chat; dedicated curtains map to Sage/Scout/Sprint first.
+        /// </summary>
+        private static string ResolveLogicalAgentName(string providerRequestJson)
+        {
+            try
+            {
+                JObject request = JObject.Parse(providerRequestJson);
+                string systemText = ReadSystemText(request["system"]);
+
+                if (Contains(systemText, "HELP MODE"))
+                    return "Sage";
+                if (Contains(systemText, "BROWSER MODE"))
+                    return "Scout";
+                if (Contains(systemText, "COURIER MODE"))
+                    return "Sprint";
+
+                // Main-chat routing can expose more than one related tool set.
+                // Keep the same precedence as JarvisAgentClient.activeAgentName.
+                if (Contains(systemText, "ΑΝΟΙΓΜΑ/ΔΗΜΙΟΥΡΓΙΑ ΕΙΔΟΥΣ"))
+                    return "Forge";
+                if (Contains(systemText, "ΑΝΟΙΓΜΑ/ΔΗΜΙΟΥΡΓΙΑ ΣΥΝΑΛΛΑΣΣΟΜΕΝΟΥ ΜΕ ΑΦΜ"))
+                    return "Compass";
+                if (Contains(systemText, "EMAIL MODE") || Contains(systemText, "- EMAIL ("))
+                    return "Echo";
+
+                return "Atlas";
+            }
+            catch
+            {
+                return null;
+            }
+        }
+
+        private static string ReadSystemText(JToken system)
+        {
+            if (system == null)
+                return string.Empty;
+            if (system.Type == JTokenType.String)
+                return system.ToString();
+
+            var builder = new StringBuilder();
+            JArray blocks = system as JArray;
+            if (blocks == null)
+                return system.ToString();
+
+            foreach (JToken block in blocks)
+            {
+                string text = block?["text"]?.ToString();
+                if (!string.IsNullOrEmpty(text))
+                {
+                    if (builder.Length > 0)
+                        builder.Append('\n');
+                    builder.Append(text);
+                }
+            }
+            return builder.ToString();
+        }
+
+        private static bool Contains(string text, string marker)
+        {
+            return !string.IsNullOrEmpty(text) &&
+                   text.IndexOf(marker, StringComparison.OrdinalIgnoreCase) >= 0;
+        }
+
         private static AgentProxyResponse Failure(string reasonCode)
         {
             return new AgentProxyResponse
@@ -225,6 +305,10 @@ namespace S1Jarvis.Access.Verilic
                     return "Δεν έχει οριστεί AI model για αυτή τη ρύθμιση.";
                 case "agent_account_unavailable":
                     return "Το AI agent account δεν είναι διαθέσιμο.";
+                case "provider_customer_mismatch":
+                    return "Το AI agent account δεν ανήκει στον πελάτη της ενεργής άδειας.";
+                case "routing_agent_invalid":
+                    return "Ο λογικός AI agent δεν είναι έγκυρος για αυτή τη δρομολόγηση.";
                 case "provider_upstream_error":
                     return "Ο AI provider επέστρεψε προσωρινό σφάλμα.";
                 default:
