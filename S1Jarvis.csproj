@@ -106,6 +106,8 @@
       <DependentUpon>JarvisShell.xaml</DependentUpon>
     </Compile>
     <Compile Include="UI\JarvisShell.ProviderHealth.cs" />
+    <Compile Include="UI\JarvisShell.UatRunner.cs" />
+    <Compile Include="UI\JarvisShell.UatDeferred.cs" />
     <Compile Include="UI\VerilicMaintenanceShell.xaml.cs">
       <DependentUpon>VerilicMaintenanceShell.xaml</DependentUpon>
     </Compile>
