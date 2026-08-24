@@ -237,13 +237,21 @@ namespace S1Jarvis.Access.Verilic
 
                         CaptureRuntimeTarget(result);
 
+                        if (!result.Success && HasProviderDiagnostic(result.ReasonCode))
+                        {
+                            // Verilic already redacts provider secrets before returning
+                            // diagnostics. Keep the full safe diagnostic in the local
+                            // debug log, but never surface it as normal Jarvis chat text.
+                            DebugLog.Log("[VERILIC] provider diagnostic=" + result.ReasonCode);
+                        }
+
                         return new AgentProxyResponse
                         {
                             Success = result.Success,
                             CreditsExhausted = result.CreditsExhausted,
                             ErrorMessage = result.Success
                                 ? null
-                                : BuildSafeErrorMessage(result.ReasonCode),
+                                : BuildSafeErrorMessage(GetBaseReasonCode(result.ReasonCode)),
                             ResponseText = result.ResponseText,
                             RawResponseJson = result.RawResponseJson ?? string.Empty,
                             UsageInputTokens = result.UsageInputTokens,
@@ -412,6 +420,24 @@ namespace S1Jarvis.Access.Verilic
             return builder.ToString();
         }
 
+        private static bool HasProviderDiagnostic(string reasonCode)
+        {
+            return !string.IsNullOrWhiteSpace(reasonCode) &&
+                reasonCode.IndexOf('|') >= 0;
+        }
+
+        private static string GetBaseReasonCode(string reasonCode)
+        {
+            if (string.IsNullOrWhiteSpace(reasonCode))
+                return "provider_unavailable";
+
+            string trimmed = reasonCode.Trim();
+            int separator = trimmed.IndexOf('|');
+            return separator < 0
+                ? trimmed
+                : trimmed.Substring(0, separator).Trim();
+        }
+
         private static AgentProxyResponse Failure(string reasonCode)
         {
             return new AgentProxyResponse
@@ -421,16 +447,14 @@ namespace S1Jarvis.Access.Verilic
                     reasonCode,
                     "provider_credits_exhausted",
                     StringComparison.Ordinal),
-                ErrorMessage = BuildSafeErrorMessage(reasonCode),
+                ErrorMessage = BuildSafeErrorMessage(GetBaseReasonCode(reasonCode)),
                 RawResponseJson = string.Empty
             };
         }
 
         private static string BuildSafeErrorMessage(string reasonCode)
         {
-            string reason = string.IsNullOrWhiteSpace(reasonCode)
-                ? "provider_unavailable"
-                : reasonCode.Trim();
+            string reason = GetBaseReasonCode(reasonCode);
 
             switch (reason)
             {
