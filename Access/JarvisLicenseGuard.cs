@@ -7,6 +7,7 @@ using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 using Newtonsoft.Json;
+using Newtonsoft.Json.Linq;
 using Softone;
 using S1Jarvis.Access.Verilic;
 using S1Jarvis.Core;
@@ -23,6 +24,7 @@ namespace S1Jarvis.Access
     internal static class JarvisLicenseGuard
     {
         private static readonly TimeSpan CacheDuration = TimeSpan.FromMinutes(5);
+        private const int DrMinimumOutputTokens = 16000;
 
         private static readonly object _lock = new object();
         private static readonly Dictionary<string, (AccessCheckResponse result, DateTime at)> _cache =
@@ -229,13 +231,35 @@ namespace S1Jarvis.Access
                             });
                     }
 
+                    // DR extraction is intentionally provider-neutral. Thinking
+                    // models may consume part of the output budget internally,
+                    // while other providers may not. Give every DR one-shot call
+                    // the same sufficiently large ceiling instead of adding a
+                    // Gemini-only branch. Providers still stop naturally when the
+                    // structured response is complete.
+                    string providerRequestJson = EnsureDrOutputBudget(
+                        legacyRequest.AnthropicRequestJson);
+
                     DebugLog.Log("[dr] Forwarding document vision through signed Verilic messages using the configured default AI target.");
                     AgentProxyResponse result = await new VerilicAiMessagesClient()
                         .SendAsync(
                             xSupport,
                             "Atlas",
-                            legacyRequest.AnthropicRequestJson,
+                            providerRequestJson,
                             cancellationToken);
+
+                    // Never feed a response that is known to be truncated into
+                    // the JObject parser used by DR. This keeps the failure
+                    // deterministic instead of surfacing an "Unexpected end of
+                    // content" JSON exception to the operator.
+                    if (result != null && result.Success && IsOutputTruncated(result.RawResponseJson))
+                    {
+                        DebugLog.Log("[dr] Provider stopped at max_tokens before structured extraction completed.");
+                        result.Success = false;
+                        result.ErrorMessage =
+                            "Η απάντηση του AI κόπηκε πριν ολοκληρωθεί η ανάγνωση του παραστατικού. Δοκίμασε ξανά.";
+                        result.RawResponseJson = string.Empty;
+                    }
 
                     return CreateJsonResponse(HttpStatusCode.OK, result);
                 }
@@ -253,6 +277,42 @@ namespace S1Jarvis.Access
                             Success = false,
                             ErrorMessage = "Η ασφαλής ανάγνωση παραστατικού δεν μπόρεσε να ολοκληρωθεί."
                         });
+                }
+            }
+
+            private static string EnsureDrOutputBudget(string providerRequestJson)
+            {
+                try
+                {
+                    JObject request = JObject.Parse(providerRequestJson);
+                    int current = request["max_tokens"]?.ToObject<int>() ?? 0;
+                    if (current < DrMinimumOutputTokens)
+                        request["max_tokens"] = DrMinimumOutputTokens;
+                    return request.ToString(Formatting.None);
+                }
+                catch (Exception ex)
+                {
+                    DebugLog.Log("[dr] Could not normalize output budget: " + ex.GetType().Name + ": " + ex.Message);
+                    return providerRequestJson;
+                }
+            }
+
+            private static bool IsOutputTruncated(string rawResponseJson)
+            {
+                if (string.IsNullOrWhiteSpace(rawResponseJson))
+                    return false;
+
+                try
+                {
+                    JObject response = JObject.Parse(rawResponseJson);
+                    return string.Equals(
+                        response["stop_reason"]?.ToString(),
+                        "max_tokens",
+                        StringComparison.OrdinalIgnoreCase);
+                }
+                catch
+                {
+                    return false;
                 }
             }
 
