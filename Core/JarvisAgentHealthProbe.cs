@@ -21,6 +21,8 @@ namespace S1Jarvis.Core
         public string Provider { get; set; }
         public string Model { get; set; }
         public bool Inherited { get; set; }
+        public string DiagnosticCode { get; set; }
+        public string DiagnosticMessage { get; set; }
     }
 
     internal sealed class JarvisAgentHealthResult
@@ -30,6 +32,8 @@ namespace S1Jarvis.Core
         public string ReasonCode { get; private set; }
         public string Provider { get; private set; }
         public string Model { get; private set; }
+        public string DiagnosticCode { get; private set; }
+        public string DiagnosticMessage { get; private set; }
         public IReadOnlyList<JarvisAgentHealthTargetResult> Targets { get; private set; }
 
         public static JarvisAgentHealthResult Success(
@@ -52,7 +56,9 @@ namespace S1Jarvis.Core
             bool creditsExhausted = false,
             string provider = null,
             string model = null,
-            IReadOnlyList<JarvisAgentHealthTargetResult> targets = null)
+            IReadOnlyList<JarvisAgentHealthTargetResult> targets = null,
+            string diagnosticCode = null,
+            string diagnosticMessage = null)
         {
             return new JarvisAgentHealthResult
             {
@@ -63,6 +69,8 @@ namespace S1Jarvis.Core
                     : reasonCode,
                 Provider = Normalize(provider),
                 Model = Normalize(model),
+                DiagnosticCode = Normalize(diagnosticCode),
+                DiagnosticMessage = Normalize(diagnosticMessage),
                 Targets = targets ?? new List<JarvisAgentHealthTargetResult>()
             };
         }
@@ -93,6 +101,8 @@ namespace S1Jarvis.Core
             public string Provider { get; set; }
             public string Model { get; set; }
             public bool Inherited { get; set; }
+            public string DiagnosticCode { get; set; }
+            public string DiagnosticMessage { get; set; }
         }
 
         private sealed class ProviderHealthResponse
@@ -101,6 +111,8 @@ namespace S1Jarvis.Core
             public string ReasonCode { get; set; }
             public string Provider { get; set; }
             public string Model { get; set; }
+            public string DiagnosticCode { get; set; }
+            public string DiagnosticMessage { get; set; }
             public List<ProviderHealthTargetResponse> Targets { get; set; }
         }
 
@@ -228,6 +240,9 @@ namespace S1Jarvis.Core
                             ? selectedModel
                             : health.Model.Trim();
 
+                        IReadOnlyList<JarvisAgentHealthTargetResult> targets =
+                            ConvertTargets(health.Targets);
+
                         if (!string.Equals(
                                 returnedModel,
                                 selectedModel,
@@ -236,10 +251,9 @@ namespace S1Jarvis.Core
                                 "provider_routing_changed",
                                 provider: health.Provider,
                                 model: returnedModel,
-                                targets: ConvertTargets(health.Targets));
-
-                        IReadOnlyList<JarvisAgentHealthTargetResult> targets =
-                            ConvertTargets(health.Targets);
+                                targets: targets,
+                                diagnosticCode: health.DiagnosticCode,
+                                diagnosticMessage: health.DiagnosticMessage);
 
                         if (health.Ready)
                             return JarvisAgentHealthResult.Success(
@@ -255,7 +269,9 @@ namespace S1Jarvis.Core
                                 StringComparison.Ordinal),
                             health.Provider,
                             returnedModel,
-                            targets);
+                            targets,
+                            health.DiagnosticCode,
+                            health.DiagnosticMessage);
                     }
                 }
             }
@@ -298,7 +314,13 @@ namespace S1Jarvis.Core
                     Model = string.IsNullOrWhiteSpace(target.Model)
                         ? null
                         : target.Model.Trim(),
-                    Inherited = target.Inherited
+                    Inherited = target.Inherited,
+                    DiagnosticCode = string.IsNullOrWhiteSpace(target.DiagnosticCode)
+                        ? null
+                        : target.DiagnosticCode.Trim(),
+                    DiagnosticMessage = string.IsNullOrWhiteSpace(target.DiagnosticMessage)
+                        ? null
+                        : target.DiagnosticMessage.Trim()
                 });
             }
 
