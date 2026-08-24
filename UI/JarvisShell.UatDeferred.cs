@@ -99,10 +99,30 @@ namespace S1Jarvis.UI
         {
             try
             {
-                // Give the normal read_office_document callback time to complete
-                // and the JS attachment continuation time to settle before doing
-                // any UAT work. Parsing itself remains on a worker thread.
-                await Task.Delay(700);
+                // First visible acknowledgement happens only AFTER the original
+                // WebView callback has unwound. This avoids the old E_ABORT pattern,
+                // while making the UI feel alive immediately instead of "freezing".
+                await Task.Delay(100);
+                await Dispatcher.InvokeAsync(async () =>
+                {
+                    try
+                    {
+                        if (webView != null && webView.CoreWebView2 != null)
+                            await webView.CoreWebView2.ExecuteScriptAsync("startConversation();");
+                    }
+                    catch (Exception layoutEx)
+                    {
+                        DebugLog.Log("[uat] startConversation failed: " + layoutEx);
+                    }
+
+                    PostUatMessage(
+                        "📎 **Έλαβα το Excel** `" + EscapeMarkdown(name) + "`.\n\n" +
+                        "Το διαβάζω τώρα και ελέγχω αν είναι Jarvis UAT workbook. Περίμενε λίγο — δεν χρειάζεται να πατήσεις Send.");
+                });
+
+                // Let the normal read_office_document continuation settle before
+                // the second parse starts. Parsing itself remains on a worker thread.
+                await Task.Delay(500);
 
                 byte[] bytes = Convert.FromBase64String(base64);
                 string workbookText = await Task.Run(() =>
@@ -110,7 +130,14 @@ namespace S1Jarvis.UI
 
                 List<UatTestCase> tests = ParseCurrentUatSheet(workbookText);
                 if (tests == null || tests.Count == 0)
-                    return; // ordinary XLSX: normal attachment behavior only.
+                {
+                    // Ordinary XLSX: keep the normal attachment behavior. We only
+                    // acknowledge that reading completed; the attachment remains
+                    // available for the user to send normally.
+                    await Dispatcher.InvokeAsync(() =>
+                        PostUatMessage("✓ Το Excel διαβάστηκε. Δεν είναι UAT workbook — παραμένει διαθέσιμο για κανονική χρήση στο chat."));
+                    return;
+                }
 
                 await Dispatcher.InvokeAsync(async () =>
                 {
@@ -120,13 +147,13 @@ namespace S1Jarvis.UI
                     _uatRunning = true;
                     try
                     {
-                        // Explicit notice BEFORE test execution. Also clear the
-                        // normal attachment chip so the workbook is not accidentally
-                        // sent later as ordinary chat text.
+                        // Only now that UAT recognition is confirmed do we consume
+                        // the attachment. The sphere is already top-right because
+                        // startConversation() ran in the first acknowledgement.
                         try
                         {
                             if (webView != null && webView.CoreWebView2 != null)
-                                await webView.CoreWebView2.ExecuteScriptAsync("clearAttachment();");
+                                await webView.CoreWebView2.ExecuteScriptAsync("clearAttachment(); startConversation();");
                         }
                         catch (Exception clearEx)
                         {
@@ -134,14 +161,15 @@ namespace S1Jarvis.UI
                         }
 
                         PostUatMessage(
-                            "UAT READY\n\n" +
-                            "Αναγνωρίστηκε το **" + EscapeMarkdown(name) + "** με **" + tests.Count +
-                            "** γραμμές. Ξεκινώ τώρα τα αυτόματα tests που επιτρέπονται από την ενεργή άδεια. " +
-                            "Τα υπόλοιπα θα σημειωθούν MANUAL/BLOCKED χωρίς να εκτελεστούν.");
+                            "### UAT READY\n\n" +
+                            "Αναγνώρισα το **" + EscapeMarkdown(name) + "** ως Jarvis UAT workbook με **" + tests.Count +
+                            "** γραμμές. Το Excel φορτώθηκε και αφαιρέθηκε από το composer.\n\n" +
+                            "▶ **Ξεκινώ τώρα τα tests.** Μείνε στο παράθυρο — θα εμφανίζω πρόοδο και στο τέλος θα δώσω συγκεντρωτικά αποτελέσματα. " +
+                            "Όσα δεν μπορούν να εκτελεστούν με την ενεργή άδεια θα σημειωθούν MANUAL/BLOCKED.");
 
-                        // Small visual pause so the operator can actually read the
-                        // notice before the first provider/tool call begins.
-                        await Task.Delay(900);
+                        // Give the operator enough time to see the transition and
+                        // understand that a potentially multi-minute UAT run starts.
+                        await Task.Delay(1600);
                         await RunUatWorkbookAsync(name, tests);
                     }
                     catch (Exception ex)
