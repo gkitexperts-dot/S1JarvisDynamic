@@ -38,6 +38,10 @@ namespace S1Jarvis.Access
         [JsonProperty("agentAccountRef")]
         public string AgentAccountRef { get; set; }
 
+        // Non-secret model id selected by the authoritative Jarvis AI config.
+        [JsonProperty("aiModel")]
+        public string AiModel { get; set; }
+
         [JsonProperty("message")]
         public string Message { get; set; }
 
