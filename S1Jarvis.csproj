@@ -86,6 +86,7 @@
     <Compile Include="Access\Verilic\VerilicRuntimeConfiguration.cs" />
     <Compile Include="Access\Verilic\VerilicReadinessInspector.cs" />
     <Compile Include="Core\AgentProxyDtos.cs" />
+    <Compile Include="Core\JarvisAgentHealthProbe.cs" />
     <Compile Include="Core\DashboardPanels.cs" />
     <Compile Include="Core\CsvWriter.cs" />
     <Compile Include="Core\XlsxWriter.cs" />
@@ -103,6 +104,7 @@
     <Compile Include="UI\JarvisShell.xaml.cs">
       <DependentUpon>JarvisShell.xaml</DependentUpon>
     </Compile>
+    <Compile Include="UI\JarvisShell.ProviderHealth.cs" />
     <Compile Include="UI\VerilicMaintenanceShell.xaml.cs">
       <DependentUpon>VerilicMaintenanceShell.xaml</DependentUpon>
     </Compile>
