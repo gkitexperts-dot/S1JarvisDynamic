@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Net;
 using System.Net.Http;
 using System.Net.Http.Headers;
@@ -12,27 +13,46 @@ using S1Jarvis.Access.Verilic;
 
 namespace S1Jarvis.Core
 {
+    internal sealed class JarvisAgentHealthTargetResult
+    {
+        public string Agent { get; set; }
+        public bool Ready { get; set; }
+        public string ReasonCode { get; set; }
+        public string Provider { get; set; }
+        public string Model { get; set; }
+        public bool Inherited { get; set; }
+    }
+
     internal sealed class JarvisAgentHealthResult
     {
         public bool Ready { get; private set; }
         public bool CreditsExhausted { get; private set; }
         public string ReasonCode { get; private set; }
+        public string Provider { get; private set; }
         public string Model { get; private set; }
+        public IReadOnlyList<JarvisAgentHealthTargetResult> Targets { get; private set; }
 
-        public static JarvisAgentHealthResult Success(string model)
+        public static JarvisAgentHealthResult Success(
+            string provider,
+            string model,
+            IReadOnlyList<JarvisAgentHealthTargetResult> targets)
         {
             return new JarvisAgentHealthResult
             {
                 Ready = true,
                 ReasonCode = "provider_ready",
-                Model = string.IsNullOrWhiteSpace(model) ? null : model.Trim()
+                Provider = Normalize(provider),
+                Model = Normalize(model),
+                Targets = targets ?? new List<JarvisAgentHealthTargetResult>()
             };
         }
 
         public static JarvisAgentHealthResult Failure(
             string reasonCode,
             bool creditsExhausted = false,
-            string model = null)
+            string provider = null,
+            string model = null,
+            IReadOnlyList<JarvisAgentHealthTargetResult> targets = null)
         {
             return new JarvisAgentHealthResult
             {
@@ -41,29 +61,47 @@ namespace S1Jarvis.Core
                 ReasonCode = string.IsNullOrWhiteSpace(reasonCode)
                     ? "provider_unavailable"
                     : reasonCode,
-                Model = string.IsNullOrWhiteSpace(model) ? null : model.Trim()
+                Provider = Normalize(provider),
+                Model = Normalize(model),
+                Targets = targets ?? new List<JarvisAgentHealthTargetResult>()
             };
+        }
+
+        private static string Normalize(string value)
+        {
+            return string.IsNullOrWhiteSpace(value) ? null : value.Trim();
         }
     }
 
     /// <summary>
-    /// Performs the startup provider probe through Verilic. The request is
-    /// authenticated with the activated installation's ES256 proof and carries
-    /// only the same Soft1 identity fields used by authoritative AI routing.
-    /// Verilic re-verifies licence, entitlement, AgentAccount and configured
-    /// model, decrypts the provider credential server-side, and performs the
-    /// provider-specific probe. No provider credential is sent to this client.
+    /// Performs the provider probe through Verilic. The request is authenticated
+    /// with the activated installation's ES256 proof and carries only the same
+    /// Soft1 identity fields used by authoritative AI routing. Verilic resolves
+    /// the provider/model for Jarvis and every configured helper and keeps all
+    /// provider credentials server-side.
     /// </summary>
     internal sealed class JarvisAgentHealthProbe
     {
         private static readonly HttpClient Http = new HttpClient();
         private static readonly TimeSpan Timeout = TimeSpan.FromSeconds(15);
 
+        private sealed class ProviderHealthTargetResponse
+        {
+            public string Agent { get; set; }
+            public bool Ready { get; set; }
+            public string ReasonCode { get; set; }
+            public string Provider { get; set; }
+            public string Model { get; set; }
+            public bool Inherited { get; set; }
+        }
+
         private sealed class ProviderHealthResponse
         {
             public bool Ready { get; set; }
             public string ReasonCode { get; set; }
+            public string Provider { get; set; }
             public string Model { get; set; }
+            public List<ProviderHealthTargetResponse> Targets { get; set; }
         }
 
         static JarvisAgentHealthProbe()
@@ -190,20 +228,24 @@ namespace S1Jarvis.Core
                             ? selectedModel
                             : health.Model.Trim();
 
-                        // The shell already resolved an authoritative account/model
-                        // immediately before this call. If the server reports a
-                        // different model, configuration changed between the two
-                        // signed requests; fail closed and let startup retry later.
                         if (!string.Equals(
                                 returnedModel,
                                 selectedModel,
                                 StringComparison.Ordinal))
                             return JarvisAgentHealthResult.Failure(
                                 "provider_routing_changed",
-                                model: returnedModel);
+                                provider: health.Provider,
+                                model: returnedModel,
+                                targets: ConvertTargets(health.Targets));
+
+                        IReadOnlyList<JarvisAgentHealthTargetResult> targets =
+                            ConvertTargets(health.Targets);
 
                         if (health.Ready)
-                            return JarvisAgentHealthResult.Success(returnedModel);
+                            return JarvisAgentHealthResult.Success(
+                                health.Provider,
+                                returnedModel,
+                                targets);
 
                         return JarvisAgentHealthResult.Failure(
                             health.ReasonCode.Trim(),
@@ -211,7 +253,9 @@ namespace S1Jarvis.Core
                                 health.ReasonCode.Trim(),
                                 "provider_credits_exhausted",
                                 StringComparison.Ordinal),
-                            returnedModel);
+                            health.Provider,
+                            returnedModel,
+                            targets);
                     }
                 }
             }
@@ -227,6 +271,38 @@ namespace S1Jarvis.Core
                     "provider_health_failed",
                     model: selectedModel);
             }
+        }
+
+        private static IReadOnlyList<JarvisAgentHealthTargetResult> ConvertTargets(
+            IList<ProviderHealthTargetResponse> source)
+        {
+            var result = new List<JarvisAgentHealthTargetResult>();
+            if (source == null)
+                return result;
+
+            foreach (ProviderHealthTargetResponse target in source)
+            {
+                if (target == null || string.IsNullOrWhiteSpace(target.Agent))
+                    continue;
+
+                result.Add(new JarvisAgentHealthTargetResult
+                {
+                    Agent = target.Agent.Trim(),
+                    Ready = target.Ready,
+                    ReasonCode = string.IsNullOrWhiteSpace(target.ReasonCode)
+                        ? "provider_unavailable"
+                        : target.ReasonCode.Trim(),
+                    Provider = string.IsNullOrWhiteSpace(target.Provider)
+                        ? null
+                        : target.Provider.Trim(),
+                    Model = string.IsNullOrWhiteSpace(target.Model)
+                        ? null
+                        : target.Model.Trim(),
+                    Inherited = target.Inherited
+                });
+            }
+
+            return result;
         }
     }
 }
