@@ -9,6 +9,9 @@ namespace S1Jarvis.UI
     public partial class JarvisShell
     {
         private bool _providerHealthCheckEnabled;
+        private string _providerHealthState;
+        private string _providerHealthMessage;
+        private string _providerHealthModel;
 
         internal void EnableProviderHealthCheck()
         {
@@ -44,54 +47,7 @@ namespace S1Jarvis.UI
                     webView.CoreWebView2 == null)
                     return;
 
-                await ShowProviderHealthStatusAsync(
-                    "AI provider: έλεγχος σύνδεσης...",
-                    "checking");
-
-                // Resolve once more through the signed Verilic runtime route so
-                // we compare the health result against the exact account/model
-                // that is authoritative for this contract + Soft1 user.
-                JarvisRuntimeAccessResult runtime = await Task.Run(() =>
-                    JarvisLicenseGuard.CheckRuntimeAccessSilent(_xSupport));
-
-                string model = runtime?.AgentRouting?.Model;
-                if (string.IsNullOrWhiteSpace(model))
-                {
-                    await ShowProviderHealthStatusAsync(
-                        "AI provider: δεν έχει οριστεί μοντέλο",
-                        "error");
-                    return;
-                }
-
-                if (runtime.AgentRouting == null ||
-                    !runtime.AgentRouting.Available ||
-                    !string.Equals(
-                        runtime.AgentRouting.AgentAccountRef,
-                        _agentAccountRef,
-                        StringComparison.Ordinal))
-                {
-                    await ShowProviderHealthStatusAsync(
-                        "AI provider: η δρομολόγηση άλλαξε",
-                        "error");
-                    return;
-                }
-
-                var probe = new JarvisAgentHealthProbe();
-                JarvisAgentHealthResult result = await probe.ProbeAsync(
-                    _xSupport,
-                    _agentAccountRef,
-                    model);
-
-                if (result.Ready)
-                {
-                    await ShowProviderHealthStatusAsync(
-                        "AI provider: συνδεδεμένος · " + result.Model,
-                        "ready");
-                    return;
-                }
-
-                string message = BuildProviderHealthFailureMessage(result, model);
-                await ShowProviderHealthStatusAsync(message, "error");
+                await RefreshProviderHealthStatusAsync(false);
             }
             catch
             {
@@ -107,6 +63,120 @@ namespace S1Jarvis.UI
                 }
                 catch { }
             }
+        }
+
+        // Reusable by startup and by the deterministic HEALTH command.
+        // It always re-resolves the authoritative Verilic route and performs
+        // a fresh signed provider probe; no provider credential is exposed to
+        // the client.
+        private async Task RefreshProviderHealthStatusAsync(bool explicitCommand)
+        {
+            string message;
+            string state;
+            string model = null;
+
+            try
+            {
+                if (string.IsNullOrWhiteSpace(_agentAccountRef))
+                {
+                    message = "AI agent: δεν υπάρχει ενεργή άδεια/agent";
+                    state = "error";
+                    await ShowProviderHealthStatusAsync(message, state);
+                    if (explicitCommand)
+                        PostProviderHealthCommandResult(message, state);
+                    return;
+                }
+
+                await ShowProviderHealthStatusAsync(
+                    explicitCommand ? "AI agent: έλεγχος..." : "AI provider: έλεγχος σύνδεσης...",
+                    "checking");
+
+                JarvisRuntimeAccessResult runtime = await Task.Run(() =>
+                    JarvisLicenseGuard.CheckRuntimeAccessSilent(_xSupport));
+
+                model = runtime?.AgentRouting?.Model;
+                if (string.IsNullOrWhiteSpace(model))
+                {
+                    message = "AI provider: δεν έχει οριστεί μοντέλο";
+                    state = "error";
+                    await ShowProviderHealthStatusAsync(message, state);
+                    if (explicitCommand)
+                        PostProviderHealthCommandResult(message, state);
+                    return;
+                }
+
+                if (runtime.AgentRouting == null ||
+                    !runtime.AgentRouting.Available ||
+                    !string.Equals(
+                        runtime.AgentRouting.AgentAccountRef,
+                        _agentAccountRef,
+                        StringComparison.Ordinal))
+                {
+                    message = "AI provider: η δρομολόγηση άλλαξε · " + model;
+                    state = "error";
+                    await ShowProviderHealthStatusAsync(message, state);
+                    if (explicitCommand)
+                        PostProviderHealthCommandResult(message, state);
+                    return;
+                }
+
+                var probe = new JarvisAgentHealthProbe();
+                JarvisAgentHealthResult result = await probe.ProbeAsync(
+                    _xSupport,
+                    _agentAccountRef,
+                    model);
+
+                if (result.Ready)
+                {
+                    model = result.Model ?? model;
+                    message = "AI provider: συνδεδεμένος · " + model;
+                    state = "ready";
+                }
+                else
+                {
+                    message = BuildProviderHealthFailureMessage(result, model);
+                    state = "error";
+                }
+
+                await ShowProviderHealthStatusAsync(message, state);
+                if (explicitCommand)
+                    PostProviderHealthCommandResult(message, state);
+            }
+            catch
+            {
+                message = "AI provider: ο έλεγχος απέτυχε" +
+                    (string.IsNullOrWhiteSpace(model) ? string.Empty : " · " + model);
+                state = "error";
+                await ShowProviderHealthStatusAsync(message, state);
+                if (explicitCommand)
+                    PostProviderHealthCommandResult(message, state);
+            }
+        }
+
+        private void PostProviderHealthCommandResult(string message, string state)
+        {
+            if (webView == null || webView.CoreWebView2 == null)
+                return;
+
+            string prefix = state == "ready" ? "✓ " : "✖ ";
+            string text = message.StartsWith("AI provider:", StringComparison.Ordinal)
+                ? "AI agent:" + message.Substring("AI provider:".Length)
+                : message;
+            webView.CoreWebView2.PostWebMessageAsString(prefix + text);
+        }
+
+        // Once a conversation/interaction begins, a successful startup badge
+        // is only noise. Error state is deliberately kept visible so the
+        // operator sees the problem above the active chat box.
+        private async Task HideProviderHealthIfReadyAsync()
+        {
+            if (!string.Equals(_providerHealthState, "ready", StringComparison.Ordinal) ||
+                webView == null || webView.CoreWebView2 == null)
+                return;
+
+            await webView.CoreWebView2.ExecuteScriptAsync(
+                "(function(){var el=document.getElementById('jarvis-provider-health');" +
+                "if(el){el.style.display='none';}})();");
         }
 
         private static string BuildProviderHealthFailureMessage(
@@ -158,6 +228,13 @@ namespace S1Jarvis.UI
             string message,
             string state)
         {
+            _providerHealthMessage = message;
+            _providerHealthState = state;
+            int separator = message.LastIndexOf(" · ", StringComparison.Ordinal);
+            _providerHealthModel = separator >= 0 && separator + 3 < message.Length
+                ? message.Substring(separator + 3)
+                : null;
+
             if (webView == null || webView.CoreWebView2 == null)
                 return;
 
@@ -172,23 +249,35 @@ namespace S1Jarvis.UI
                 "el=document.createElement('div');" +
                 "el.id=id;" +
                 "el.style.position='fixed';" +
-                "el.style.top='14px';" +
-                "el.style.right='18px';" +
                 "el.style.zIndex='2147483647';" +
                 "el.style.padding='7px 11px';" +
                 "el.style.borderRadius='8px';" +
                 "el.style.fontFamily='Segoe UI, sans-serif';" +
                 "el.style.fontSize='12px';" +
                 "el.style.border='1px solid rgba(255,255,255,.14)';" +
-                "el.style.background='rgba(27,28,47,.88)';" +
+                "el.style.background='rgba(27,28,47,.94)';" +
                 "el.style.backdropFilter='blur(6px)';" +
                 "el.style.pointerEvents='none';" +
                 "document.body.appendChild(el);" +
                 "}" +
+                "el.style.display='block';" +
                 "el.textContent=\"" + safeMessage + "\";" +
                 "el.setAttribute('data-state',\"" + safeState + "\");" +
                 "el.style.color=(\"" + safeState + "\"==='ready')?'#9be8c2':" +
                 "((\"" + safeState + "\"==='error')?'#ffb4ab':'#c9c9d6');" +
+                "function visible(n){if(!n)return false;var s=getComputedStyle(n),r=n.getBoundingClientRect();" +
+                "return s.display!=='none'&&s.visibility!=='hidden'&&r.width>40&&r.height>20&&r.bottom>0&&r.top<innerHeight;}" +
+                "function place(){" +
+                "var all=Array.from(document.querySelectorAll('.composer,[class*=\"composer\"]'));" +
+                "var boxes=all.filter(visible);" +
+                "var box=boxes.length?boxes[boxes.length-1]:null;" +
+                "if(box){var r=box.getBoundingClientRect();var w=Math.min(Math.max(260,r.width),520);" +
+                "el.style.width=w+'px';el.style.left=Math.max(12,r.left+(r.width-w)/2)+'px';" +
+                "el.style.right='auto';el.style.bottom='auto';" +
+                "el.style.top=Math.max(12,r.top-el.offsetHeight-8)+'px';}" +
+                "else{el.style.width='auto';el.style.left='auto';el.style.right='18px';el.style.top='14px';}" +
+                "}" +
+                "place();setTimeout(place,0);" +
                 "})();";
 
             await webView.CoreWebView2.ExecuteScriptAsync(script);
