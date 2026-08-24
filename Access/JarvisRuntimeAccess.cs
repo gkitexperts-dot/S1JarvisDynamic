@@ -72,12 +72,18 @@ namespace S1Jarvis.Access
     internal sealed class JarvisAgentRoutingDecision
     {
         public string AgentAccountRef { get; private set; }
+        public string ReasonCode { get; private set; }
 
         public bool Available => !string.IsNullOrWhiteSpace(AgentAccountRef);
 
-        public static JarvisAgentRoutingDecision None()
+        public static JarvisAgentRoutingDecision None(string reasonCode = null)
         {
-            return new JarvisAgentRoutingDecision();
+            return new JarvisAgentRoutingDecision
+            {
+                ReasonCode = string.IsNullOrWhiteSpace(reasonCode)
+                    ? null
+                    : reasonCode.Trim()
+            };
         }
 
         public static JarvisAgentRoutingDecision FromLegacy(AccessCheckResponse response)
@@ -89,20 +95,27 @@ namespace S1Jarvis.Access
             {
                 AgentAccountRef = response.Allowed
                     ? response.AgentAccountRef
-                    : null
+                    : null,
+                ReasonCode = null
             };
         }
 
         public static JarvisAgentRoutingDecision FromVerilic(
             VerilicAiRoutingResult result)
         {
-            if (result == null || !result.Success ||
+            if (result == null)
+                return None("routing_result_missing");
+
+            if (!result.Success ||
                 string.IsNullOrWhiteSpace(result.AgentAccountRef))
-                return None();
+                return None(result.ReasonCode);
 
             return new JarvisAgentRoutingDecision
             {
-                AgentAccountRef = result.AgentAccountRef.Trim()
+                AgentAccountRef = result.AgentAccountRef.Trim(),
+                ReasonCode = string.IsNullOrWhiteSpace(result.ReasonCode)
+                    ? null
+                    : result.ReasonCode.Trim()
             };
         }
     }
@@ -156,15 +169,24 @@ namespace S1Jarvis.Access
                 Licence.Allowed &&
                 (!baseJarvisRequiresRouting || routingAvailable);
 
+            string routingMessage = null;
+            if (Licence.Allowed &&
+                baseJarvisRequiresRouting &&
+                !routingAvailable)
+            {
+                routingMessage = "Η άδεια είναι ενεργή, αλλά η δρομολόγηση AI δεν είναι διαθέσιμη.";
+                if (AgentRouting != null &&
+                    !string.IsNullOrWhiteSpace(AgentRouting.ReasonCode))
+                {
+                    routingMessage += " (" + AgentRouting.ReasonCode.Trim() + ")";
+                }
+            }
+
             return new AccessCheckResponse
             {
                 Allowed = operationallyAllowed,
                 ToolName = Licence.ToolName,
-                Message = Licence.Allowed &&
-                          baseJarvisRequiresRouting &&
-                          !routingAvailable
-                    ? "Η άδεια είναι ενεργή, αλλά η δρομολόγηση AI δεν είναι διαθέσιμη."
-                    : Licence.Message,
+                Message = routingMessage ?? Licence.Message,
                 ValidUntil = Licence.ValidUntil,
                 AgentAccountRef = operationallyAllowed && routingAvailable
                     ? AgentRouting.AgentAccountRef
