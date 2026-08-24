@@ -7,6 +7,7 @@ using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 using Newtonsoft.Json;
+using Newtonsoft.Json.Linq;
 using Softone;
 using S1Jarvis.Core;
 
@@ -15,10 +16,14 @@ namespace S1Jarvis.Access.Verilic
     /// <summary>
     /// Sends Jarvis provider requests through the signed Verilic messages
     /// endpoint. Provider credentials, authoritative AgentAccountRef and the
-    /// configured model remain server-side. The caller must provide the logical
-    /// Jarvis agent explicitly; this client never infers routing from prompt text,
-    /// tools or provider payload structure. Verilic remains authoritative for the
-    /// effective account/provider/model target.
+    /// configured model remain server-side.
+    ///
+    /// The preferred overload accepts the logical Jarvis agent explicitly.
+    /// The compatibility overload used by the mature Jarvis tool loop resolves
+    /// the same logical role from structural request capabilities on the first
+    /// iteration and keeps that role in AsyncLocal state for later iterations
+    /// (including the final no-tools iteration). It never lets descriptive
+    /// Browser/Item/Trader/Email text steal another agent's route.
     /// </summary>
     internal sealed class VerilicAiMessagesClient
     {
@@ -28,10 +33,15 @@ namespace S1Jarvis.Access.Verilic
             new[] { "Jarvis", "Atlas", "Forge", "Compass", "Echo", "Sprint", "Scout", "Sage" },
             StringComparer.OrdinalIgnoreCase);
 
-        // Non-secret runtime snapshot for the in-process UAT harness. The
-        // Jarvis UI runs one provider turn at a time, so the latest successful
-        // signed Verilic response is sufficient to prove which target actually
-        // handled that UAT turn. Never store AgentAccountRef or credentials here.
+        // One AskAsync execution is one async flow. The first provider request
+        // has the full tool set, so it gives an unambiguous structural role.
+        // The last iteration deliberately has tools=[], therefore it must keep
+        // the role chosen earlier instead of re-inferring from prompt prose.
+        private static readonly AsyncLocal<string> ActiveAgentContext =
+            new AsyncLocal<string>();
+
+        // Non-secret runtime snapshot for the in-process UAT harness. Never
+        // store AgentAccountRef or credentials here.
         internal static string LastRuntimeAgent { get; private set; }
         internal static string LastRuntimeProvider { get; private set; }
         internal static string LastRuntimeModel { get; private set; }
@@ -91,6 +101,27 @@ namespace S1Jarvis.Access.Verilic
                 SecurityProtocolType.Tls12 | SecurityProtocolType.Tls13;
         }
 
+        /// <summary>
+        /// Compatibility entry point for the existing mature JarvisAgentClient.
+        /// Resolution is structural, not based on broad prompt keyword search.
+        /// Precedence intentionally mirrors JarvisAgentClient.activeAgentName:
+        /// Scout/Sprint dedicated curtains first, then Forge, Compass, Echo,
+        /// Sage, otherwise Atlas.
+        /// </summary>
+        public Task<AgentProxyResponse> SendAsync(
+            XSupport xSupport,
+            string providerRequestJson,
+            CancellationToken cancellationToken)
+        {
+            string agentName = ResolveAgentForCurrentAsyncFlow(providerRequestJson);
+            return SendAsync(xSupport, agentName, providerRequestJson, cancellationToken);
+        }
+
+        /// <summary>
+        /// Explicit logical-agent entry point. Verilic still re-resolves and
+        /// owns the effective provider account/model; this value selects only
+        /// the Jarvis logical role.
+        /// </summary>
         public async Task<AgentProxyResponse> SendAsync(
             XSupport xSupport,
             string agentName,
@@ -236,6 +267,149 @@ namespace S1Jarvis.Access.Verilic
             {
                 return Failure("messages_transport_failed");
             }
+        }
+
+        private static string ResolveAgentForCurrentAsyncFlow(string providerRequestJson)
+        {
+            try
+            {
+                JObject request = JObject.Parse(providerRequestJson);
+                HashSet<string> tools = ReadToolNames(request["tools"]);
+
+                // Non-final iterations carry capabilities. They are the source
+                // of truth and reset any value inherited by the async context
+                // from a previous turn.
+                if (tools.Count > 0)
+                {
+                    string resolved = ResolveFromCapabilities(tools, request["system"]);
+                    ActiveAgentContext.Value = resolved;
+                    return resolved;
+                }
+
+                // Final iteration intentionally has no tools. Keep exactly the
+                // role selected on an earlier iteration of this AskAsync flow.
+                if (!string.IsNullOrWhiteSpace(ActiveAgentContext.Value))
+                    return ActiveAgentContext.Value;
+
+                // Defensive fallback for a one-iteration/no-tools call. Only
+                // dedicated mode headings are considered; never broad prose.
+                return ResolveDedicatedModeHeading(request["system"]) ?? "Atlas";
+            }
+            catch
+            {
+                return null;
+            }
+        }
+
+        private static string ResolveFromCapabilities(
+            HashSet<string> tools,
+            JToken systemToken)
+        {
+            // Dedicated curtains first. Browser also has item/email tools, so
+            // it must win before Forge/Echo exactly like activeAgentName does.
+            if (tools.Contains("open_url") && tools.Contains("read_page_content"))
+                return "Scout";
+            if (tools.Contains("show_courier_documents") ||
+                tools.Contains("get_courier_voucher_data") ||
+                tools.Contains("create_courier_voucher"))
+                return "Sprint";
+
+            // Main routed domains. Precedence mirrors activeAgentName:
+            // item > trader > email.
+            if (tools.Contains("get_item_template") || tools.Contains("create_item"))
+                return "Forge";
+            if (tools.Contains("find_trader_by_afm") ||
+                tools.Contains("get_aade_data") ||
+                tools.Contains("create_trader_from_aade"))
+                return "Compass";
+            if (tools.Contains("filter_email_inbox") ||
+                tools.Contains("filter_calendar") ||
+                tools.Contains("show_calendar_entries") ||
+                tools.Contains("read_calendar"))
+                return "Echo";
+
+            // Help currently shares generic Atlas tools, therefore the only
+            // narrow prompt signal retained is its actual dedicated mode
+            // heading. Descriptive references to Browser/Item/etc are ignored.
+            string dedicated = ResolveDedicatedModeHeading(systemToken);
+            if (string.Equals(dedicated, "Sage", StringComparison.Ordinal))
+                return "Sage";
+
+            return "Atlas";
+        }
+
+        private static string ResolveDedicatedModeHeading(JToken systemToken)
+        {
+            string text = ReadSystemText(systemToken);
+            if (string.IsNullOrWhiteSpace(text))
+                return null;
+
+            // These are headings injected only by the matching dedicated mode.
+            // They are deliberately checked as line-oriented headings rather
+            // than arbitrary Contains("BROWSER MODE") prose.
+            string[] lines = text.Replace("\r\n", "\n").Replace('\r', '\n').Split('\n');
+            foreach (string raw in lines)
+            {
+                string line = (raw ?? string.Empty).Trim();
+                if (line.StartsWith("HELP MODE", StringComparison.OrdinalIgnoreCase) ||
+                    line.StartsWith("🆘 HELP MODE", StringComparison.OrdinalIgnoreCase))
+                    return "Sage";
+                if (line.StartsWith("BROWSER MODE", StringComparison.OrdinalIgnoreCase) ||
+                    line.StartsWith("🌐 BROWSER MODE", StringComparison.OrdinalIgnoreCase))
+                    return "Scout";
+                if (line.StartsWith("COURIER MODE", StringComparison.OrdinalIgnoreCase) ||
+                    line.StartsWith("📦 COURIER MODE", StringComparison.OrdinalIgnoreCase))
+                    return "Sprint";
+                if (line.StartsWith("EMAIL MODE", StringComparison.OrdinalIgnoreCase) ||
+                    line.StartsWith("📧 EMAIL MODE", StringComparison.OrdinalIgnoreCase))
+                    return "Echo";
+                if (line.StartsWith("- ΑΝΟΙΓΜΑ/ΔΗΜΙΟΥΡΓΙΑ ΕΙΔΟΥΣ", StringComparison.OrdinalIgnoreCase))
+                    return "Forge";
+                if (line.StartsWith("- ΑΝΟΙΓΜΑ/ΔΗΜΙΟΥΡΓΙΑ ΣΥΝΑΛΛΑΣΣΟΜΕΝΟΥ ΜΕ ΑΦΜ", StringComparison.OrdinalIgnoreCase))
+                    return "Compass";
+            }
+            return null;
+        }
+
+        private static HashSet<string> ReadToolNames(JToken toolsToken)
+        {
+            var names = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            JArray tools = toolsToken as JArray;
+            if (tools == null)
+                return names;
+
+            foreach (JToken tool in tools)
+            {
+                string name = tool?["name"]?.ToString();
+                if (!string.IsNullOrWhiteSpace(name))
+                    names.Add(name.Trim());
+            }
+            return names;
+        }
+
+        private static string ReadSystemText(JToken system)
+        {
+            if (system == null)
+                return string.Empty;
+            if (system.Type == JTokenType.String)
+                return system.ToString();
+
+            var builder = new StringBuilder();
+            JArray blocks = system as JArray;
+            if (blocks == null)
+                return system.ToString();
+
+            foreach (JToken block in blocks)
+            {
+                string text = block?["text"]?.ToString();
+                if (!string.IsNullOrEmpty(text))
+                {
+                    if (builder.Length > 0)
+                        builder.Append('\n');
+                    builder.Append(text);
+                }
+            }
+            return builder.ToString();
         }
 
         private static AgentProxyResponse Failure(string reasonCode)
