@@ -89,14 +89,7 @@ namespace S1Jarvis.UI
                     return;
                 }
 
-                string message = result.CreditsExhausted
-                    ? "AI provider: τα credits έχουν εξαντληθεί · " + model
-                    : result.ReasonCode == "provider_timeout"
-                        ? "AI provider: timeout σύνδεσης · " + model
-                        : result.ReasonCode == "provider_model_missing"
-                            ? "AI provider: δεν έχει οριστεί μοντέλο"
-                            : "AI provider: πρόβλημα σύνδεσης · " + model;
-
+                string message = BuildProviderHealthFailureMessage(result, model);
                 await ShowProviderHealthStatusAsync(message, "error");
             }
             catch
@@ -113,6 +106,38 @@ namespace S1Jarvis.UI
                 }
                 catch { }
             }
+        }
+
+        private static string BuildProviderHealthFailureMessage(
+            JarvisAgentHealthResult result,
+            string model)
+        {
+            if (result.CreditsExhausted)
+                return "AI provider: τα credits έχουν εξαντληθεί · " + model;
+
+            string reason = result.ReasonCode ?? string.Empty;
+            if (reason == "provider_timeout")
+                return "AI provider: timeout σύνδεσης · " + model;
+            if (reason == "provider_model_missing")
+                return "AI provider: δεν έχει οριστεί μοντέλο";
+            if (reason == "agent_account_unavailable")
+                return "AI provider: agent account μη διαθέσιμο · " + model;
+            if (reason == "proxy_unauthorized")
+                return "AI provider: proxy authentication error · " + model;
+            if (reason == "proxy_bad_request")
+                return "AI provider: μη έγκυρο proxy request · " + model;
+            if (reason == "proxy_response_invalid")
+                return "AI provider: μη έγκυρη απάντηση proxy · " + model;
+            if (reason == "provider_rejected")
+                return "AI provider: ο provider απέρριψε το αίτημα · " + model;
+            if (reason.StartsWith("provider_http_", StringComparison.Ordinal))
+                return "AI provider: provider HTTP " +
+                    reason.Substring("provider_http_".Length) + " · " + model;
+            if (reason.StartsWith("proxy_http_", StringComparison.Ordinal))
+                return "AI provider: proxy HTTP " +
+                    reason.Substring("proxy_http_".Length) + " · " + model;
+
+            return "AI provider: πρόβλημα σύνδεσης · " + model;
         }
 
         private async Task ShowProviderHealthStatusAsync(
