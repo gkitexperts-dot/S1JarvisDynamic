@@ -26,6 +26,7 @@ namespace S1Jarvis.Access.Verilic
         public bool Success { get; set; }
         public string ReasonCode { get; set; }
         public string AgentAccountRef { get; set; }
+        public string Model { get; set; }
 
         public static VerilicAiRoutingResult Deny(string reasonCode)
         {
@@ -35,7 +36,8 @@ namespace S1Jarvis.Access.Verilic
                 ReasonCode = string.IsNullOrWhiteSpace(reasonCode)
                     ? "routing_unavailable"
                     : reasonCode,
-                AgentAccountRef = null
+                AgentAccountRef = null,
+                Model = null
             };
         }
     }
@@ -139,11 +141,20 @@ namespace S1Jarvis.Access.Verilic
                     if (result.Success && !IsValidIdentifier(result.AgentAccountRef))
                         return VerilicAiRoutingResult.Deny("routing_response_invalid");
 
+                    if (result.Success && !string.IsNullOrWhiteSpace(result.Model) &&
+                        !IsValidIdentifier(result.Model))
+                        return VerilicAiRoutingResult.Deny("routing_response_invalid");
+
                     if (!result.Success)
                     {
                         result.AgentAccountRef = null;
+                        result.Model = null;
                         if (string.IsNullOrWhiteSpace(result.ReasonCode))
                             result.ReasonCode = "routing_unavailable";
+                    }
+                    else if (!string.IsNullOrWhiteSpace(result.Model))
+                    {
+                        result.Model = result.Model.Trim();
                     }
 
                     return result;
