@@ -51,6 +51,15 @@ namespace S1Jarvis.UI
                 if (webView == null || webView.CoreWebView2 == null)
                     return;
 
+                // Local file links are rendered through the WebView2 page. Chromium
+                // may URL-encode spaces in a filesystem path (for example
+                // "Jarvis Exports" -> "Jarvis%20Exports") before postCommand sends
+                // the open_file command to C#. Normalize only that command at the UI
+                // boundary so File.Exists/Process.Start always receive a Windows path.
+                // This is generic Jarvis UI behavior and is intentionally unrelated
+                // to the selected AI provider or agent routing.
+                await InstallLocalFilePathNormalizationAsync();
+
                 await SetProviderBootInteractionLockedAsync(true);
 
                 // ProviderHealth owns the authoritative startup state. Keep the
@@ -79,6 +88,28 @@ namespace S1Jarvis.UI
                 // Fail closed: if the boot gate itself fails, do not deliberately
                 // re-enable interaction before provider readiness is established.
             }
+        }
+
+        private async Task InstallLocalFilePathNormalizationAsync()
+        {
+            if (webView == null || webView.CoreWebView2 == null)
+                return;
+
+            string script =
+                "(function(){" +
+                "if(window.__jarvisLocalFilePathFixInstalled)return;" +
+                "if(typeof window.postCommand!=='function')return;" +
+                "var originalPostCommand=window.postCommand;" +
+                "window.postCommand=function(cmd){" +
+                "if(cmd&&cmd.type==='open_file'&&typeof cmd.path==='string'){" +
+                "try{cmd=Object.assign({},cmd,{path:decodeURIComponent(cmd.path)});}catch(_e){}" +
+                "}" +
+                "return originalPostCommand(cmd);" +
+                "};" +
+                "window.__jarvisLocalFilePathFixInstalled=true;" +
+                "})();";
+
+            await webView.CoreWebView2.ExecuteScriptAsync(script);
         }
 
         private async Task SetProviderBootInteractionLockedAsync(bool locked)
