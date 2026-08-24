@@ -9,6 +9,7 @@ namespace S1Jarvis.Access.Verilic
         public bool StatePresent { get; set; }
         public bool ActivationCompleted { get; set; }
         public bool ProductBindingMatches { get; set; }
+        public bool LicenceBindingMatches { get; set; }
         public bool RuntimeReady { get; set; }
         public string ReasonCode { get; set; }
     }
@@ -58,10 +59,12 @@ namespace S1Jarvis.Access.Verilic
                 return result;
             }
 
+            string configuredLicenceId = null;
             try
             {
                 _configuration.ResolveActivationVendorId();
-                _configuration.ResolveLicenceId(productCode);
+                configuredLicenceId =
+                    _configuration.ResolveLicenceId(productCode);
                 result.ActivationReferencesConfigured = true;
             }
             catch
@@ -94,6 +97,13 @@ namespace S1Jarvis.Access.Verilic
                     state.VerilicProductId,
                     configuredProductId,
                     StringComparison.Ordinal);
+            result.LicenceBindingMatches =
+                !string.IsNullOrWhiteSpace(configuredLicenceId) &&
+                !string.IsNullOrWhiteSpace(state.VerilicLicenceId) &&
+                string.Equals(
+                    state.VerilicLicenceId,
+                    configuredLicenceId,
+                    StringComparison.Ordinal);
 
             if (!result.ActivationCompleted)
             {
@@ -104,6 +114,17 @@ namespace S1Jarvis.Access.Verilic
             if (!result.ProductBindingMatches)
             {
                 result.ReasonCode = "product_binding_mismatch";
+                return result;
+            }
+
+            // A completed local installation is only reusable when it was
+            // activated against the licence currently configured for this
+            // product. Older v1 states have no persisted licence binding, so
+            // they intentionally become not-ready until the operator runs the
+            // explicit activation flow once and migrates them.
+            if (!result.LicenceBindingMatches)
+            {
+                result.ReasonCode = "licence_binding_mismatch";
                 return result;
             }
 
