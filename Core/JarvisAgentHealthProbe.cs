@@ -14,17 +14,22 @@ namespace S1Jarvis.Core
         public bool Ready { get; private set; }
         public bool CreditsExhausted { get; private set; }
         public string ReasonCode { get; private set; }
+        public string Model { get; private set; }
 
-        public static JarvisAgentHealthResult Success()
+        public static JarvisAgentHealthResult Success(string model)
         {
             return new JarvisAgentHealthResult
             {
                 Ready = true,
-                ReasonCode = "provider_ready"
+                ReasonCode = "provider_ready",
+                Model = string.IsNullOrWhiteSpace(model) ? null : model.Trim()
             };
         }
 
-        public static JarvisAgentHealthResult Failure(string reasonCode, bool creditsExhausted = false)
+        public static JarvisAgentHealthResult Failure(
+            string reasonCode,
+            bool creditsExhausted = false,
+            string model = null)
         {
             return new JarvisAgentHealthResult
             {
@@ -32,7 +37,8 @@ namespace S1Jarvis.Core
                 CreditsExhausted = creditsExhausted,
                 ReasonCode = string.IsNullOrWhiteSpace(reasonCode)
                     ? "provider_unavailable"
-                    : reasonCode
+                    : reasonCode,
+                Model = string.IsNullOrWhiteSpace(model) ? null : model.Trim()
             };
         }
     }
@@ -40,9 +46,9 @@ namespace S1Jarvis.Core
     /// <summary>
     /// Performs a tiny end-to-end provider probe through the same Nexus proxy
     /// used by normal Jarvis AI calls. The client never receives or stores the
-    /// provider API key: it sends only the opaque AgentAccountRef and a minimal
-    /// provider request. A successful response proves that routing, server-side
-    /// credential resolution and provider communication are all working.
+    /// provider API key. The model is supplied by the authoritative Verilic
+    /// contract/user AI configuration returned by signed routing; no model is
+    /// hardcoded in this probe.
     /// </summary>
     internal sealed class JarvisAgentHealthProbe
     {
@@ -55,20 +61,26 @@ namespace S1Jarvis.Core
                 SecurityProtocolType.Tls12 | SecurityProtocolType.Tls13;
         }
 
-        public async Task<JarvisAgentHealthResult> ProbeAsync(string agentAccountRef)
+        public async Task<JarvisAgentHealthResult> ProbeAsync(
+            string agentAccountRef,
+            string model)
         {
             if (string.IsNullOrWhiteSpace(agentAccountRef))
                 return JarvisAgentHealthResult.Failure("agent_account_missing");
+            if (string.IsNullOrWhiteSpace(model))
+                return JarvisAgentHealthResult.Failure("provider_model_missing");
+
+            string selectedModel = model.Trim();
 
             try
             {
                 // Use the same provider path as real Jarvis traffic, but keep
-                // the probe intentionally tiny. This is not a synthetic
-                // "credential exists" check: the provider must actually accept
-                // the server-side credential and return a valid proxy result.
+                // the probe intentionally tiny. The provider must actually
+                // accept both the server-side credential and the configured
+                // model and return a valid proxy result.
                 var providerRequest = new
                 {
-                    model = "claude-opus-5",
+                    model = selectedModel,
                     max_tokens = 16,
                     messages = new[]
                     {
@@ -96,7 +108,9 @@ namespace S1Jarvis.Core
                     {
                         string json = await response.Content.ReadAsStringAsync();
                         if (!response.IsSuccessStatusCode)
-                            return JarvisAgentHealthResult.Failure("proxy_unavailable");
+                            return JarvisAgentHealthResult.Failure(
+                                "proxy_unavailable",
+                                model: selectedModel);
 
                         AgentProxyResponse proxy = null;
                         try
@@ -105,28 +119,41 @@ namespace S1Jarvis.Core
                         }
                         catch (JsonException)
                         {
-                            return JarvisAgentHealthResult.Failure("proxy_response_invalid");
+                            return JarvisAgentHealthResult.Failure(
+                                "proxy_response_invalid",
+                                model: selectedModel);
                         }
 
                         if (proxy == null)
-                            return JarvisAgentHealthResult.Failure("proxy_response_invalid");
+                            return JarvisAgentHealthResult.Failure(
+                                "proxy_response_invalid",
+                                model: selectedModel);
 
                         if (!proxy.Success)
                             return proxy.CreditsExhausted
-                                ? JarvisAgentHealthResult.Failure("provider_credits_exhausted", true)
-                                : JarvisAgentHealthResult.Failure("provider_unavailable");
+                                ? JarvisAgentHealthResult.Failure(
+                                    "provider_credits_exhausted",
+                                    true,
+                                    selectedModel)
+                                : JarvisAgentHealthResult.Failure(
+                                    "provider_unavailable",
+                                    model: selectedModel);
 
-                        return JarvisAgentHealthResult.Success();
+                        return JarvisAgentHealthResult.Success(selectedModel);
                     }
                 }
             }
             catch (OperationCanceledException)
             {
-                return JarvisAgentHealthResult.Failure("provider_timeout");
+                return JarvisAgentHealthResult.Failure(
+                    "provider_timeout",
+                    model: selectedModel);
             }
             catch
             {
-                return JarvisAgentHealthResult.Failure("provider_unavailable");
+                return JarvisAgentHealthResult.Failure(
+                    "provider_unavailable",
+                    model: selectedModel);
             }
         }
     }
