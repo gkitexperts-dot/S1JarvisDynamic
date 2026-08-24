@@ -39,6 +39,12 @@ namespace S1Jarvis.Core
     // ══════════════════════════════════════════════════════════════════════
     internal static class DocumentReaders
     {
+        // Raised from the SAME deterministic Office-reader pipeline that already
+        // proved reliable in production. A subscriber may inspect the parsed
+        // workbook and decide whether it is a Jarvis UAT workbook. Ordinary
+        // workbooks remain completely unaffected.
+        internal static event Action<string, string> XlsxWorkbookRead;
+
         private static readonly XNamespace SpreadsheetNs =
             "http://schemas.openxmlformats.org/spreadsheetml/2006/main";
         private static readonly XNamespace RelationshipsNs =
@@ -70,7 +76,25 @@ namespace S1Jarvis.Core
                     "διαφορετική δυαδική μορφή (pre-2007). Αποθήκευσε το σαν " +
                     (isLegacyExcel ? ".xlsx" : ".docx") + " και ξαναδοκίμασε.");
 
-            if (isXlsx) return ReadXlsxAsText(bytes);
+            if (isXlsx)
+            {
+                string text = ReadXlsxAsText(bytes);
+
+                // Never allow a UAT subscriber failure to break normal XLSX
+                // reading. The Office reader remains the authoritative parser;
+                // UAT detection is an optional side-channel on top of it.
+                try
+                {
+                    XlsxWorkbookRead?.Invoke(fileName ?? "attachment.xlsx", text);
+                }
+                catch
+                {
+                    // Intentionally fail-open for normal document reading.
+                }
+
+                return text;
+            }
+
             if (isDocx) return ReadDocxAsText(bytes);
 
             throw new Exception($"Μη αναγνωρίσιμος τύπος αρχείου για ανάγνωση: {mimeType} ({fileName}).");
