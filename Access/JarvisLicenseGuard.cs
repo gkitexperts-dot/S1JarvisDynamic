@@ -20,6 +20,14 @@ namespace S1Jarvis.Access
         private static readonly Dictionary<string, (AccessCheckResponse result, DateTime at)> _cache =
             new Dictionary<string, (AccessCheckResponse, DateTime)>();
 
+        // The DR one-shot vision calls are invoked after the product entitlement
+        // gate and historically did not carry XSupport in their method signature.
+        // Keep only the current in-process Soft1 context (never credentials or
+        // licensing secrets) so those calls can migrate to the signed Verilic
+        // messages transport without falling back to the legacy /agent/vision
+        // endpoint. The context is refreshed on every runtime access check.
+        private static XSupport _currentXSupport;
+
         private static readonly IJarvisRuntimeAccessProvider _runtimeAccessProvider =
             CreateRuntimeAccessProvider();
 
@@ -69,6 +77,12 @@ namespace S1Jarvis.Access
             XSupport xSupport,
             string productCode = null)
         {
+            if (xSupport != null)
+            {
+                lock (_lock)
+                    _currentXSupport = xSupport;
+            }
+
             try
             {
                 return _runtimeAccessProvider.Check(
@@ -85,6 +99,12 @@ namespace S1Jarvis.Access
                         "runtime_access_failed"),
                     JarvisAgentRoutingDecision.None());
             }
+        }
+
+        internal static XSupport GetCurrentXSupport()
+        {
+            lock (_lock)
+                return _currentXSupport;
         }
 
         /// <summary>
