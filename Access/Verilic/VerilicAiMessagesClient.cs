@@ -25,6 +25,34 @@ namespace S1Jarvis.Access.Verilic
         private static readonly HttpClient Http = new HttpClient();
         private static readonly TimeSpan Timeout = TimeSpan.FromSeconds(90);
 
+        // Non-secret runtime snapshot for the in-process UAT harness. The
+        // Jarvis UI runs one provider turn at a time, so the latest successful
+        // signed Verilic response is sufficient to prove which target actually
+        // handled that UAT turn. Never store AgentAccountRef or credentials here.
+        internal static string LastRuntimeAgent { get; private set; }
+        internal static string LastRuntimeProvider { get; private set; }
+        internal static string LastRuntimeModel { get; private set; }
+        internal static string LastRuntimeRouting { get; private set; }
+
+        internal static void ResetRuntimeTargetSnapshot()
+        {
+            LastRuntimeAgent = null;
+            LastRuntimeProvider = null;
+            LastRuntimeModel = null;
+            LastRuntimeRouting = null;
+        }
+
+        private static void CaptureRuntimeTarget(MessagesResponse result)
+        {
+            if (result == null || !result.Success)
+                return;
+
+            LastRuntimeAgent = result.Agent;
+            LastRuntimeProvider = result.Provider;
+            LastRuntimeModel = result.Model;
+            LastRuntimeRouting = result.Routing;
+        }
+
         private sealed class MessagesRequest
         {
             public string ProductId { get; set; }
@@ -169,6 +197,8 @@ namespace S1Jarvis.Access.Verilic
 
                         if (result == null)
                             return Failure("messages_response_invalid");
+
+                        CaptureRuntimeTarget(result);
 
                         return new AgentProxyResponse
                         {
