@@ -1,6 +1,7 @@
 using System;
 using System.Threading.Tasks;
 using System.Windows;
+using S1Jarvis.Access;
 using S1Jarvis.Core;
 
 namespace S1Jarvis.UI
@@ -27,7 +28,7 @@ namespace S1Jarvis.UI
                 // The existing NavigationCompleted flow performs the
                 // authoritative licence + AI-routing checks and only then sets
                 // _agentAccountRef. Wait for that controlled startup flow to
-                // finish instead of duplicating or bypassing it here.
+                // finish instead of bypassing it here.
                 for (int attempt = 0; attempt < 150; attempt++)
                 {
                     if (!string.IsNullOrWhiteSpace(_agentAccountRef) &&
@@ -47,23 +48,54 @@ namespace S1Jarvis.UI
                     "AI provider: έλεγχος σύνδεσης...",
                     "checking");
 
+                // Resolve once more through the same signed Verilic runtime
+                // route so the health probe receives the non-secret model that
+                // is configured for this exact contract/Soft1 user. Never use
+                // a client-side hardcoded model.
+                JarvisRuntimeAccessResult runtime = await Task.Run(() =>
+                    JarvisLicenseGuard.CheckRuntimeAccessSilent(_xSupport));
+
+                string model = runtime?.AgentRouting?.Model;
+                if (string.IsNullOrWhiteSpace(model))
+                {
+                    await ShowProviderHealthStatusAsync(
+                        "AI provider: δεν έχει οριστεί μοντέλο",
+                        "error");
+                    return;
+                }
+
+                if (runtime.AgentRouting == null ||
+                    !runtime.AgentRouting.Available ||
+                    !string.Equals(
+                        runtime.AgentRouting.AgentAccountRef,
+                        _agentAccountRef,
+                        StringComparison.Ordinal))
+                {
+                    await ShowProviderHealthStatusAsync(
+                        "AI provider: η δρομολόγηση άλλαξε",
+                        "error");
+                    return;
+                }
+
                 var probe = new JarvisAgentHealthProbe();
                 JarvisAgentHealthResult result =
-                    await probe.ProbeAsync(_agentAccountRef);
+                    await probe.ProbeAsync(_agentAccountRef, model);
 
                 if (result.Ready)
                 {
                     await ShowProviderHealthStatusAsync(
-                        "AI provider: συνδεδεμένος",
+                        "AI provider: συνδεδεμένος · " + result.Model,
                         "ready");
                     return;
                 }
 
                 string message = result.CreditsExhausted
-                    ? "AI provider: τα credits έχουν εξαντληθεί"
+                    ? "AI provider: τα credits έχουν εξαντληθεί · " + model
                     : result.ReasonCode == "provider_timeout"
-                        ? "AI provider: timeout σύνδεσης"
-                        : "AI provider: πρόβλημα σύνδεσης";
+                        ? "AI provider: timeout σύνδεσης · " + model
+                        : result.ReasonCode == "provider_model_missing"
+                            ? "AI provider: δεν έχει οριστεί μοντέλο"
+                            : "AI provider: πρόβλημα σύνδεσης · " + model;
 
                 await ShowProviderHealthStatusAsync(message, "error");
             }
