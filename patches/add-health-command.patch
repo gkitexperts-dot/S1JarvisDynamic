@@ -1,0 +1,23 @@
+diff --git a/UI/JarvisShell.xaml.cs b/UI/JarvisShell.xaml.cs
+--- a/UI/JarvisShell.xaml.cs
++++ b/UI/JarvisShell.xaml.cs
+@@ -349,6 +349,17 @@ namespace S1Jarvis.UI
+                     _agentClient.CancelCurrent();
+                     return;
+                 }
++
++                // Deterministic local command: never send HEALTH to the LLM.
++                // It performs a fresh signed Verilic routing/provider probe and
++                // posts the current AI-agent status back into the active chat.
++                if (string.Equals(userText.Trim(), "HEALTH", StringComparison.OrdinalIgnoreCase))
++                {
++                    await RefreshProviderHealthStatusAsync(true);
++                    return;
++                }
++
++                // A healthy startup badge is no longer useful once interaction starts.
++                // Error state remains visible above the currently active chat box.
++                await HideProviderHealthIfReadyAsync();
+ 
+                 // Δομημένη εντολή (JSON, βλ. index.html postCommand) -
+                 // ξεχωρίζει από απλό chat text (που ο χρήστης πληκτρολογεί,
