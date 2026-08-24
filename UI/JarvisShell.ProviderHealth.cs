@@ -48,10 +48,9 @@ namespace S1Jarvis.UI
                     "AI provider: έλεγχος σύνδεσης...",
                     "checking");
 
-                // Resolve once more through the same signed Verilic runtime
-                // route so the health probe receives the non-secret model that
-                // is configured for this exact contract/Soft1 user. Never use
-                // a client-side hardcoded model.
+                // Resolve once more through the signed Verilic runtime route so
+                // we compare the health result against the exact account/model
+                // that is authoritative for this contract + Soft1 user.
                 JarvisRuntimeAccessResult runtime = await Task.Run(() =>
                     JarvisLicenseGuard.CheckRuntimeAccessSilent(_xSupport));
 
@@ -78,8 +77,10 @@ namespace S1Jarvis.UI
                 }
 
                 var probe = new JarvisAgentHealthProbe();
-                JarvisAgentHealthResult result =
-                    await probe.ProbeAsync(_agentAccountRef, model);
+                JarvisAgentHealthResult result = await probe.ProbeAsync(
+                    _xSupport,
+                    _agentAccountRef,
+                    model);
 
                 if (result.Ready)
                 {
@@ -120,22 +121,35 @@ namespace S1Jarvis.UI
                 return "AI provider: timeout σύνδεσης · " + model;
             if (reason == "provider_model_missing")
                 return "AI provider: δεν έχει οριστεί μοντέλο";
+            if (reason == "provider_auth_failed")
+                return "AI provider: μη έγκυρο provider credential · " + model;
+            if (reason == "provider_model_or_request_invalid")
+                return "AI provider: μη έγκυρο μοντέλο ή provider request · " + model;
+            if (reason == "provider_rate_limited")
+                return "AI provider: προσωρινό rate limit · " + model;
+            if (reason == "provider_upstream_error")
+                return "AI provider: προσωρινό σφάλμα provider · " + model;
+            if (reason == "provider_unsupported")
+                return "AI provider: μη υποστηριζόμενος provider · " + model;
+            if (reason == "provider_credential_unavailable")
+                return "AI provider: credential μη διαθέσιμο στον Verilic · " + model;
             if (reason == "agent_account_unavailable")
                 return "AI provider: agent account μη διαθέσιμο · " + model;
-            if (reason == "proxy_unauthorized")
-                return "AI provider: proxy authentication error · " + model;
-            if (reason == "proxy_bad_request")
-                return "AI provider: μη έγκυρο proxy request · " + model;
-            if (reason == "proxy_response_invalid")
-                return "AI provider: μη έγκυρη απάντηση proxy · " + model;
-            if (reason == "provider_rejected")
-                return "AI provider: ο provider απέρριψε το αίτημα · " + model;
-            if (reason.StartsWith("provider_http_", StringComparison.Ordinal))
-                return "AI provider: provider HTTP " +
-                    reason.Substring("provider_http_".Length) + " · " + model;
-            if (reason.StartsWith("proxy_http_", StringComparison.Ordinal))
-                return "AI provider: proxy HTTP " +
-                    reason.Substring("proxy_http_".Length) + " · " + model;
+            if (reason == "provider_routing_changed")
+                return "AI provider: η δρομολόγηση άλλαξε · " + (result.Model ?? model);
+            if (reason.StartsWith("routing_", StringComparison.Ordinal) ||
+                reason.StartsWith("licence_", StringComparison.Ordinal) ||
+                reason.StartsWith("installation_", StringComparison.Ordinal) ||
+                reason.StartsWith("proof_", StringComparison.Ordinal))
+                return "AI provider: Verilic " + reason + " · " + model;
+            if (reason.StartsWith("provider_health_http_", StringComparison.Ordinal))
+                return "AI provider: Verilic HTTP " +
+                    reason.Substring("provider_health_http_".Length) + " · " + model;
+            if (reason == "provider_health_configuration_invalid" ||
+                reason == "provider_health_installation_invalid" ||
+                reason == "provider_health_response_invalid" ||
+                reason == "provider_health_failed")
+                return "AI provider: αποτυχία Verilic health check · " + model;
 
             return "AI provider: πρόβλημα σύνδεσης · " + model;
         }
