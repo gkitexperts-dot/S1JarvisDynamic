@@ -172,6 +172,8 @@ namespace S1Jarvis.Access
         ///
         /// The legacy AgentAccountRef in the envelope is deliberately ignored:
         /// Verilic resolves the authoritative account/provider/model server-side.
+        /// DR is not a normal chat helper, so the bridge uses Atlas only as the
+        /// neutral default-target selector; the operation remains the DR feature.
         /// </summary>
         private sealed class VerilicDrVisionBridgeHandler : HttpMessageHandler
         {
@@ -227,11 +229,11 @@ namespace S1Jarvis.Access
                             });
                     }
 
-                    DebugLog.Log("[dr] Forwarding document vision through signed Verilic messages.");
+                    DebugLog.Log("[dr] Forwarding document vision through signed Verilic messages using the configured default AI target.");
                     AgentProxyResponse result = await new VerilicAiMessagesClient()
                         .SendAsync(
                             xSupport,
-                            "Jarvis",
+                            "Atlas",
                             legacyRequest.AnthropicRequestJson,
                             cancellationToken);
 
