@@ -13,7 +13,6 @@ namespace S1Jarvis.UI
             RegisterProviderBootGateClassHandler();
 
         private bool _providerBootGateStarted;
-        private bool _providerBootGateReleased;
 
         private static bool RegisterProviderBootGateClassHandler()
         {
@@ -62,7 +61,6 @@ namespace S1Jarvis.UI
                     if (string.Equals(_providerHealthState, "ready", StringComparison.Ordinal))
                     {
                         await SetProviderBootInteractionLockedAsync(false);
-                        _providerBootGateReleased = true;
                         return;
                     }
 
@@ -95,12 +93,15 @@ namespace S1Jarvis.UI
                 "var root=document.documentElement;" +
                 "root.setAttribute('data-jarvis-provider-boot-locked',locked?'1':'0');" +
                 "var attach=document.getElementById('attachBtn');" +
+                "var file=document.getElementById('fileInput');" +
                 "var send=document.getElementById('sendBtn');" +
                 "function apply(){" +
                 "var isLocked=root.getAttribute('data-jarvis-provider-boot-locked')==='1';" +
-                "if(attach){attach.disabled=isLocked;attach.style.opacity=isLocked?'0.35':'';" +
-                "attach.style.cursor=isLocked?'default':'';attach.setAttribute('aria-disabled',isLocked?'true':'false');}" +
-                "if(send&&isLocked){send.disabled=true;send.classList.remove('ready','stoppable');" +
+                "if(attach){if(attach.disabled!==isLocked)attach.disabled=isLocked;" +
+                "attach.style.opacity=isLocked?'0.35':'';attach.style.cursor=isLocked?'default':'';" +
+                "attach.setAttribute('aria-disabled',isLocked?'true':'false');}" +
+                "if(file&&file.disabled!==isLocked)file.disabled=isLocked;" +
+                "if(send&&isLocked){if(!send.disabled)send.disabled=true;send.classList.remove('ready','stoppable');" +
                 "send.setAttribute('aria-disabled','true');send.style.opacity='0.35';send.style.cursor='default';}" +
                 "if(send&&!isLocked){send.removeAttribute('aria-disabled');send.style.opacity='';send.style.cursor='';" +
                 "if(typeof updateSendState==='function')updateSendState();}" +
@@ -115,8 +116,8 @@ namespace S1Jarvis.UI
                 "var mo=new MutationObserver(function(){" +
                 "if(root.getAttribute('data-jarvis-provider-boot-locked')==='1')apply();" +
                 "});" +
-                "if(attach)mo.observe(attach,{attributes:true,attributeFilter:['disabled','class','style']});" +
-                "if(send)mo.observe(send,{attributes:true,attributeFilter:['disabled','class','style']});" +
+                "if(attach)mo.observe(attach,{attributes:true,attributeFilter:['disabled']});" +
+                "if(send)mo.observe(send,{attributes:true,attributeFilter:['disabled']});" +
                 "}" +
                 "apply();" +
                 "})();";
