@@ -1,7 +1,7 @@
 diff --git a/UI/JarvisShell.xaml.cs b/UI/JarvisShell.xaml.cs
 --- a/UI/JarvisShell.xaml.cs
 +++ b/UI/JarvisShell.xaml.cs
-@@ -349,6 +349,17 @@ namespace S1Jarvis.UI
+@@ -349,6 +349,19 @@ namespace S1Jarvis.UI
                      _agentClient.CancelCurrent();
                      return;
                  }
