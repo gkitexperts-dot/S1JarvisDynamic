@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Net;
 using System.Net.Http;
 using System.Net.Http.Headers;
@@ -233,36 +234,56 @@ namespace S1Jarvis.Access.Verilic
         }
 
         /// <summary>
-        /// The existing Jarvis tool loop already shapes a distinct system prompt
-        /// for each logical agent. Until the large legacy JarvisAgentClient is
-        /// decomposed, derive the non-secret logical role from those stable prompt
-        /// markers so the signed request can carry AgentName without making the
-        /// client authoritative for provider/account/model. Priority mirrors the
-        /// existing active-agent selection: Forge, Compass, Echo, then Atlas for
-        /// the free main chat; dedicated curtains map to Sage/Scout/Sprint first.
+        /// Resolves the logical Jarvis role from structural request evidence
+        /// first, and only then from legacy prompt markers. This avoids false
+        /// matches when a general system prompt mentions another mode by name
+        /// (the exact bug that routed an item-creation UAT turn to Scout).
+        /// Provider/account/model still remain authoritative on Verilic.
         /// </summary>
         private static string ResolveLogicalAgentName(string providerRequestJson)
         {
             try
             {
                 JObject request = JObject.Parse(providerRequestJson);
+                HashSet<string> tools = ReadToolNames(request["tools"]);
                 string systemText = ReadSystemText(request["system"]);
 
+                // Dedicated curtains have unmistakable structural tool sets.
+                if (tools.Contains("open_url") && tools.Contains("read_page_content"))
+                    return "Scout";
+                if (tools.Contains("show_courier_documents"))
+                    return "Sprint";
+                if (tools.Contains("filter_email_inbox") ||
+                    tools.Contains("filter_calendar") ||
+                    tools.Contains("show_calendar_entries"))
+                    return "Echo";
+
+                // Main-chat routed domains. Item tools exist only when the
+                // item domain is active (or in Browser, already handled above).
+                if (tools.Contains("get_item_template") || tools.Contains("create_item"))
+                    return "Forge";
+                if (tools.Contains("create_trader_from_aade"))
+                    return "Compass";
+
+                // Help does not have a unique enough tool signature today, so
+                // keep its explicit mode marker as a narrow legacy fallback.
                 if (Contains(systemText, "HELP MODE"))
                     return "Sage";
-                if (Contains(systemText, "BROWSER MODE"))
-                    return "Scout";
-                if (Contains(systemText, "COURIER MODE"))
-                    return "Sprint";
 
-                // Main-chat routing can expose more than one related tool set.
-                // Keep the same precedence as JarvisAgentClient.activeAgentName.
+                // Transitional fallbacks for routed domains whose common tool
+                // sets overlap with Atlas. These are evaluated only after all
+                // structural signatures above, so descriptive references to
+                // Browser/Item modes cannot steal the route anymore.
                 if (Contains(systemText, "ΑΝΟΙΓΜΑ/ΔΗΜΙΟΥΡΓΙΑ ΕΙΔΟΥΣ"))
                     return "Forge";
                 if (Contains(systemText, "ΑΝΟΙΓΜΑ/ΔΗΜΙΟΥΡΓΙΑ ΣΥΝΑΛΛΑΣΣΟΜΕΝΟΥ ΜΕ ΑΦΜ"))
                     return "Compass";
                 if (Contains(systemText, "EMAIL MODE") || Contains(systemText, "- EMAIL ("))
                     return "Echo";
+                if (Contains(systemText, "COURIER MODE"))
+                    return "Sprint";
+                if (Contains(systemText, "BROWSER MODE"))
+                    return "Scout";
 
                 return "Atlas";
             }
@@ -270,6 +291,22 @@ namespace S1Jarvis.Access.Verilic
             {
                 return null;
             }
+        }
+
+        private static HashSet<string> ReadToolNames(JToken toolsToken)
+        {
+            var names = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            JArray tools = toolsToken as JArray;
+            if (tools == null)
+                return names;
+
+            foreach (JToken tool in tools)
+            {
+                string name = tool?["name"]?.ToString();
+                if (!string.IsNullOrWhiteSpace(name))
+                    names.Add(name.Trim());
+            }
+            return names;
         }
 
         private static string ReadSystemText(JToken system)
