@@ -1,7 +1,15 @@
 using System;
 using System.Collections.Generic;
+using System.Net;
+using System.Net.Http;
+using System.Reflection;
+using System.Text;
+using System.Threading;
+using System.Threading.Tasks;
+using Newtonsoft.Json;
 using Softone;
 using S1Jarvis.Access.Verilic;
+using S1Jarvis.Core;
 
 namespace S1Jarvis.Access
 {
@@ -20,13 +28,13 @@ namespace S1Jarvis.Access
         private static readonly Dictionary<string, (AccessCheckResponse result, DateTime at)> _cache =
             new Dictionary<string, (AccessCheckResponse, DateTime)>();
 
-        // The DR one-shot vision calls are invoked after the product entitlement
-        // gate and historically did not carry XSupport in their method signature.
-        // Keep only the current in-process Soft1 context (never credentials or
-        // licensing secrets) so those calls can migrate to the signed Verilic
-        // messages transport without falling back to the legacy /agent/vision
-        // endpoint. The context is refreshed on every runtime access check.
+        // DR one-shot methods were written before the Verilic cutover and do not
+        // carry XSupport in their public signature. Keep only the current local
+        // Soft1 runtime object so the compatibility bridge below can construct
+        // the same signed Verilic messages request as the normal Jarvis chat.
+        // No provider credential, licence secret or private key is copied here.
         private static XSupport _currentXSupport;
+        private static bool _drVisionBridgeInstalled;
 
         private static readonly IJarvisRuntimeAccessProvider _runtimeAccessProvider =
             CreateRuntimeAccessProvider();
@@ -81,6 +89,15 @@ namespace S1Jarvis.Access
             {
                 lock (_lock)
                     _currentXSupport = xSupport;
+
+                // The legacy DR code still calls JarvisAgentClient.CallProxyAsync,
+                // which targets /agent/vision. In Verilic mode that must never go
+                // back to the old Nexus proxy. Install a narrow in-process
+                // HttpMessageHandler once, before the DR entitlement returns.
+                // The handler intercepts only /agent/vision and forwards the
+                // provider-shaped payload through VerilicAiMessagesClient, where
+                // licence/proof/routing/account/model are authoritative server-side.
+                EnsureDrVisionBridgeInstalled();
             }
 
             try
@@ -105,6 +122,150 @@ namespace S1Jarvis.Access
         {
             lock (_lock)
                 return _currentXSupport;
+        }
+
+        private static void EnsureDrVisionBridgeInstalled()
+        {
+            lock (_lock)
+            {
+                if (_drVisionBridgeInstalled)
+                    return;
+
+                try
+                {
+                    VerilicRuntimeConfiguration configuration =
+                        VerilicRuntimeConfiguration.Load();
+                    if (configuration.Mode != VerilicRuntimeMode.Verilic)
+                        return;
+
+                    FieldInfo httpField = typeof(JarvisAgentClient).GetField(
+                        "_http",
+                        BindingFlags.Static | BindingFlags.NonPublic);
+                    if (httpField == null || httpField.FieldType != typeof(HttpClient))
+                    {
+                        DebugLog.Log("[dr] Verilic vision bridge: JarvisAgentClient._http was not found.");
+                        return;
+                    }
+
+                    var bridgedClient = new HttpClient(
+                        new VerilicDrVisionBridgeHandler(),
+                        disposeHandler: true);
+                    httpField.SetValue(null, bridgedClient);
+                    _drVisionBridgeInstalled = true;
+                    DebugLog.Log("[dr] Verilic vision bridge installed.");
+                }
+                catch (Exception ex)
+                {
+                    // Licensing itself must remain available even if this
+                    // transitional DR transport bridge cannot be installed.
+                    DebugLog.Log("[dr] Verilic vision bridge install failed: " + ex.GetType().Name + ": " + ex.Message);
+                }
+            }
+        }
+
+        /// <summary>
+        /// Temporary compatibility boundary for the two mature DR one-shot
+        /// methods. They still serialize AgentProxyRequest and call the private
+        /// /agent/vision transport in JarvisAgentClient. Rather than re-enable
+        /// that legacy server path, intercept it locally and invoke the same
+        /// signed Verilic messages client used by normal Jarvis traffic.
+        ///
+        /// The legacy AgentAccountRef in the envelope is deliberately ignored:
+        /// Verilic resolves the authoritative account/provider/model server-side.
+        /// </summary>
+        private sealed class VerilicDrVisionBridgeHandler : HttpMessageHandler
+        {
+            protected override async Task<HttpResponseMessage> SendAsync(
+                HttpRequestMessage request,
+                CancellationToken cancellationToken)
+            {
+                if (request == null ||
+                    request.RequestUri == null ||
+                    !string.Equals(
+                        request.RequestUri.AbsolutePath,
+                        "/agent/vision",
+                        StringComparison.OrdinalIgnoreCase))
+                {
+                    return CreateJsonResponse(
+                        HttpStatusCode.NotFound,
+                        new AgentProxyResponse
+                        {
+                            Success = false,
+                            ErrorMessage = "Μη υποστηριζόμενη τοπική διαδρομή AI."
+                        });
+                }
+
+                try
+                {
+                    string json = request.Content == null
+                        ? string.Empty
+                        : await request.Content.ReadAsStringAsync();
+                    AgentProxyRequest legacyRequest =
+                        JsonConvert.DeserializeObject<AgentProxyRequest>(json);
+
+                    if (legacyRequest == null ||
+                        string.IsNullOrWhiteSpace(legacyRequest.AnthropicRequestJson))
+                    {
+                        return CreateJsonResponse(
+                            HttpStatusCode.OK,
+                            new AgentProxyResponse
+                            {
+                                Success = false,
+                                ErrorMessage = "Το αίτημα ανάγνωσης παραστατικού δεν είναι έγκυρο."
+                            });
+                    }
+
+                    XSupport xSupport = GetCurrentXSupport();
+                    if (xSupport == null)
+                    {
+                        return CreateJsonResponse(
+                            HttpStatusCode.OK,
+                            new AgentProxyResponse
+                            {
+                                Success = false,
+                                ErrorMessage = "Δεν είναι διαθέσιμο το τρέχον Soft1 runtime context."
+                            });
+                    }
+
+                    DebugLog.Log("[dr] Forwarding document vision through signed Verilic messages.");
+                    AgentProxyResponse result = await new VerilicAiMessagesClient()
+                        .SendAsync(
+                            xSupport,
+                            "Jarvis",
+                            legacyRequest.AnthropicRequestJson,
+                            cancellationToken);
+
+                    return CreateJsonResponse(HttpStatusCode.OK, result);
+                }
+                catch (OperationCanceledException)
+                {
+                    throw;
+                }
+                catch (Exception ex)
+                {
+                    DebugLog.Log("[dr] Verilic vision bridge request failed: " + ex.GetType().Name + ": " + ex.Message);
+                    return CreateJsonResponse(
+                        HttpStatusCode.OK,
+                        new AgentProxyResponse
+                        {
+                            Success = false,
+                            ErrorMessage = "Η ασφαλής ανάγνωση παραστατικού δεν μπόρεσε να ολοκληρωθεί."
+                        });
+                }
+            }
+
+            private static HttpResponseMessage CreateJsonResponse(
+                HttpStatusCode statusCode,
+                AgentProxyResponse body)
+            {
+                return new HttpResponseMessage(statusCode)
+                {
+                    Content = new StringContent(
+                        JsonConvert.SerializeObject(body),
+                        Encoding.UTF8,
+                        "application/json")
+                };
+            }
         }
 
         /// <summary>
