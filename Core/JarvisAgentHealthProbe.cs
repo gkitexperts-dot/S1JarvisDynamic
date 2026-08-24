@@ -108,9 +108,17 @@ namespace S1Jarvis.Core
                     {
                         string json = await response.Content.ReadAsStringAsync();
                         if (!response.IsSuccessStatusCode)
+                        {
+                            string proxyReason = response.StatusCode == HttpStatusCode.Unauthorized
+                                ? "proxy_unauthorized"
+                                : response.StatusCode == HttpStatusCode.BadRequest
+                                    ? "proxy_bad_request"
+                                    : "proxy_http_" + ((int)response.StatusCode).ToString();
+
                             return JarvisAgentHealthResult.Failure(
-                                "proxy_unavailable",
+                                proxyReason,
                                 model: selectedModel);
+                        }
 
                         AgentProxyResponse proxy = null;
                         try
@@ -130,14 +138,18 @@ namespace S1Jarvis.Core
                                 model: selectedModel);
 
                         if (!proxy.Success)
-                            return proxy.CreditsExhausted
-                                ? JarvisAgentHealthResult.Failure(
+                        {
+                            if (proxy.CreditsExhausted)
+                                return JarvisAgentHealthResult.Failure(
                                     "provider_credits_exhausted",
                                     true,
-                                    selectedModel)
-                                : JarvisAgentHealthResult.Failure(
-                                    "provider_unavailable",
-                                    model: selectedModel);
+                                    selectedModel);
+
+                            string providerReason = ClassifyProxyFailure(proxy.ErrorMessage);
+                            return JarvisAgentHealthResult.Failure(
+                                providerReason,
+                                model: selectedModel);
+                        }
 
                         return JarvisAgentHealthResult.Success(selectedModel);
                     }
@@ -155,6 +167,33 @@ namespace S1Jarvis.Core
                     "provider_unavailable",
                     model: selectedModel);
             }
+        }
+
+        private static string ClassifyProxyFailure(string errorMessage)
+        {
+            string message = errorMessage ?? string.Empty;
+
+            if (message.IndexOf("δεν βρέθηκε ή είναι ανενεργός", StringComparison.OrdinalIgnoreCase) >= 0)
+                return "agent_account_unavailable";
+
+            const string providerPrefix = "Σφάλμα από το AI (";
+            int prefixIndex = message.IndexOf(providerPrefix, StringComparison.OrdinalIgnoreCase);
+            if (prefixIndex >= 0)
+            {
+                int codeStart = prefixIndex + providerPrefix.Length;
+                int codeEnd = message.IndexOf(')', codeStart);
+                if (codeEnd > codeStart)
+                {
+                    string statusCode = message.Substring(codeStart, codeEnd - codeStart).Trim();
+                    int parsed;
+                    if (int.TryParse(statusCode, out parsed))
+                        return "provider_http_" + parsed.ToString();
+                }
+
+                return "provider_rejected";
+            }
+
+            return "provider_unavailable";
         }
     }
 }
