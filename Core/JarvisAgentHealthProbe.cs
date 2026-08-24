@@ -1,11 +1,14 @@
 using System;
 using System.Net;
 using System.Net.Http;
+using System.Net.Http.Headers;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 using Newtonsoft.Json;
+using Softone;
 using S1Jarvis.Access;
+using S1Jarvis.Access.Verilic;
 
 namespace S1Jarvis.Core
 {
@@ -44,16 +47,24 @@ namespace S1Jarvis.Core
     }
 
     /// <summary>
-    /// Performs a tiny end-to-end provider probe through the same Nexus proxy
-    /// used by normal Jarvis AI calls. The client never receives or stores the
-    /// provider API key. The model is supplied by the authoritative Verilic
-    /// contract/user AI configuration returned by signed routing; no model is
-    /// hardcoded in this probe.
+    /// Performs the startup provider probe through Verilic. The request is
+    /// authenticated with the activated installation's ES256 proof and carries
+    /// only the same Soft1 identity fields used by authoritative AI routing.
+    /// Verilic re-verifies licence, entitlement, AgentAccount and configured
+    /// model, decrypts the provider credential server-side, and performs the
+    /// provider-specific probe. No provider credential is sent to this client.
     /// </summary>
     internal sealed class JarvisAgentHealthProbe
     {
         private static readonly HttpClient Http = new HttpClient();
-        private static readonly TimeSpan Timeout = TimeSpan.FromSeconds(12);
+        private static readonly TimeSpan Timeout = TimeSpan.FromSeconds(15);
+
+        private sealed class ProviderHealthResponse
+        {
+            public bool Ready { get; set; }
+            public string ReasonCode { get; set; }
+            public string Model { get; set; }
+        }
 
         static JarvisAgentHealthProbe()
         {
@@ -62,96 +73,145 @@ namespace S1Jarvis.Core
         }
 
         public async Task<JarvisAgentHealthResult> ProbeAsync(
-            string agentAccountRef,
-            string model)
+            XSupport xSupport,
+            string expectedAgentAccountRef,
+            string expectedModel)
         {
-            if (string.IsNullOrWhiteSpace(agentAccountRef))
+            if (xSupport == null)
+                return JarvisAgentHealthResult.Failure("provider_probe_identity_missing");
+            if (string.IsNullOrWhiteSpace(expectedAgentAccountRef))
                 return JarvisAgentHealthResult.Failure("agent_account_missing");
-            if (string.IsNullOrWhiteSpace(model))
+            if (string.IsNullOrWhiteSpace(expectedModel))
                 return JarvisAgentHealthResult.Failure("provider_model_missing");
 
-            string selectedModel = model.Trim();
+            string selectedModel = expectedModel.Trim();
 
             try
             {
-                // Use the same provider path as real Jarvis traffic, but keep
-                // the probe intentionally tiny. The provider must actually
-                // accept both the server-side credential and the configured
-                // model and return a valid proxy result.
-                var providerRequest = new
+                VerilicRuntimeConfiguration configuration =
+                    VerilicRuntimeConfiguration.Load();
+                if (configuration.Mode != VerilicRuntimeMode.Verilic ||
+                    configuration.ProviderHealthUri == null)
+                    return JarvisAgentHealthResult.Failure(
+                        "provider_health_configuration_invalid",
+                        model: selectedModel);
+
+                string productId = configuration.ResolveProductId(
+                    JarvisProducts.Jarvis);
+
+                var stateStore = new VerilicInstallationStateStore(
+                    configuration.StateDirectory,
+                    configuration.ProtectionScope);
+                VerilicInstallationState state = stateStore.Load(
+                    JarvisProducts.Jarvis);
+
+                if (state == null || !state.ActivationCompleted ||
+                    string.IsNullOrWhiteSpace(state.InstallationId) ||
+                    state.InstallationId.StartsWith("pending_", StringComparison.Ordinal) ||
+                    !string.Equals(state.VerilicProductId, productId, StringComparison.Ordinal) ||
+                    !string.Equals(state.KeyAlgorithm, "ES256", StringComparison.Ordinal) ||
+                    state.PrivateKeyMaterial == null || state.PrivateKeyMaterial.Length == 0)
+                    return JarvisAgentHealthResult.Failure(
+                        "provider_health_installation_invalid",
+                        model: selectedModel);
+
+                var info = xSupport.ConnectionInfo;
+                if (info == null)
+                    return JarvisAgentHealthResult.Failure(
+                        "provider_probe_identity_missing",
+                        model: selectedModel);
+
+                var requestBody = new VerilicAiRoutingRequest
                 {
-                    model = selectedModel,
-                    max_tokens = 16,
-                    messages = new[]
-                    {
-                        new { role = "user", content = "Reply with OK only." }
-                    }
+                    ProductId = productId,
+                    InstallationId = state.InstallationId,
+                    ProductVersion = configuration.ProductVersion,
+                    RequestedFeatures = new string[0],
+                    Soft1Serial = info.SerialNum == null
+                        ? null
+                        : info.SerialNum.ToString(),
+                    CompanyCode = info.CompanyId.ToString(),
+                    BranchCode = info.BranchId.ToString(),
+                    Soft1UserId = info.UserId.ToString()
                 };
 
-                var proxyRequest = new AgentProxyRequest
+                string json = JsonConvert.SerializeObject(requestBody);
+                byte[] bodyBytes = Encoding.UTF8.GetBytes(json);
+
+                var proofState = new VerilicInstallationState
                 {
-                    AgentAccountRef = agentAccountRef.Trim(),
-                    AnthropicRequestJson = JsonConvert.SerializeObject(providerRequest)
+                    ProductCode = productId,
+                    InstallationId = state.InstallationId,
+                    KeyAlgorithm = state.KeyAlgorithm,
+                    PrivateKeyMaterial = state.PrivateKeyMaterial
                 };
 
-                string url = AccessConfig.ServiceUrl.TrimEnd('/') + "/agent/vision";
-                string body = JsonConvert.SerializeObject(proxyRequest);
-
-                using (var request = new HttpRequestMessage(HttpMethod.Post, url))
+                using (var authorizer = new VerilicEs256RequestAuthorizer(proofState))
+                using (var request = new HttpRequestMessage(
+                    HttpMethod.Post,
+                    configuration.ProviderHealthUri))
                 using (var cts = new CancellationTokenSource(Timeout))
                 {
-                    request.Content = new StringContent(body, Encoding.UTF8, "application/json");
-                    if (!string.IsNullOrEmpty(AccessConfig.ClientKey))
-                        request.Headers.Add("X-Client-Key", AccessConfig.ClientKey);
+                    var content = new ByteArrayContent(bodyBytes);
+                    content.Headers.ContentType = new MediaTypeHeaderValue("application/json")
+                    {
+                        CharSet = "utf-8"
+                    };
+                    request.Content = content;
+                    authorizer.Authorize(request, bodyBytes);
 
                     using (HttpResponseMessage response = await Http.SendAsync(request, cts.Token))
                     {
-                        string json = await response.Content.ReadAsStringAsync();
                         if (!response.IsSuccessStatusCode)
-                        {
-                            string proxyReason = response.StatusCode == HttpStatusCode.Unauthorized
-                                ? "proxy_unauthorized"
-                                : response.StatusCode == HttpStatusCode.BadRequest
-                                    ? "proxy_bad_request"
-                                    : "proxy_http_" + ((int)response.StatusCode).ToString();
-
                             return JarvisAgentHealthResult.Failure(
-                                proxyReason,
+                                "provider_health_http_" + ((int)response.StatusCode).ToString(),
                                 model: selectedModel);
-                        }
 
-                        AgentProxyResponse proxy = null;
+                        string responseJson = await response.Content.ReadAsStringAsync();
+                        ProviderHealthResponse health;
                         try
                         {
-                            proxy = JsonConvert.DeserializeObject<AgentProxyResponse>(json);
+                            health = JsonConvert.DeserializeObject<ProviderHealthResponse>(
+                                responseJson);
                         }
                         catch (JsonException)
                         {
                             return JarvisAgentHealthResult.Failure(
-                                "proxy_response_invalid",
+                                "provider_health_response_invalid",
                                 model: selectedModel);
                         }
 
-                        if (proxy == null)
+                        if (health == null || string.IsNullOrWhiteSpace(health.ReasonCode))
                             return JarvisAgentHealthResult.Failure(
-                                "proxy_response_invalid",
+                                "provider_health_response_invalid",
                                 model: selectedModel);
 
-                        if (!proxy.Success)
-                        {
-                            if (proxy.CreditsExhausted)
-                                return JarvisAgentHealthResult.Failure(
-                                    "provider_credits_exhausted",
-                                    true,
-                                    selectedModel);
+                        string returnedModel = string.IsNullOrWhiteSpace(health.Model)
+                            ? selectedModel
+                            : health.Model.Trim();
 
-                            string providerReason = ClassifyProxyFailure(proxy.ErrorMessage);
+                        // The shell already resolved an authoritative account/model
+                        // immediately before this call. If the server reports a
+                        // different model, configuration changed between the two
+                        // signed requests; fail closed and let startup retry later.
+                        if (!string.Equals(
+                                returnedModel,
+                                selectedModel,
+                                StringComparison.Ordinal))
                             return JarvisAgentHealthResult.Failure(
-                                providerReason,
-                                model: selectedModel);
-                        }
+                                "provider_routing_changed",
+                                model: returnedModel);
 
-                        return JarvisAgentHealthResult.Success(selectedModel);
+                        if (health.Ready)
+                            return JarvisAgentHealthResult.Success(returnedModel);
+
+                        return JarvisAgentHealthResult.Failure(
+                            health.ReasonCode.Trim(),
+                            string.Equals(
+                                health.ReasonCode.Trim(),
+                                "provider_credits_exhausted",
+                                StringComparison.Ordinal),
+                            returnedModel);
                     }
                 }
             }
@@ -164,36 +224,9 @@ namespace S1Jarvis.Core
             catch
             {
                 return JarvisAgentHealthResult.Failure(
-                    "provider_unavailable",
+                    "provider_health_failed",
                     model: selectedModel);
             }
-        }
-
-        private static string ClassifyProxyFailure(string errorMessage)
-        {
-            string message = errorMessage ?? string.Empty;
-
-            if (message.IndexOf("δεν βρέθηκε ή είναι ανενεργός", StringComparison.OrdinalIgnoreCase) >= 0)
-                return "agent_account_unavailable";
-
-            const string providerPrefix = "Σφάλμα από το AI (";
-            int prefixIndex = message.IndexOf(providerPrefix, StringComparison.OrdinalIgnoreCase);
-            if (prefixIndex >= 0)
-            {
-                int codeStart = prefixIndex + providerPrefix.Length;
-                int codeEnd = message.IndexOf(')', codeStart);
-                if (codeEnd > codeStart)
-                {
-                    string statusCode = message.Substring(codeStart, codeEnd - codeStart).Trim();
-                    int parsed;
-                    if (int.TryParse(statusCode, out parsed))
-                        return "provider_http_" + parsed.ToString();
-                }
-
-                return "provider_rejected";
-            }
-
-            return "provider_unavailable";
         }
     }
 }
