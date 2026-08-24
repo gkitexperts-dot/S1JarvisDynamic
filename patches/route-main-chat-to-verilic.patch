@@ -1,0 +1,20 @@
+diff --git a/Core/JarvisAgentClient.cs b/Core/JarvisAgentClient.cs
+--- a/Core/JarvisAgentClient.cs
++++ b/Core/JarvisAgentClient.cs
+@@
+-                    var proxyResp = await CallProxyAsync(new AgentProxyRequest
+-                    {
+-                        AgentAccountRef = agentAccountRef,
+-                        AnthropicRequestJson = anthropicJson
+-                    }, token);
++                    // Main Jarvis chat now goes through the signed Verilic
++                    // messages endpoint. The server re-verifies licence,
++                    // routing, AgentAccountRef and configured model and keeps
++                    // provider credentials server-side. The legacy proxy is
++                    // intentionally retained only for the DR one-shot paths
++                    // until they receive the Soft1 identity needed for ES256.
++                    var proxyResp = await new S1Jarvis.Access.Verilic.VerilicAiMessagesClient()
++                        .SendAsync(xSupport, anthropicJson, token);
+@@
+-                            : "✖ " + (proxyResp.ErrorMessage ?? "Άγνωστο σφάλμα από τον Nexus.");
++                            : "✖ " + (proxyResp.ErrorMessage ?? "Άγνωστο σφάλμα AI.");
