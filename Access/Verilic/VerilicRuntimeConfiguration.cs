@@ -67,6 +67,11 @@ namespace S1Jarvis.Access.Verilic
             get { return BuildApiUri("api/jarvis-ai/routing/resolve"); }
         }
 
+        public Uri ProviderHealthUri
+        {
+            get { return BuildApiUri("api/jarvis-ai/routing/health"); }
+        }
+
         public string ResolveProductId(string productCode)
         {
             return ResolveMappedIdentifier(
