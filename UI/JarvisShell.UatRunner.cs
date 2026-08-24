@@ -8,6 +8,7 @@ using System.Windows;
 using Microsoft.Web.WebView2.Core;
 using Newtonsoft.Json.Linq;
 using S1Jarvis.Access;
+using S1Jarvis.Access.Verilic;
 using S1Jarvis.Core;
 
 namespace S1Jarvis.UI
@@ -192,6 +193,8 @@ namespace S1Jarvis.UI
                 // the router from its own real prompt, without sticky context
                 // leaking from another UAT row.
                 var history = new List<JObject>();
+                VerilicAiMessagesClient.ResetRuntimeTargetSnapshot();
+
                 string answer = await _agentClient.AskAsync(
                     _agentAccountRef,
                     _xSupport,
@@ -199,21 +202,56 @@ namespace S1Jarvis.UI
                     test.Prompt,
                     onProgress: t => PostUatStatus(ordinal, total, t));
 
+                string actualAgent = VerilicAiMessagesClient.LastRuntimeAgent;
+                string actualProvider = VerilicAiMessagesClient.LastRuntimeProvider;
+                string actualModel = VerilicAiMessagesClient.LastRuntimeModel;
+                string actualRouting = VerilicAiMessagesClient.LastRuntimeRouting;
+
                 string status = LooksLikeTechnicalFailure(answer) ? "FAIL" : "PASS";
                 string reason = status == "PASS"
                     ? "Το Jarvis ολοκλήρωσε το ανεξάρτητο test turn χωρίς τεχνικό σφάλμα."
                     : "Το Jarvis επέστρεψε τεχνική αποτυχία.";
 
+                // For a single expected logical agent, runtime metadata is now
+                // authoritative. A successful text answer from the wrong helper
+                // is a routing failure, not a PASS.
+                if (status == "PASS" && IsSingleExpectedAgent(test.ExpectedAgent))
+                {
+                    if (string.IsNullOrWhiteSpace(actualAgent))
+                    {
+                        status = "REVIEW";
+                        reason = "Το turn ολοκληρώθηκε, αλλά δεν επιστράφηκαν authoritative runtime metadata για να αποδειχθεί ο agent.";
+                    }
+                    else if (!string.Equals(test.ExpectedAgent.Trim(), actualAgent.Trim(), StringComparison.OrdinalIgnoreCase))
+                    {
+                        status = "FAIL";
+                        reason = "Routing mismatch: expected " + test.ExpectedAgent.Trim() +
+                            ", actual " + actualAgent.Trim() + ".";
+                    }
+                    else
+                    {
+                        reason = "Runtime routing επιβεβαιώθηκε: " + actualAgent.Trim() +
+                            BuildRuntimeSuffix(actualProvider, actualModel, actualRouting) + ".";
+                    }
+                }
+
                 // Expected-result semantics can include business/UI assertions
                 // that cannot be proven from a plain reply. Flag those for human
-                // review instead of claiming a false automatic PASS.
+                // review instead of claiming a false automatic PASS. Do this only
+                // after agent validation, so an actual routing mismatch remains FAIL.
                 if (status == "PASS" && NeedsHumanAssertion(test.ExpectedResult))
                 {
                     status = "REVIEW";
-                    reason = "Το turn εκτελέστηκε, αλλά το αναμενόμενο αποτέλεσμα περιέχει UI/business assertion που χρειάζεται οπτικό έλεγχο.";
+                    reason = "Runtime routing επιβεβαιώθηκε" +
+                        (string.IsNullOrWhiteSpace(actualAgent)
+                            ? string.Empty
+                            : " για " + actualAgent + BuildRuntimeSuffix(actualProvider, actualModel, actualRouting)) +
+                        ", αλλά το αναμενόμενο αποτέλεσμα περιέχει UI/business assertion που χρειάζεται οπτικό έλεγχο.";
                 }
 
-                return new UatTestResult(test, status, reason, answer);
+                return new UatTestResult(
+                    test, status, reason, answer,
+                    actualAgent, actualProvider, actualModel, actualRouting);
             }
             catch (Exception ex)
             {
@@ -272,6 +310,23 @@ namespace S1Jarvis.UI
                 "/" + (x.Inherited ? "Inherited" : "Dedicated")));
         }
 
+        private static string BuildRuntimeSuffix(string provider, string model, string routing)
+        {
+            var parts = new List<string>();
+            if (!string.IsNullOrWhiteSpace(provider)) parts.Add(provider.Trim());
+            if (!string.IsNullOrWhiteSpace(model)) parts.Add(model.Trim());
+            if (!string.IsNullOrWhiteSpace(routing)) parts.Add(routing.Trim());
+            return parts.Count == 0 ? string.Empty : " · " + string.Join(" · ", parts);
+        }
+
+        private static bool IsSingleExpectedAgent(string expectedAgent)
+        {
+            if (string.IsNullOrWhiteSpace(expectedAgent)) return false;
+            string value = expectedAgent.Trim();
+            if (value == "—" || value == "-") return false;
+            return value.IndexOf('/') < 0 && value.IndexOf('+') < 0 && value.IndexOf(',') < 0;
+        }
+
         private void PostUatProgress(UatTestResult result, int ordinal, int total)
         {
             string icon = result.Status == "PASS" ? "✓" :
@@ -283,6 +338,13 @@ namespace S1Jarvis.UI
               .Append(result.Test.Id).Append(" · ").Append(result.Test.ExpectedAgent).Append("** — ")
               .Append(icon).Append(' ').Append(result.Status).Append("\n\n")
               .Append(result.Reason);
+
+            if (!string.IsNullOrWhiteSpace(result.RuntimeAgent))
+            {
+                sb.Append("\n\n`Actual: ").Append(result.RuntimeAgent)
+                  .Append(BuildRuntimeSuffix(result.RuntimeProvider, result.RuntimeModel, result.RuntimeRouting))
+                  .Append('`');
+            }
 
             if (!string.IsNullOrWhiteSpace(result.Answer))
                 sb.Append("\n\n> ").Append(OneLine(TruncateUat(result.Answer, 300)));
@@ -311,13 +373,17 @@ namespace S1Jarvis.UI
               .Append(" · **REVIEW/MANUAL:** ").Append(review)
               .Append(" · **BLOCKED:** ").Append(blocked).AppendLine();
             sb.AppendLine();
-            sb.AppendLine("| ID | Status | Expected agent | Priority | Result |");
-            sb.AppendLine("|---:|---:|---:|---:|---:|");
+            sb.AppendLine("| ID | Status | Expected agent | Actual agent | Provider | Model | Routing | Priority | Result |");
+            sb.AppendLine("|---:|---:|---:|---:|---:|---:|---:|---:|---:|");
             foreach (UatTestResult r in results)
             {
                 sb.Append("| ").Append(EscapeTable(r.Test.Id))
                   .Append(" | ").Append(EscapeTable(r.Status))
                   .Append(" | ").Append(EscapeTable(r.Test.ExpectedAgent))
+                  .Append(" | ").Append(EscapeTable(r.RuntimeAgent))
+                  .Append(" | ").Append(EscapeTable(r.RuntimeProvider))
+                  .Append(" | ").Append(EscapeTable(r.RuntimeModel))
+                  .Append(" | ").Append(EscapeTable(r.RuntimeRouting))
                   .Append(" | ").Append(EscapeTable(r.Test.Priority))
                   .Append(" | ").Append(EscapeTable(r.Reason))
                   .AppendLine(" |");
@@ -348,7 +414,12 @@ namespace S1Jarvis.UI
 
                 var rows = new List<string[]>
                 {
-                    new[] { "ID", "Status", "Πού γράφω", "Prompt", "Expected Agent", "Priority", "Reason", "Jarvis Answer" }
+                    new[]
+                    {
+                        "ID", "Status", "Πού γράφω", "Prompt", "Expected Agent",
+                        "Actual Agent", "Provider", "Model", "Routing", "Priority",
+                        "Reason", "Jarvis Answer"
+                    }
                 };
                 foreach (UatTestResult r in results)
                 {
@@ -359,6 +430,10 @@ namespace S1Jarvis.UI
                         r.Test.Location,
                         r.Test.Prompt,
                         r.Test.ExpectedAgent,
+                        r.RuntimeAgent ?? string.Empty,
+                        r.RuntimeProvider ?? string.Empty,
+                        r.RuntimeModel ?? string.Empty,
+                        r.RuntimeRouting ?? string.Empty,
                         r.Test.Priority,
                         r.Reason,
                         r.Answer ?? string.Empty
@@ -514,13 +589,34 @@ namespace S1Jarvis.UI
             public readonly string Status;
             public readonly string Reason;
             public readonly string Answer;
+            public readonly string RuntimeAgent;
+            public readonly string RuntimeProvider;
+            public readonly string RuntimeModel;
+            public readonly string RuntimeRouting;
 
             public UatTestResult(UatTestCase test, string status, string reason, string answer)
+                : this(test, status, reason, answer, null, null, null, null)
+            {
+            }
+
+            public UatTestResult(
+                UatTestCase test,
+                string status,
+                string reason,
+                string answer,
+                string runtimeAgent,
+                string runtimeProvider,
+                string runtimeModel,
+                string runtimeRouting)
             {
                 Test = test;
                 Status = status;
                 Reason = reason;
                 Answer = answer;
+                RuntimeAgent = runtimeAgent;
+                RuntimeProvider = runtimeProvider;
+                RuntimeModel = runtimeModel;
+                RuntimeRouting = runtimeRouting;
             }
 
             public static UatTestResult Skipped(UatTestCase test, string status, string reason) =>
