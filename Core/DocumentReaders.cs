@@ -22,20 +22,23 @@ namespace S1Jarvis.Core
     // φιλοσοφία με το XlsxWriter.cs - "no dependency" αλλά αντίστροφα,
     // READ αντί για WRITE).
     //
-    // ΡΗΤΑ ΕΚΤΟΣ ΣΚΟΠΕΙΟΥ: legacy binary .xls/.doc (pre-2007 OLE format).
+    // ΡΗΤΑ ΕΚΤΟΣ ΣΚΟΠΕΙΟΥ (ρητά αναφέρθηκε στον χρήστη, ΟΧΙ σιωπηλή
+    // παράλειψη): legacy binary .xls/.doc (pre-2007 OLE format) - ΤΕΛΕΙΩΣ
+    // διαφορετική δυαδική μορφή, χρειάζεται πραγματική βιβλιοθήκη. Αν
+    // κάποιος ανεβάσει τέτοιο αρχείο, ρητό φιλικό μήνυμα, ΟΧΙ crash/
+    // σιωπηλή αποτυχία.
+    //
+    // ΓΝΩΣΤΟΙ ΠΕΡΙΟΡΙΣΜΟΙ (v1, τεκμηριωμένοι εδώ ώστε να μην ξαναψαχτούν):
+    //  - XLSX: διαβάζει ΜΟΝΟ τιμές (κείμενο/αριθμό), ΟΧΙ formulas (παίρνει
+    //    την ΗΔΗ cached τιμή <v> - το Excel την αποθηκεύει και για formula
+    //    κελιά, ΔΕΝ χρειάζεται re-evaluation). Ημερομηνίες εμφανίζονται ΩΣ
+    //    Excel serial numbers (π.χ. "45678"), ΟΧΙ formatted ημερομηνία -
+    //    θα χρειαζόταν styles.xml/numFmt lookup, ΕΚΤΟΣ v1 σκοπείου.
+    //  - DOCX: παράγραφοι (<w:p>) + πίνακες (<w:tbl>, ανά γραμμή pipe-
+    //    separated) - ΟΧΙ headers/footers/footnotes/εικόνες.
     // ══════════════════════════════════════════════════════════════════════
     internal static class DocumentReaders
     {
-        // Deterministic UAT interception point. Unlike the previous event-based
-        // side channel, this callback runs synchronously inside the exact XLSX
-        // read path. Returning true means the workbook was consumed by the UAT
-        // runner and must NOT be exposed to the normal LLM text-attachment flow.
-        // The callback itself must not block the worker thread with UI work; it
-        // should only inspect the parsed workbook and schedule orchestration.
-        internal static Func<string, string, bool> UatWorkbookInterceptor;
-
-        internal const string UatHandledSentinel = "__JARVIS_UAT_HANDLED__";
-
         private static readonly XNamespace SpreadsheetNs =
             "http://schemas.openxmlformats.org/spreadsheetml/2006/main";
         private static readonly XNamespace RelationshipsNs =
@@ -64,37 +67,12 @@ namespace S1Jarvis.Core
                     "διαφορετική δυαδική μορφή (pre-2007). Αποθήκευσε το σαν " +
                     (isLegacyExcel ? ".xlsx" : ".docx") + " και ξαναδοκίμασε.");
 
-            if (isXlsx)
-            {
-                string text = ReadXlsxAsText(bytes);
-                bool handled = false;
-
-                try
-                {
-                    var interceptor = UatWorkbookInterceptor;
-                    handled = interceptor != null && interceptor(fileName ?? "attachment.xlsx", text);
-                }
-                catch
-                {
-                    // UAT recognition must never break ordinary XLSX reading.
-                    handled = false;
-                }
-
-                // The normal office-document WebView response still needs to
-                // complete so its pending async upload state is released. A tiny
-                // sentinel is returned instead of the full workbook text; the UAT
-                // pipeline clears that pending attachment immediately on the UI
-                // thread before running the tests.
-                return handled ? UatHandledSentinel : text;
-            }
-
+            if (isXlsx) return ReadXlsxAsText(bytes);
             if (isDocx) return ReadDocxAsText(bytes);
 
             throw new Exception($"Μη αναγνωρίσιμος τύπος αρχείου για ανάγνωση: {mimeType} ({fileName}).");
         }
 
-        // ── XLSX (ZIP: xl/sharedStrings.xml + xl/workbook.xml +
-        // xl/_rels/workbook.xml.rels + xl/worksheets/sheetN.xml) ──────────
         public static string ReadXlsxAsText(byte[] bytes)
         {
             using (var ms = new MemoryStream(bytes))
@@ -148,15 +126,9 @@ namespace S1Jarvis.Core
             }
         }
 
-        private sealed class SheetInfo
+        private static System.Collections.Generic.List<(string Name, string Path)> ReadSheetList(ZipArchive archive)
         {
-            public string Name { get; set; }
-            public string Path { get; set; }
-        }
-
-        private static System.Collections.Generic.List<SheetInfo> ReadSheetList(ZipArchive archive)
-        {
-            var result = new System.Collections.Generic.List<SheetInfo>();
+            var result = new System.Collections.Generic.List<(string, string)>();
             var relMap = new System.Collections.Generic.Dictionary<string, string>();
 
             ZipArchiveEntry relsEntry = archive.GetEntry("xl/_rels/workbook.xml.rels");
@@ -185,11 +157,10 @@ namespace S1Jarvis.Core
                     {
                         string name = (string)sheet.Attribute("name") ?? "Sheet";
                         string rId = (string)sheet.Attribute(DocRelNs + "id");
-                        string target;
-                        if (rId != null && relMap.TryGetValue(rId, out target))
+                        if (rId != null && relMap.TryGetValue(rId, out string target))
                         {
                             string path = target.StartsWith("/") ? target.TrimStart('/') : "xl/" + target;
-                            result.Add(new SheetInfo { Name = name, Path = path });
+                            result.Add((name, path));
                         }
                     }
                 }
@@ -207,13 +178,11 @@ namespace S1Jarvis.Core
             }
             string raw = cell.Element(SpreadsheetNs + "v")?.Value;
             if (raw == null) return "";
-            int idx;
-            if (type == "s" && int.TryParse(raw, out idx) && idx >= 0 && idx < sharedStrings.Length)
+            if (type == "s" && int.TryParse(raw, out int idx) && idx >= 0 && idx < sharedStrings.Length)
                 return sharedStrings[idx];
             return raw;
         }
 
-        // ── DOCX (ZIP: word/document.xml) ───────────────────────────────
         public static string ReadDocxAsText(byte[] bytes)
         {
             using (var ms = new MemoryStream(bytes))
