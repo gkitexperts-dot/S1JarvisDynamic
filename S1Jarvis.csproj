@@ -97,6 +97,7 @@
     <Compile Include="Core\JarvisCourier.cs" />
     <Compile Include="Core\JarvisItems.cs" />
     <Compile Include="Core\DocumentReaders.cs" />
+    <Compile Include="Core\DrDocumentKnowledge.cs" />
     <Compile Include="Core\JarvisAgentClient.cs" />
     <Compile Include="Access\JarvisLicenseGuard.cs" />
     <Compile Include="Properties\AssemblyInfo.cs" />
@@ -107,6 +108,7 @@
     </Compile>
     <Compile Include="UI\JarvisShell.ProviderHealth.cs" />
     <Compile Include="UI\JarvisShell.ProviderBootGate.cs" />
+    <Compile Include="UI\JarvisShell.DrAssistant.cs" />
     <Compile Include="UI\JarvisShell.UatRunner.cs" />
     <Compile Include="UI\JarvisShell.UatDeferred.cs" />
     <Compile Include="UI\VerilicMaintenanceShell.xaml.cs">
