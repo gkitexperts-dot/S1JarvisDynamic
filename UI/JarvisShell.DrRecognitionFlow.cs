@@ -55,6 +55,13 @@ namespace S1Jarvis.UI
             catch { return; }
 
             string commandType = (string)cmd["type"];
+
+            if (string.Equals(commandType, "dr_resolve_line_mappings", StringComparison.Ordinal))
+            {
+                await HandleDrResolveLineMappingsAsync(cmd);
+                return;
+            }
+
             if (!string.Equals(commandType, "dr_resolve_document_pattern", StringComparison.Ordinal) &&
                 !string.Equals(commandType, "dr_analyze_posting", StringComparison.Ordinal)) return;
 
@@ -83,11 +90,64 @@ namespace S1Jarvis.UI
                     ["fileId"] = fileId,
                     ["success"] = false,
                     ["resolver"] = "resolve_document_pattern",
-                    ["version"] = 3,
+                    ["version"] = 4,
                     ["mode"] = "Unknown",
                     ["needsReview"] = true,
                     ["reason"] = "pattern_resolution_failed",
                     ["errorMessage"] = ex.Message
+                }.ToString(Formatting.None));
+            }
+        }
+
+        private async Task HandleDrResolveLineMappingsAsync(JObject cmd)
+        {
+            string fileId = cmd["fileId"]?.ToString();
+            try
+            {
+                int trdrId = (int?)cmd["trdrId"] ?? 0;
+                JArray requestedLines = cmd["lines"] as JArray ?? new JArray();
+
+                JArray results = await Task.Run(() =>
+                {
+                    var output = new JArray();
+                    foreach (JToken token in requestedLines)
+                    {
+                        JObject line = token as JObject ?? new JObject();
+                        int lineIndex = (int?)line["lineIndex"] ?? -1;
+                        string supplierCode = line["supplierCode"]?.ToString();
+
+                        JObject result = DrItemCodeResolver.Resolve(_xSupport, trdrId, supplierCode);
+                        result["lineIndex"] = lineIndex;
+                        output.Add(result);
+                    }
+                    return output;
+                });
+
+                webView.CoreWebView2.PostWebMessageAsString(new JObject
+                {
+                    ["type"] = "dr_line_mappings_result",
+                    ["fileId"] = fileId,
+                    ["success"] = true,
+                    ["resolver"] = "resolve_supplier_code_mapping",
+                    ["version"] = 1,
+                    ["readOnly"] = true,
+                    ["trdrId"] = trdrId,
+                    ["results"] = results
+                }.ToString(Formatting.None));
+            }
+            catch (Exception ex)
+            {
+                DebugLog.Log("[dr-recognition-flow] resolve_line_mappings EXCEPTION: " + ex);
+                webView.CoreWebView2.PostWebMessageAsString(new JObject
+                {
+                    ["type"] = "dr_line_mappings_result",
+                    ["fileId"] = fileId,
+                    ["success"] = false,
+                    ["resolver"] = "resolve_supplier_code_mapping",
+                    ["version"] = 1,
+                    ["readOnly"] = true,
+                    ["errorMessage"] = ex.Message,
+                    ["results"] = new JArray()
                 }.ToString(Formatting.None));
             }
         }
