@@ -12,19 +12,33 @@
 
         <Border Grid.Row="0" Background="#2A2A3D" Padding="18" BorderBrush="#3A3A50" BorderThickness="0,0,0,1">
             <Grid>
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="Auto" />
+                </Grid.RowDefinitions>
                 <Grid.ColumnDefinitions>
                     <ColumnDefinition Width="*" />
                     <ColumnDefinition Width="Auto" />
                 </Grid.ColumnDefinitions>
-                <StackPanel>
+                <StackPanel Grid.Row="0" Grid.Column="0">
                     <TextBlock Text="Verilic Licensing Maintenance" Foreground="White" FontSize="22" FontWeight="SemiBold" />
-                    <TextBlock Text="Controlled activation and local readiness for the S1 Jarvis product family."
+                    <TextBlock Text="Provision, activate and inspect local readiness for the S1 Jarvis product family."
                                Foreground="#B8B8C8" Margin="0,4,0,0" />
                 </StackPanel>
-                <StackPanel Grid.Column="1" Orientation="Horizontal">
-                    <Button Content="Import Windows user config" Padding="16,7" Margin="12,0,0,0" Click="ImportUserConfiguration_Click" />
-                    <Button Content="Refresh" Padding="16,7" Margin="8,0,0,0" Click="Refresh_Click" />
-                </StackPanel>
+                <Button Grid.Row="0" Grid.Column="1" Content="Refresh" Padding="16,7" Margin="12,0,0,0" Click="Refresh_Click" />
+
+                <Grid Grid.Row="1" Grid.ColumnSpan="2" Margin="0,14,0,0">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="Auto" />
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="Auto" />
+                        <ColumnDefinition Width="Auto" />
+                    </Grid.ColumnDefinitions>
+                    <TextBlock Grid.Column="0" Text="Provisioning code" Foreground="#D6D6E6" VerticalAlignment="Center" Margin="0,0,10,0" />
+                    <TextBox x:Name="provisioningCodeTextBox" Grid.Column="1" MinWidth="330" Padding="8,5" />
+                    <Button x:Name="importFromVerilicButton" Grid.Column="2" Content="Import from Verilic" Padding="16,7" Margin="8,0,0,0" Click="ImportFromVerilic_Click" />
+                    <Button Grid.Column="3" Content="Legacy Windows import" Padding="14,7" Margin="8,0,0,0" Click="ImportUserConfiguration_Click" />
+                </Grid>
             </Grid>
         </Border>
 
@@ -95,7 +109,7 @@
                     <ColumnDefinition Width="*" />
                     <ColumnDefinition Width="Auto" />
                 </Grid.ColumnDefinitions>
-                <TextBlock x:Name="resultText" Foreground="#D6D6E6" VerticalAlignment="Center" Text="No maintenance action has been run." />
+                <TextBlock x:Name="resultText" Foreground="#D6D6E6" VerticalAlignment="Center" Text="No maintenance action has been run." TextWrapping="Wrap" />
                 <Button x:Name="activateAllButton" Grid.Column="1" Content="Activate all configured products" Padding="16,7" Margin="12,0,0,0" Click="ActivateAll_Click" />
             </Grid>
         </Border>
