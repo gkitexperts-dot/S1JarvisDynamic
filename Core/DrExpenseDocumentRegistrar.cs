@@ -218,6 +218,19 @@ namespace S1Jarvis.Core
                 findoc.Current["TRDR"] = trdrId;
                 findoc.Current["SERIES"] = series;
 
+                // LINSUPDOC handwritten-series rule:
+                // only for the exact SERIES of the exact SOSOURCE being posted.
+                // If HANDMD is enabled, copy SERIES.CODE returned by Soft1 into
+                // CMPFINCODE. If HANDMD is not enabled, leave CMPFINCODE alone
+                // so Soft1 can derive/populate it from its own series logic.
+                if (string.Equals(objectName, "LINSUPDOC", StringComparison.OrdinalIgnoreCase))
+                {
+                    string handwrittenSeriesCode = GetHandwrittenSeriesCode(
+                        xSupport, company, series, sosource);
+                    if (!string.IsNullOrWhiteSpace(handwrittenSeriesCode))
+                        findoc.Current["CMPFINCODE"] = handwrittenSeriesCode;
+                }
+
                 DateTime? docDate = ParseDate(docDateRaw);
                 if (docDate.HasValue)
                     findoc.Current["TRNDATE"] = docDate.Value;
@@ -332,6 +345,27 @@ namespace S1Jarvis.Core
             if (t == null || t.Count == 0 || t.Current["SODTYPE"] == DBNull.Value)
                 return 0;
             return Convert.ToInt32(t.Current["SODTYPE"]);
+        }
+
+        private static string GetHandwrittenSeriesCode(
+            XSupport xSupport,
+            int company,
+            int series,
+            int sosource)
+        {
+            if (series <= 0 || sosource <= 0) return null;
+            XTable t = xSupport.GetSQLDataSet(
+                "SELECT TOP 1 CODE,HANDMD FROM SERIES " +
+                "WHERE COMPANY=:1 AND SERIES=:2 AND SOSOURCE=:3",
+                company, series, sosource);
+            if (t == null || t.Count == 0) return null;
+
+            object handmdRaw = t.Current["HANDMD"];
+            bool handwritten = handmdRaw != null && handmdRaw != DBNull.Value && Convert.ToInt32(handmdRaw) != 0;
+            if (!handwritten) return null;
+
+            object codeRaw = t.Current["CODE"];
+            return codeRaw == null || codeRaw == DBNull.Value ? null : Convert.ToString(codeRaw);
         }
 
         private static void CopyHistoryProfile(
