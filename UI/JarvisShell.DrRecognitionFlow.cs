@@ -51,14 +51,11 @@ namespace S1Jarvis.UI
         // LINLINES.LINEVAL is set inside the same Soft1 XModule transaction.
         private async Task InstallDrRegistrationV2BridgeAsync()
         {
-            try
-            {
-                const string script = @"
+            const string script = @"
 (function(){
-  if(window.__jarvisDrRegistrationV2Installed)return;
-  window.__jarvisDrRegistrationV2Installed=true;
+  if(window.__jarvisDrRegistrationV2Installed)return true;
   var original=window.postCommand;
-  if(typeof original!=='function')return;
+  if(typeof original!=='function')return false;
   window.postCommand=function(payload){
     if(payload&&payload.type==='dr_register_document'){
       var copy=Object.assign({},payload);
@@ -67,8 +64,22 @@ namespace S1Jarvis.UI
     }
     return original(payload);
   };
+  window.__jarvisDrRegistrationV2Installed=true;
+  return true;
 })();";
-                await webView.CoreWebView2.ExecuteScriptAsync(script);
+
+            try
+            {
+                // Loaded can fire before index.html has defined postCommand.
+                // Retry briefly instead of installing a dead wrapper once.
+                for (int attempt = 0; attempt < 120; attempt++)
+                {
+                    string result = await webView.CoreWebView2.ExecuteScriptAsync(script);
+                    if (string.Equals(result, "true", StringComparison.OrdinalIgnoreCase))
+                        return;
+                    await Task.Delay(50);
+                }
+                DebugLog.Log("[dr-recognition-flow] registration-v2 bridge timed out waiting for postCommand.");
             }
             catch (Exception ex)
             {
