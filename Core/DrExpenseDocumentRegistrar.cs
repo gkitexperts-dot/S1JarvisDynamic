@@ -14,9 +14,9 @@ namespace S1Jarvis.Core
     /// Expense-aware final DR posting path.
     ///
     /// The legacy JarvisTools.ExecuteRegisterDrDocument remains the source of
-    /// truth for every non-expense registration. This class takes over only
-    /// explicit manualConsolidate/manualPerLine registrations whose resolved
-    /// target contains SODTYPE 53.
+    /// truth for every non-expense registration. This class takes over every
+    /// resolved SODTYPE 53 expense registration, including auto-resolved lines
+    /// learned from previous imports / CCCMAPITEMS.
     ///
     /// Rules:
     /// - consolidated expense: one LINLINES row, LINEVAL = sum(qty * unitPrice)
@@ -53,13 +53,6 @@ namespace S1Jarvis.Core
             if (input == null) throw new ArgumentNullException(nameof(input));
 
             string mode = input["mode"]?.ToString() ?? "auto";
-
-            // Keep all existing behavior untouched unless this is an explicit
-            // operator-resolved path where we can deterministically know the
-            // target MTRL for every row.
-            if (mode != "manualConsolidate" && mode != "manualPerLine")
-                return JarvisTools.ExecuteRegisterDrDocument(xSupport, input);
-
             int company = xSupport.ConnectionInfo.CompanyId;
             int trdrId = (int?)input["trdrId"] ?? 0;
             int sosource = (int?)input["sosource"] ?? 0;
@@ -84,10 +77,7 @@ namespace S1Jarvis.Core
 
                 int sodType = GetMtrlSodType(xSupport, company, targetMtrlId);
                 if (sodType != SodTypeExpense)
-                {
-                    // No expense target -> exact legacy behavior.
                     return JarvisTools.ExecuteRegisterDrDocument(xSupport, input);
-                }
 
                 containsExpense = true;
                 double totalQty = 0;
@@ -113,6 +103,10 @@ namespace S1Jarvis.Core
             }
             else
             {
+                // auto and manualPerLine both arrive here. In auto mode the
+                // supplier codes may already be resolved from CCCMAPITEMS due
+                // to a previous import. Do not throw that result back to the
+                // legacy registrar simply because the string mode is "auto".
                 foreach (JToken token in lineItems)
                 {
                     JObject line = token as JObject ?? new JObject();
@@ -144,9 +138,46 @@ namespace S1Jarvis.Core
                 }
 
                 if (!containsExpense)
-                {
-                    // Pure items/services -> exact legacy behavior.
                     return JarvisTools.ExecuteRegisterDrDocument(xSupport, input);
+
+                // For auto-resolved expenses, unresolved source lines are a
+                // blocker. Never silently create a partial/zero-value expense.
+                if (pendingLines.Count > 0)
+                    throw new Exception(
+                        $"Η αυτόματη καταχώρηση δαπάνης μπλοκαρίστηκε: {pendingLines.Count} γραμμές δεν έχουν resolved MTRL.");
+
+                if (mode == "auto")
+                {
+                    // If every resolved PDF line points to the same expense
+                    // MTRL, this is the learned equivalent of the approved
+                    // single-line precedent consolidation. Collapse it to one
+                    // LINLINES row and write only the summed LINEVAL.
+                    var distinctTargets = lines.Select(l => l.MtrlId).Distinct().ToList();
+                    bool allExpense = lines.Count > 0 && lines.All(l => l.SodType == SodTypeExpense);
+                    if (allExpense && distinctTargets.Count == 1)
+                    {
+                        int targetMtrlId = distinctTargets[0];
+                        double totalQty = lines.Sum(l => l.Qty);
+                        double totalValue = lines.Sum(l => l.LineVal ?? 0);
+                        var consolidated = new LineRow
+                        {
+                            MtrlId = targetMtrlId,
+                            SodType = SodTypeExpense,
+                            Qty = totalQty,
+                            Price = totalQty != 0 ? totalValue / totalQty : 0,
+                            LineVal = totalValue
+                        };
+                        CopyHistoryProfile(xSupport, company, trdrId, targetMtrlId, docNumber, consolidated.Extra);
+                        lines.Clear();
+                        lines.Add(consolidated);
+                        mode = "autoResolvedConsolidate";
+                    }
+                    else
+                    {
+                        // Multiple resolved targets: keep one Soft1 row per
+                        // source line. Expense rows still write LINEVAL only.
+                        mode = "autoResolvedPerLine";
+                    }
                 }
             }
 
@@ -206,8 +237,6 @@ namespace S1Jarvis.Core
                             findoc.Current["COMMENTS"] = fullDocIdentifier;
                             break;
                         case FincodeMode.AutoPrefixOnly:
-                            // Preserve the current DR behavior: the operator
-                            // completes the numeric part in the opened Soft1 form.
                             manualFincodeHint = docNumber;
                             break;
                         default:
@@ -221,9 +250,6 @@ namespace S1Jarvis.Core
                     lineTable.Add();
                     lineTable.Current["MTRL"] = line.MtrlId;
 
-                    // SODTYPE 53 expenses are value-only rows. Writing QTY1
-                    // and PRICE makes Soft1 recalculate/override the expense
-                    // value, so for expenses we deliberately set LINEVAL only.
                     if (line.SodType == SodTypeExpense)
                     {
                         if (!line.LineVal.HasValue)
@@ -232,7 +258,6 @@ namespace S1Jarvis.Core
                     }
                     else
                     {
-                        // Non-expense rows keep the established behavior.
                         lineTable.Current["QTY1"] = line.Qty;
                         lineTable.Current["PRICE"] = line.Price;
                     }
