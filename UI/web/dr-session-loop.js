@@ -2,6 +2,23 @@
   if(window.__jarvisDrSessionLoopInstalled)return;
   if(typeof renderDrEntryRow!=='function'||typeof renderDrFileList!=='function')return;
 
+  // Stable numeric contract for per-line recognition/mapping state.
+  // Multiples of 10 intentionally leave room for future intermediate states.
+  var DR_LINE_STATE={
+    Pending:0,
+    Extracted:10,
+    ExactMatched:20,
+    SupplierMapped:30,
+    Proposed:40,
+    ManualResolved:50,
+    NewItemCreated:60,
+    NeedsReview:70,
+    Blocked:80,
+    Ready:90,
+    Registered:100
+  };
+  window.DR_LINE_RECOGNITION_STATE=DR_LINE_STATE;
+
   var style=document.createElement('style');
   style.id='drSessionLoopStyle';
   style.textContent=`
@@ -33,6 +50,39 @@
   function docInfo(f){return f&&f.extraction&&f.extraction.document_info||{};}
   function totals(f){return f&&f.extraction&&f.extraction.totals||{};}
   function firstValue(obj,names){for(var i=0;i<names.length;i++){var v=obj&&obj[names[i]];if(v!==undefined&&v!==null&&String(v).trim()!=='')return v;}return '';}
+
+  function deriveLineState(f,line,index){
+    if(done(f))return DR_LINE_STATE.Registered;
+    if(f.registering)return DR_LINE_STATE.Ready;
+    if(f.registerError)return DR_LINE_STATE.Blocked;
+    if(!f.extraction)return DR_LINE_STATE.Pending;
+    if(!line)return DR_LINE_STATE.NeedsReview;
+    if(f.drCreatedItems&&f.drCreatedItems[index])return DR_LINE_STATE.NewItemCreated;
+    if(f.manualLineMtrlIds&&f.manualLineMtrlIds[index]!=null)return DR_LINE_STATE.ManualResolved;
+    if(line.matched){
+      var source=String(line.matchSource||line.match_source||line.matched.source||line.matched.matchSource||'').toLowerCase();
+      if(source.indexOf('supplier')>=0||source.indexOf('mtrsup')>=0)return DR_LINE_STATE.SupplierMapped;
+      return DR_LINE_STATE.ExactMatched;
+    }
+    if(line.proposed||line.candidates||line.matchProposal||line.match_proposal)return DR_LINE_STATE.Proposed;
+    return DR_LINE_STATE.Extracted;
+  }
+
+  function syncLineRecognitionStates(f){
+    if(!f)return {};
+    var lines=f.extraction&&Array.isArray(f.extraction.line_items)?f.extraction.line_items:[];
+    var states={};
+    for(var i=0;i<lines.length;i++)states[String(i)]=deriveLineState(f,lines[i],i);
+    f.lineRecognitionStates=states;
+    return states;
+  }
+
+  window.getDrLineRecognitionStates=function(documentOrId){
+    var f=documentOrId;
+    if(!f||typeof f!=='object')f=visibleFiles().find(function(x){return String(x.id)===String(documentOrId);});
+    return f?syncLineRecognitionStates(f):{};
+  };
+
   function completedTitle(f){
     var d=docInfo(f),r=f.registerResult||{};
     var number=firstValue(d,['number','document_number','invoice_number','fincode'])||r.fincode||('FINDOC #'+r.findocId);
@@ -78,6 +128,7 @@
 
   window.renderDrFileList=function(){
     var files=visibleFiles();
+    files.forEach(syncLineRecognitionStates);
     if(!files.length){baseRenderDrFileList();return;}
     var completed=files.filter(done);
     var active=chooseActive(files);
