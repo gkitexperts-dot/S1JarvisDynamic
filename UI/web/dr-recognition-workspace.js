@@ -13,6 +13,15 @@
   var style=document.createElement('style');
   style.id='drRecognitionWorkspaceStyle';
   style.textContent=`
+    /* The clarification assistant belongs to an active DocumentSession only. */
+    #drAssistantPanel{display:none}
+    .dr-session-chat-slot #drAssistantPanel{display:block!important}
+
+    /* Let the active document card size to its content. The curtain remains the
+       outer scrolling surface when the full workflow is taller than the view. */
+    #drFileList{max-height:none!important;overflow:visible!important}
+    .dr-session-active{min-height:clamp(460px,58vh,680px)}
+
     .dr-rec-workspace{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1.1fr);gap:8px;margin:0 0 9px}
     .dr-rec-card{border:1px solid rgba(255,255,255,.08);background:rgba(255,255,255,.025);border-radius:10px;padding:9px 10px;min-width:0}
     .dr-rec-card.full{grid-column:1/-1}.dr-rec-title{display:flex;align-items:center;justify-content:space-between;gap:8px;font-size:11px;font-weight:700;color:#d8d5ff;margin-bottom:7px}
@@ -24,7 +33,7 @@
     .dr-rec-line.warn{border-color:rgba(255,190,70,.22)}.dr-rec-line.block{border-color:rgba(255,107,107,.25)}.dr-rec-line.ok{border-color:rgba(76,201,138,.18)}
     .dr-rec-line-no{font-size:10px;color:#77778c;text-align:center}.dr-rec-line-main{min-width:0}.dr-rec-line-main strong{display:block;font-size:11px;color:#ecebf5;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.dr-rec-line-main small{display:block;font-size:9.5px;color:#85859a;margin-top:1px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
     .dr-rec-line-state{font-size:9.5px;padding:3px 6px;border-radius:999px;background:rgba(255,255,255,.06);color:#aaa9bd;white-space:nowrap}.dr-rec-line-state b{font-weight:700;color:#d8d5ff;margin-right:3px}
-    @media(max-width:900px){.dr-rec-workspace{grid-template-columns:1fr}.dr-rec-card.full{grid-column:auto}}
+    @media(max-width:900px){.dr-rec-workspace{grid-template-columns:1fr}.dr-rec-card.full{grid-column:auto}.dr-session-active{min-height:520px}}
   `;
   document.head.appendChild(style);
 
@@ -76,7 +85,7 @@
     return html+'</div></div>';
   }
   function validationCard(f){
-    var dup=f.duplicateCheck,reg=f.registerResult;
+    var dup=f.duplicateCheck;
     var blockers=[];
     if(dup&&dup.isDuplicate)blockers.push('Πιθανό duplicate');
     if(f.ambiguous)blockers.push('Αμφίσημος συναλλασσόμενος');
