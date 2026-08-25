@@ -447,9 +447,48 @@ namespace S1Jarvis.Core
 
         private static double ParseNumber(JToken token)
         {
-            if (token == null) return 0;
-            string value = token.ToString().Replace(",", ".").Trim();
-            return double.TryParse(value, NumberStyles.Any, CultureInfo.InvariantCulture, out double parsed)
+            if (token == null || token.Type == JTokenType.Null) return 0;
+
+            // JSON numeric tokens are already culture-independent and should
+            // never be reparsed through a formatted string.
+            if (token.Type == JTokenType.Integer || token.Type == JTokenType.Float)
+                return token.Value<double>();
+
+            string value = token.ToString().Trim()
+                .Replace("\u00A0", "")
+                .Replace(" ", "");
+            if (string.IsNullOrEmpty(value)) return 0;
+
+            int lastComma = value.LastIndexOf(',');
+            int lastDot = value.LastIndexOf('.');
+
+            // Both separators present: the right-most one is the decimal
+            // separator and all earlier occurrences are grouping separators.
+            // Examples: 5.186,00 -> 5186.00, 5,186.00 -> 5186.00.
+            if (lastComma >= 0 && lastDot >= 0)
+            {
+                char decimalSeparator = lastComma > lastDot ? ',' : '.';
+                char groupingSeparator = decimalSeparator == ',' ? '.' : ',';
+                value = value.Replace(groupingSeparator.ToString(), "");
+                if (decimalSeparator == ',') value = value.Replace(',', '.');
+            }
+            else if (lastComma >= 0)
+            {
+                // A lone comma is treated as decimal separator. This covers
+                // Greek values such as 0,03690 and 122,00.
+                value = value.Replace(',', '.');
+            }
+            else if (lastDot >= 0)
+            {
+                // A lone dot is ambiguous. If it forms a classic grouping
+                // pattern (1.234 / 12.345 / 1.234.567), treat it as thousands;
+                // otherwise keep it as the invariant decimal separator.
+                if (Regex.IsMatch(value, @"^[+-]?\d{1,3}(\.\d{3})+$"))
+                    value = value.Replace(".", "");
+            }
+
+            return double.TryParse(value, NumberStyles.Float | NumberStyles.AllowLeadingSign,
+                CultureInfo.InvariantCulture, out double parsed)
                 ? parsed
                 : 0;
         }
