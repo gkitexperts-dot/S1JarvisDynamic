@@ -134,6 +134,23 @@ namespace S1Jarvis.UI
 
                 string result = await Task.Run(() => DrExpenseDocumentRegistrar.Register(_xSupport, cmd));
                 JObject parsed = JObject.Parse(result);
+
+                // Every successful DR-created FINDOC is marked after the normal
+                // business-object registration, regardless of whether the actual
+                // posting path was expense-aware or the established purchase/
+                // service registrar. Audit failure never invalidates a document
+                // that has already been posted; it is returned/logged separately.
+                if ((bool?)parsed["success"] == true && (int?)parsed["findocId"] > 0)
+                {
+                    string auditError;
+                    bool auditMarked = await Task.Run(() =>
+                        DrDocumentAuditMarker.TryMark(_xSupport, cmd, parsed, out auditError));
+                    parsed["jarvisAuditMarked"] = auditMarked;
+                    parsed["jarvisFlowVersion"] = DrDocumentAuditMarker.FlowVersion;
+                    if (!auditMarked && !string.IsNullOrWhiteSpace(auditError))
+                        parsed["jarvisAuditError"] = auditError;
+                }
+
                 parsed["type"] = "dr_register_document_result";
                 parsed["fileId"] = fileId;
                 webView.CoreWebView2.PostWebMessageAsString(parsed.ToString(Formatting.None));
