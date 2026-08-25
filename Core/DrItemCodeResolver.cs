@@ -231,7 +231,7 @@ namespace S1Jarvis.Core
             {
                 case 51: return "ITEM";
                 case 52: return "SERVICE";
-                case 53: return "EXPENSE";
+                case 53: return "LINEITEM";
                 default: throw new Exception("Unsupported MTRL SODTYPE " + sodtype + ".");
             }
         }
