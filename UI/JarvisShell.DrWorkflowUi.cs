@@ -59,6 +59,7 @@ namespace S1Jarvis.UI
         {
             await ExecuteEmbeddedDrScriptAsync("S1Jarvis.web.dr-workflow-enhancements.js");
             await ExecuteEmbeddedDrScriptAsync("S1Jarvis.web.dr-session-loop.js");
+            await ExecuteEmbeddedDrScriptAsync("S1Jarvis.web.dr-recognition-workspace.js");
         }
 
         private async Task ExecuteEmbeddedDrScriptAsync(string resourceName)
