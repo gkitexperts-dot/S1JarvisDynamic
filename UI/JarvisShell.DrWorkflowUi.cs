@@ -57,11 +57,17 @@ namespace S1Jarvis.UI
 
         private async Task InstallDrWorkflowUiAsync()
         {
+            await ExecuteEmbeddedDrScriptAsync("S1Jarvis.web.dr-workflow-enhancements.js");
+            await ExecuteEmbeddedDrScriptAsync("S1Jarvis.web.dr-session-loop.js");
+        }
+
+        private async Task ExecuteEmbeddedDrScriptAsync(string resourceName)
+        {
             var asm = Assembly.GetExecutingAssembly();
-            using (Stream stream = asm.GetManifestResourceStream("S1Jarvis.web.dr-workflow-enhancements.js"))
+            using (Stream stream = asm.GetManifestResourceStream(resourceName))
             {
                 if (stream == null)
-                    throw new InvalidOperationException("Missing embedded DR workflow enhancement script.");
+                    throw new InvalidOperationException("Missing embedded DR workflow script: " + resourceName);
                 using (var reader = new StreamReader(stream))
                 {
                     string script = await reader.ReadToEndAsync();
