@@ -21,8 +21,12 @@
     f.autoIdentifyStarted=true;f.status='processing';f.statusText='Αναγνώριση';f.detail='Αναγνώριση header και εκδότη…';rerender(f);
     try{
       var result=await identifyDrFile(f);applyDrIssuerResult(f,result);f.autoIdentifyFinished=true;
-      // Legacy lookup can return an arbitrary AFM role. Clear its posting hints;
-      // the multi-role resolver below is authoritative for the next steps.
+      // Legacy AFM lookup is not authoritative because one AFM may exist in
+      // multiple TRDR roles. Clear every legacy trader/posting decision and
+      // wait for the deterministic multi-role resolver before proceeding.
+      f.legacyTraderId=f.trdrId||null;
+      f.trdrId=null;f.trader=null;f.traderName=null;f.sodType=0;f.objectName=null;
+      f.notFound=false;f.ambiguous=false;f.traderRoleAmbiguous=false;
       f.seriesGuess=null;f.seriesCandidates=[];f.duplicateCheck=null;f.postingProposal=null;f.documentPattern=null;
       f.traderRolesResolved=false;f.traderRolesRequested=false;requestTraderRoles(f);
     }catch(err){f.status='error';f.statusText='Σφάλμα';f.detail=String(err&&err.message||err);}
