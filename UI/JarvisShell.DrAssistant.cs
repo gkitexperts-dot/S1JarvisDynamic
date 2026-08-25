@@ -360,7 +360,7 @@ namespace S1Jarvis.UI
 
   var panel=document.createElement('details');
   panel.id='drAssistantPanel';
-  panel.innerHTML='<summary>💬 Διευκρινίσεις DR</summary><div class="dr-assistant-body"><div class="dr-assistant-log" id="drAssistantLog"></div><div class="dr-assistant-compose"><textarea id="drAssistantInput" placeholder="Ρώτησε ή απάντησε σε διευκρίνιση για το τρέχον παραστατικό…"></textarea><button type="button" id="drAssistantSend">Αποστολή</button></div></div>';
+  panel.innerHTML=`<summary>💬 Διευκρινίσεις DR</summary><div class='dr-assistant-body'><div class='dr-assistant-log' id='drAssistantLog'></div><div class='dr-assistant-compose'><textarea id='drAssistantInput' placeholder='Ρώτησε ή απάντησε σε διευκρίνιση για το τρέχον παραστατικό…'></textarea><button type='button' id='drAssistantSend'>Αποστολή</button></div></div>`;
   host.appendChild(panel);
 
   var log=document.getElementById('drAssistantLog');
