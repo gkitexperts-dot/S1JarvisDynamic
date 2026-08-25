@@ -14,9 +14,7 @@ namespace S1Jarvis.UI
 
         private static bool RegisterDrRecognitionFlowClassHandler()
         {
-            EventManager.RegisterClassHandler(
-                typeof(JarvisShell),
-                FrameworkElement.LoadedEvent,
+            EventManager.RegisterClassHandler(typeof(JarvisShell), FrameworkElement.LoadedEvent,
                 new RoutedEventHandler(JarvisShell_DrRecognitionFlowLoaded));
             return true;
         }
@@ -49,47 +47,28 @@ namespace S1Jarvis.UI
             }
         }
 
-        private async void DrRecognitionFlow_WebMessageReceived(
-            object sender,
+        private async void DrRecognitionFlow_WebMessageReceived(object sender,
             Microsoft.Web.WebView2.Core.CoreWebView2WebMessageReceivedEventArgs e)
         {
             JObject cmd;
-            try
-            {
-                string raw = e.TryGetWebMessageAsString();
-                cmd = JObject.Parse(raw);
-            }
-            catch
-            {
-                return;
-            }
+            try { cmd = JObject.Parse(e.TryGetWebMessageAsString()); }
+            catch { return; }
 
             string commandType = (string)cmd["type"];
             if (!string.Equals(commandType, "dr_resolve_document_pattern", StringComparison.Ordinal) &&
-                !string.Equals(commandType, "dr_analyze_posting", StringComparison.Ordinal))
-                return;
+                !string.Equals(commandType, "dr_analyze_posting", StringComparison.Ordinal)) return;
 
             string fileId = cmd["fileId"]?.ToString();
             try
             {
                 int trdrId = (int?)cmd["trdrId"] ?? 0;
-                int series = (int?)cmd["series"] ?? 0;
-                int sosource = (int?)cmd["sosource"] ?? 0;
                 int sourceLineCount = (int?)cmd["sourceLineCount"] ?? 0;
                 string documentType = cmd["documentType"]?.ToString();
                 string documentSeries = cmd["documentSeries"]?.ToString();
-                string documentNumber = cmd["documentNumber"]?.ToString();
 
                 JObject result = await Task.Run(() =>
-                    DrPostingProposal.ResolveDocumentPattern(
-                        _xSupport,
-                        trdrId,
-                        series,
-                        sosource,
-                        documentType,
-                        documentSeries,
-                        documentNumber,
-                        sourceLineCount));
+                    DrDocumentPatternResolver.Resolve(
+                        _xSupport, trdrId, documentType, documentSeries, sourceLineCount));
 
                 result["type"] = "dr_document_pattern_result";
                 result["fileId"] = fileId;
@@ -104,6 +83,7 @@ namespace S1Jarvis.UI
                     ["fileId"] = fileId,
                     ["success"] = false,
                     ["resolver"] = "resolve_document_pattern",
+                    ["version"] = 3,
                     ["mode"] = "Unknown",
                     ["needsReview"] = true,
                     ["reason"] = "pattern_resolution_failed",
