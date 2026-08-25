@@ -45,41 +45,49 @@ namespace S1Jarvis.UI
             catch (Exception ex) { DebugLog.Log("[dr-recognition-flow] startup EXCEPTION: " + ex); }
         }
 
-        // Keep the legacy UI untouched, but route the final DR write command to
-        // this partial. Non-expense registrations are delegated unchanged to
-        // JarvisTools; expense registrations use DrExpenseDocumentRegistrar so
-        // LINLINES.LINEVAL is set inside the same Soft1 XModule transaction.
+        // Route every final DR write command through the V2 handler. The bridge
+        // is registered for every new WebView document, because a navigation or
+        // reload destroys any wrapper that was installed only in the previous
+        // page. The small polling loop waits until index.html has defined
+        // postCommand and then wraps the current function exactly once.
         private async Task InstallDrRegistrationV2BridgeAsync()
         {
-            const string script = @"
+            const string persistentScript = @"
 (function(){
-  if(window.__jarvisDrRegistrationV2Installed)return true;
-  var original=window.postCommand;
-  if(typeof original!=='function')return false;
-  window.postCommand=function(payload){
-    if(payload&&payload.type==='dr_register_document'){
-      var copy=Object.assign({},payload);
-      copy.type='dr_register_document_v2';
-      return original(copy);
-    }
-    return original(payload);
-  };
-  window.__jarvisDrRegistrationV2Installed=true;
-  return true;
+  function install(){
+    var current=window.postCommand;
+    if(typeof current!=='function')return false;
+    if(current.__jarvisDrRegistrationV2Wrapper===true)return true;
+    var original=current;
+    var wrapped=function(payload){
+      if(payload&&payload.type==='dr_register_document'){
+        var copy=Object.assign({},payload);
+        copy.type='dr_register_document_v2';
+        return original(copy);
+      }
+      return original(payload);
+    };
+    wrapped.__jarvisDrRegistrationV2Wrapper=true;
+    wrapped.__jarvisDrRegistrationV2Original=original;
+    window.postCommand=wrapped;
+    return true;
+  }
+  if(install())return;
+  var attempts=0;
+  var timer=setInterval(function(){
+    attempts++;
+    if(install()||attempts>=240)clearInterval(timer);
+  },50);
 })();";
 
             try
             {
-                // Loaded can fire before index.html has defined postCommand.
-                // Retry briefly instead of installing a dead wrapper once.
-                for (int attempt = 0; attempt < 120; attempt++)
-                {
-                    string result = await webView.CoreWebView2.ExecuteScriptAsync(script);
-                    if (string.Equals(result, "true", StringComparison.OrdinalIgnoreCase))
-                        return;
-                    await Task.Delay(50);
-                }
-                DebugLog.Log("[dr-recognition-flow] registration-v2 bridge timed out waiting for postCommand.");
+                // Persist across future navigations/reloads.
+                await webView.CoreWebView2.AddScriptToExecuteOnDocumentCreatedAsync(persistentScript);
+
+                // Also patch the document that is already loaded now.
+                await webView.CoreWebView2.ExecuteScriptAsync(persistentScript);
+                DebugLog.Log("[dr-recognition-flow] registration-v2 persistent bridge installed.");
             }
             catch (Exception ex)
             {
