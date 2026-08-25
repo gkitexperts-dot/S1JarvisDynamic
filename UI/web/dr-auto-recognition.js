@@ -22,7 +22,7 @@
     if(!f||!f.file||f.extraction||f.linesExtracting||f.autoExtractStarted)return;
     if(f.status!=='identified'||!f.trdrId)return;
     var dup=f.duplicateCheck;if(dup&&(dup.found||dup.isDuplicate)){f.autoFlowBlocked='duplicate';rerender(f);return;}
-    f.autoExtractStarted=true;f.linesExtracting=true;f.linesError=null;f.detail='Εξαγωγή γραμμών παραστατικού…';rerender(f);
+    f.autoExtractStarted=true;f.linesExtracting=true;f.linesError=null;f.detail='Πλήρης ανάγνωση παραστατικού και εξαγωγή γραμμών…';rerender(f);
     try{
       var base64=await fileToBase64(f.file);
       postCommand({type:'dr_extract_lines',fileId:String(f.id),base64:base64,mimeType:f.file.type||'application/octet-stream',trdrId:f.trdrId});
@@ -33,34 +33,52 @@
     if(f.seriesGuess&&f.seriesGuess.series&&f.seriesGuess.sosource)return {series:Number(f.seriesGuess.series),sosource:Number(f.seriesGuess.sosource)};
     var c=f.seriesCandidates||[];
     if(c.length===1&&c[0].series&&c[0].sosource)return {series:Number(c[0].series),sosource:Number(c[0].sosource)};
-    return null;
+    return {series:0,sosource:0};
+  }
+
+  function extractionDocInfo(f){
+    var ex=f&&f.extraction||{},d=ex.document_info||{},det=f&&f.detection||{};
+    return {
+      type:d.type||d.document_type||det.docType||'',
+      series:d.series||d.document_series||det.docSeries||'',
+      number:d.number||d.document_number||det.docNumber||''
+    };
   }
 
   function analyzePosting(f){
     if(!f||!f.extraction||!f.trdrId||f.postingProposal||f.postingProposalRequested)return;
-    var coord=postingCoordinates(f);
-    if(!coord){
-      f.postingProposal={success:true,mode:'Unknown',needsReview:true,reason:'series_selection_required',sourceLineCount:(f.extraction.line_items||[]).length};
-      rerender(f);return;
-    }
+    var coord=postingCoordinates(f),doc=extractionDocInfo(f),lines=f.extraction.line_items||[];
     f.postingProposalRequested=true;
-    postCommand({type:'dr_analyze_posting',fileId:String(f.id),trdrId:Number(f.trdrId),series:coord.series,sosource:coord.sosource,sourceLineCount:(f.extraction.line_items||[]).length});
+    f.postingProposal={success:true,resolver:'resolve_document_pattern',version:2,mode:'Unknown',needsReview:true,reason:'resolving_historical_pattern',sourceLineCount:lines.length};
+    rerender(f);
+    postCommand({
+      type:'dr_resolve_document_pattern',
+      fileId:String(f.id),
+      trdrId:Number(f.trdrId),
+      series:coord.series,
+      sosource:coord.sosource,
+      documentType:doc.type,
+      documentSeries:doc.series,
+      documentNumber:doc.number,
+      sourceLineCount:lines.length
+    });
   }
 
   async function tick(){
     var f=active();if(!f)return;
     if(f.status==='pending'){await identify(f);return;}
     if(f.status==='identified'&&!f.extraction&&!f.linesExtracting){await extract(f);return;}
-    if(f.extraction&&!f.postingProposal)analyzePosting(f);
+    if(f.extraction&&!f.postingProposalRequested&&(!f.postingProposal||f.postingProposal.reason==='resolving_historical_pattern'))analyzePosting(f);
   }
 
   if(window.chrome&&window.chrome.webview){
     window.chrome.webview.addEventListener('message',function(ev){
       var p=ev.data;try{if(typeof p==='string')p=JSON.parse(p);}catch(_e){return;}
-      if(!p||p.type!=='dr_posting_proposal_result')return;
+      if(!p||(p.type!=='dr_document_pattern_result'&&p.type!=='dr_posting_proposal_result'))return;
       var f=files().find(function(x){return String(x.id)===String(p.fileId);});if(!f)return;
-      f.postingProposalRequested=false;f.postingProposal=p;rerender(f);
+      f.postingProposalRequested=false;f.postingProposal=p;f.documentPattern=p;rerender(f);
       if(typeof window.refreshDrRecognitionWorkspace==='function')setTimeout(window.refreshDrRecognitionWorkspace,0);
+      if(typeof window.refreshDrPostingProposalUi==='function')setTimeout(window.refreshDrPostingProposalUi,0);
     });
   }
 
