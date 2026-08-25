@@ -62,6 +62,12 @@ namespace S1Jarvis.UI
                 return;
             }
 
+            if (string.Equals(commandType, "dr_select_precedent", StringComparison.Ordinal))
+            {
+                await HandleDrSelectPrecedentAsync(cmd);
+                return;
+            }
+
             if (!string.Equals(commandType, "dr_resolve_document_pattern", StringComparison.Ordinal) &&
                 !string.Equals(commandType, "dr_analyze_posting", StringComparison.Ordinal)) return;
 
@@ -95,6 +101,39 @@ namespace S1Jarvis.UI
                     ["needsReview"] = true,
                     ["reason"] = "pattern_resolution_failed",
                     ["errorMessage"] = ex.Message
+                }.ToString(Formatting.None));
+            }
+        }
+
+        private async Task HandleDrSelectPrecedentAsync(JObject cmd)
+        {
+            string fileId = cmd["fileId"]?.ToString();
+            try
+            {
+                int trdrId = (int?)cmd["trdrId"] ?? 0;
+                int findocId = (int?)cmd["findocId"] ?? 0;
+                JObject result = await Task.Run(() =>
+                    DrPrecedentResolver.Resolve(_xSupport, trdrId, findocId));
+
+                result["type"] = "dr_precedent_result";
+                result["fileId"] = fileId;
+                result["operatorSelected"] = true;
+                webView.CoreWebView2.PostWebMessageAsString(result.ToString(Formatting.None));
+            }
+            catch (Exception ex)
+            {
+                DebugLog.Log("[dr-recognition-flow] select_precedent EXCEPTION: " + ex);
+                webView.CoreWebView2.PostWebMessageAsString(new JObject
+                {
+                    ["type"] = "dr_precedent_result",
+                    ["fileId"] = fileId,
+                    ["success"] = false,
+                    ["resolver"] = "resolve_historical_precedent",
+                    ["version"] = 1,
+                    ["operatorSelected"] = true,
+                    ["reason"] = "precedent_resolution_failed",
+                    ["errorMessage"] = ex.Message,
+                    ["lines"] = new JArray()
                 }.ToString(Formatting.None));
             }
         }
