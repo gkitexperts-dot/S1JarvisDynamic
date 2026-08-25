@@ -36,12 +36,44 @@ namespace S1Jarvis.UI
                     if (webView != null && webView.CoreWebView2 != null)
                     {
                         webView.CoreWebView2.WebMessageReceived += DrRecognitionFlow_WebMessageReceived;
+                        await InstallDrRegistrationV2BridgeAsync();
                         return;
                     }
                     await Task.Delay(50);
                 }
             }
             catch (Exception ex) { DebugLog.Log("[dr-recognition-flow] startup EXCEPTION: " + ex); }
+        }
+
+        // Keep the legacy UI untouched, but route the final DR write command to
+        // this partial. Non-expense registrations are delegated unchanged to
+        // JarvisTools; expense registrations use DrExpenseDocumentRegistrar so
+        // LINLINES.LINEVAL is set inside the same Soft1 XModule transaction.
+        private async Task InstallDrRegistrationV2BridgeAsync()
+        {
+            try
+            {
+                const string script = @"
+(function(){
+  if(window.__jarvisDrRegistrationV2Installed)return;
+  window.__jarvisDrRegistrationV2Installed=true;
+  var original=window.postCommand;
+  if(typeof original!=='function')return;
+  window.postCommand=function(payload){
+    if(payload&&payload.type==='dr_register_document'){
+      var copy=Object.assign({},payload);
+      copy.type='dr_register_document_v2';
+      return original(copy);
+    }
+    return original(payload);
+  };
+})();";
+                await webView.CoreWebView2.ExecuteScriptAsync(script);
+            }
+            catch (Exception ex)
+            {
+                DebugLog.Log("[dr-recognition-flow] registration-v2 bridge EXCEPTION: " + ex);
+            }
         }
 
         private async void DrRecognitionFlow_WebMessageReceived(object sender,
@@ -52,6 +84,10 @@ namespace S1Jarvis.UI
             catch { return; }
 
             string commandType = (string)cmd["type"];
+            if (string.Equals(commandType, "dr_register_document_v2", StringComparison.Ordinal))
+            {
+                await HandleDrRegisterDocumentV2Async(cmd); return;
+            }
             if (string.Equals(commandType, "dr_resolve_line_mappings", StringComparison.Ordinal))
             {
                 await HandleDrResolveLineMappingsAsync(cmd); return;
@@ -89,6 +125,43 @@ namespace S1Jarvis.UI
                     ["success"] = false, ["resolver"] = "resolve_document_pattern", ["version"] = 4,
                     ["mode"] = "Unknown", ["needsReview"] = true, ["reason"] = "pattern_resolution_failed",
                     ["errorMessage"] = ex.Message
+                }.ToString(Formatting.None));
+            }
+        }
+
+        private async Task HandleDrRegisterDocumentV2Async(JObject cmd)
+        {
+            string fileId = cmd?["fileId"]?.ToString();
+            try
+            {
+                string result = await Task.Run(() => DrExpenseDocumentRegistrar.Register(_xSupport, cmd));
+                JObject parsed = JObject.Parse(result);
+                parsed["type"] = "dr_register_document_result";
+                parsed["fileId"] = fileId;
+                webView.CoreWebView2.PostWebMessageAsString(parsed.ToString(Formatting.None));
+
+                if ((bool?)parsed["success"] == true && (int?)parsed["findocId"] > 0)
+                {
+                    int sosource = (int?)parsed["sosource"] ?? (int?)cmd["sosource"] ?? 0;
+                    int findocId = (int)parsed["findocId"];
+                    try
+                    {
+                        JarvisTools.ExecuteOpenDocument(_xSupport,
+                            new JObject { ["sosource"] = sosource, ["mode"] = "locate", ["id"] = findocId });
+                    }
+                    catch (Exception openEx)
+                    {
+                        DebugLog.Log("[dr-recognition-flow] registration-v2 auto-open EXCEPTION: " + openEx);
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                DebugLog.Log("[dr-recognition-flow] register_document_v2 EXCEPTION: " + ex);
+                webView.CoreWebView2.PostWebMessageAsString(new JObject
+                {
+                    ["type"] = "dr_register_document_result", ["fileId"] = fileId,
+                    ["success"] = false, ["errorMessage"] = ex.Message
                 }.ToString(Formatting.None));
             }
         }
