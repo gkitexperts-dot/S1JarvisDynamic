@@ -16,12 +16,12 @@ namespace S1Jarvis.Core
     /// The legacy JarvisTools.ExecuteRegisterDrDocument remains the source of
     /// truth for every non-expense registration. This class takes over only
     /// explicit manualConsolidate/manualPerLine registrations whose resolved
-    /// target contains SODTYPE 53, because LINLINES expenses require an
-    /// explicit LINEVAL in addition to QTY1/PRICE.
+    /// target contains SODTYPE 53.
     ///
     /// Rules:
-    /// - consolidated expense: one LINLINES row, LINEVAL = Σ(qty * unitPrice)
+    /// - consolidated expense: one LINLINES row, LINEVAL = sum(qty * unitPrice)
     /// - per-line expense: LINEVAL = qty * unitPrice on each expense row
+    /// - expense rows do NOT write QTY1 or PRICE; Soft1 receives value only
     /// - SODTYPE 52 service rows never receive LINEVAL from this rule
     /// - all writes go through Soft1 XModule/XTable; no raw SQL UPDATE
     /// </summary>
@@ -220,13 +220,22 @@ namespace S1Jarvis.Core
                 {
                     lineTable.Add();
                     lineTable.Current["MTRL"] = line.MtrlId;
-                    lineTable.Current["QTY1"] = line.Qty;
-                    lineTable.Current["PRICE"] = line.Price;
 
-                    // Critical rule requested for expenses. Do not use table
-                    // name alone: both SODTYPE 52 and 53 live in LINLINES.
-                    if (line.SodType == SodTypeExpense && line.LineVal.HasValue)
+                    // SODTYPE 53 expenses are value-only rows. Writing QTY1
+                    // and PRICE makes Soft1 recalculate/override the expense
+                    // value, so for expenses we deliberately set LINEVAL only.
+                    if (line.SodType == SodTypeExpense)
+                    {
+                        if (!line.LineVal.HasValue)
+                            throw new Exception($"Λείπει LINEVAL για δαπάνη MTRL={line.MtrlId}.");
                         lineTable.Current["LINEVAL"] = line.LineVal.Value;
+                    }
+                    else
+                    {
+                        // Non-expense rows keep the established behavior.
+                        lineTable.Current["QTY1"] = line.Qty;
+                        lineTable.Current["PRICE"] = line.Price;
+                    }
 
                     foreach (var kv in line.Extra)
                     {
@@ -246,7 +255,7 @@ namespace S1Jarvis.Core
 
                 DebugLog.Log(
                     $"[dr-expense-register] OK findoc={findocId} mode={mode} lines={lines.Count} " +
-                    $"expenseLineVal={expenseLineVal.ToString(CultureInfo.InvariantCulture)}");
+                    $"expenseLineVal={expenseLineVal.ToString(CultureInfo.InvariantCulture)} valueOnlyExpenses=true");
 
                 return JsonConvert.SerializeObject(new
                 {
@@ -259,6 +268,7 @@ namespace S1Jarvis.Core
                     pendingLines,
                     manualFincodeHint,
                     expenseLineValApplied = true,
+                    expenseValueOnly = true,
                     expenseLineVal
                 });
             }
