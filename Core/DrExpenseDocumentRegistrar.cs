@@ -103,10 +103,6 @@ namespace S1Jarvis.Core
             }
             else
             {
-                // auto and manualPerLine both arrive here. In auto mode the
-                // supplier codes may already be resolved from CCCMAPITEMS due
-                // to a previous import. Do not throw that result back to the
-                // legacy registrar simply because the string mode is "auto".
                 foreach (JToken token in lineItems)
                 {
                     JObject line = token as JObject ?? new JObject();
@@ -140,18 +136,12 @@ namespace S1Jarvis.Core
                 if (!containsExpense)
                     return JarvisTools.ExecuteRegisterDrDocument(xSupport, input);
 
-                // For auto-resolved expenses, unresolved source lines are a
-                // blocker. Never silently create a partial/zero-value expense.
                 if (pendingLines.Count > 0)
                     throw new Exception(
                         $"Η αυτόματη καταχώρηση δαπάνης μπλοκαρίστηκε: {pendingLines.Count} γραμμές δεν έχουν resolved MTRL.");
 
                 if (mode == "auto")
                 {
-                    // If every resolved PDF line points to the same expense
-                    // MTRL, this is the learned equivalent of the approved
-                    // single-line precedent consolidation. Collapse it to one
-                    // LINLINES row and write only the summed LINEVAL.
                     var distinctTargets = lines.Select(l => l.MtrlId).Distinct().ToList();
                     bool allExpense = lines.Count > 0 && lines.All(l => l.SodType == SodTypeExpense);
                     if (allExpense && distinctTargets.Count == 1)
@@ -174,8 +164,6 @@ namespace S1Jarvis.Core
                     }
                     else
                     {
-                        // Multiple resolved targets: keep one Soft1 row per
-                        // source line. Expense rows still write LINEVAL only.
                         mode = "autoResolvedPerLine";
                     }
                 }
@@ -217,19 +205,6 @@ namespace S1Jarvis.Core
                 module.InsertData();
                 findoc.Current["TRDR"] = trdrId;
                 findoc.Current["SERIES"] = series;
-
-                // LINSUPDOC handwritten-series rule:
-                // only for the exact SERIES of the exact SOSOURCE being posted.
-                // If HANDMD is enabled, copy SERIES.CODE returned by Soft1 into
-                // CMPFINCODE. If HANDMD is not enabled, leave CMPFINCODE alone
-                // so Soft1 can derive/populate it from its own series logic.
-                if (string.Equals(objectName, "LINSUPDOC", StringComparison.OrdinalIgnoreCase))
-                {
-                    string handwrittenSeriesCode = GetHandwrittenSeriesCode(
-                        xSupport, company, series, sosource);
-                    if (!string.IsNullOrWhiteSpace(handwrittenSeriesCode))
-                        findoc.Current["CMPFINCODE"] = handwrittenSeriesCode;
-                }
 
                 DateTime? docDate = ParseDate(docDateRaw);
                 if (docDate.HasValue)
@@ -345,27 +320,6 @@ namespace S1Jarvis.Core
             if (t == null || t.Count == 0 || t.Current["SODTYPE"] == DBNull.Value)
                 return 0;
             return Convert.ToInt32(t.Current["SODTYPE"]);
-        }
-
-        private static string GetHandwrittenSeriesCode(
-            XSupport xSupport,
-            int company,
-            int series,
-            int sosource)
-        {
-            if (series <= 0 || sosource <= 0) return null;
-            XTable t = xSupport.GetSQLDataSet(
-                "SELECT TOP 1 CODE,HANDMD FROM SERIES " +
-                "WHERE COMPANY=:1 AND SERIES=:2 AND SOSOURCE=:3",
-                company, series, sosource);
-            if (t == null || t.Count == 0) return null;
-
-            object handmdRaw = t.Current["HANDMD"];
-            bool handwritten = handmdRaw != null && handmdRaw != DBNull.Value && Convert.ToInt32(handmdRaw) != 0;
-            if (!handwritten) return null;
-
-            object codeRaw = t.Current["CODE"];
-            return codeRaw == null || codeRaw == DBNull.Value ? null : Convert.ToString(codeRaw);
         }
 
         private static void CopyHistoryProfile(
@@ -486,8 +440,6 @@ namespace S1Jarvis.Core
         {
             if (token == null || token.Type == JTokenType.Null) return 0;
 
-            // JSON numeric tokens are already culture-independent and should
-            // never be reparsed through a formatted string.
             if (token.Type == JTokenType.Integer || token.Type == JTokenType.Float)
                 return token.Value<double>();
 
@@ -499,9 +451,6 @@ namespace S1Jarvis.Core
             int lastComma = value.LastIndexOf(',');
             int lastDot = value.LastIndexOf('.');
 
-            // Both separators present: the right-most one is the decimal
-            // separator and all earlier occurrences are grouping separators.
-            // Examples: 5.186,00 -> 5186.00, 5,186.00 -> 5186.00.
             if (lastComma >= 0 && lastDot >= 0)
             {
                 char decimalSeparator = lastComma > lastDot ? ',' : '.';
@@ -511,15 +460,10 @@ namespace S1Jarvis.Core
             }
             else if (lastComma >= 0)
             {
-                // A lone comma is treated as decimal separator. This covers
-                // Greek values such as 0,03690 and 122,00.
                 value = value.Replace(',', '.');
             }
             else if (lastDot >= 0)
             {
-                // A lone dot is ambiguous. If it forms a classic grouping
-                // pattern (1.234 / 12.345 / 1.234.567), treat it as thousands;
-                // otherwise keep it as the invariant decimal separator.
                 if (Regex.IsMatch(value, @"^[+-]?\d{1,3}(\.\d{3})+$"))
                     value = value.Replace(".", "");
             }
@@ -530,14 +474,6 @@ namespace S1Jarvis.Core
                 : 0;
         }
 
-        /// <summary>
-        /// Soft1's XDll/XTable string setter crosses an ANSI boundary in this
-        /// installation. A normal Unicode Greek string is converted through a
-        /// Western code page and Greek characters become '?'. Preserve the
-        /// Windows-1253 bytes by carrying them through Windows-1252 characters;
-        /// the Soft1 side then receives the exact Greek ANSI byte sequence.
-        /// ASCII characters are unchanged by this conversion.
-        /// </summary>
         private static string ToSoft1GreekAnsi(string value)
         {
             if (string.IsNullOrEmpty(value)) return value;
