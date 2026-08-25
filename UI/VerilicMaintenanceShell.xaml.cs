@@ -29,10 +29,67 @@ namespace S1Jarvis.UI
             RefreshState();
         }
 
+        private void ImportFromVerilic_Click(object sender, RoutedEventArgs e)
+        {
+            string provisioningCode =
+                provisioningCodeTextBox.Text == null
+                    ? string.Empty
+                    : provisioningCodeTextBox.Text.Trim();
+
+            if (string.IsNullOrWhiteSpace(provisioningCode))
+            {
+                resultText.Text = "Enter the provisioning code issued with the Verilic licence.";
+                return;
+            }
+
+            MessageBoxResult confirmation = MessageBox.Show(
+                "Import the non-secret S1 Jarvis licensing configuration from Verilic? This does not activate the installation and does not download keys, proofs or tokens.",
+                "Verilic licensing",
+                MessageBoxButton.YesNo,
+                MessageBoxImage.Question);
+
+            if (confirmation != MessageBoxResult.Yes)
+                return;
+
+            importFromVerilicButton.IsEnabled = false;
+            try
+            {
+                var client = new VerilicProvisioningClient();
+                VerilicProvisioningImportResult imported =
+                    client.Import(provisioningCode);
+
+                if (imported == null || !imported.Success || imported.Configuration == null)
+                {
+                    resultText.Text =
+                        "Verilic provisioning denied (" +
+                        SafeProvisioningReason(imported == null ? null : imported.ReasonCode) +
+                        ").";
+                    return;
+                }
+
+                VerilicRuntimeConfiguration.ValidateLocalConfiguration(imported.Configuration);
+                VerilicLocalConfigurationStore.Save(imported.Configuration);
+
+                provisioningCodeTextBox.Clear();
+                RefreshState();
+                resultText.Text =
+                    "Verilic configuration imported successfully. Activation can now be started for products that have licence references.";
+            }
+            catch
+            {
+                resultText.Text =
+                    "Verilic provisioning failed. No local configuration was written.";
+            }
+            finally
+            {
+                importFromVerilicButton.IsEnabled = true;
+            }
+        }
+
         private void ImportUserConfiguration_Click(object sender, RoutedEventArgs e)
         {
             MessageBoxResult confirmation = MessageBox.Show(
-                "Import the non-secret Verilic configuration from this Windows user's saved environment settings? This writes only runtime identifiers and settings to the local S1Jarvis Verilic configuration file. It never imports keys, proofs or tokens.",
+                "Import the non-secret Verilic configuration from this Windows user's saved environment settings? This is a legacy/developer fallback. It never imports keys, proofs or tokens.",
                 "Verilic licensing",
                 MessageBoxButton.YesNo,
                 MessageBoxImage.Question);
@@ -50,7 +107,7 @@ namespace S1Jarvis.UI
 
                 RefreshState();
                 resultText.Text =
-                    "Local Verilic configuration imported successfully. Runtime configuration is now independent of the Soft1 process environment.";
+                    "Legacy Windows user configuration imported successfully.";
             }
             catch
             {
@@ -303,10 +360,20 @@ namespace S1Jarvis.UI
             return value ? "Yes" : "No";
         }
 
+        private static string SafeProvisioningReason(string reasonCode)
+        {
+            return SafeReasonCore(reasonCode, "provisioning_failed");
+        }
+
         private static string SafeReason(string reasonCode)
         {
+            return SafeReasonCore(reasonCode, "activation_failed");
+        }
+
+        private static string SafeReasonCore(string reasonCode, string fallback)
+        {
             if (string.IsNullOrWhiteSpace(reasonCode) || reasonCode.Length > 100)
-                return "activation_failed";
+                return fallback;
 
             string value = reasonCode.Trim();
             for (int index = 0; index < value.Length; index++)
@@ -319,7 +386,7 @@ namespace S1Jarvis.UI
                     character == '_' ||
                     character == '-';
                 if (!allowed)
-                    return "activation_failed";
+                    return fallback;
             }
 
             return value;
