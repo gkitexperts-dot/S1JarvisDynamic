@@ -35,10 +35,6 @@ namespace S1Jarvis.UI
                 {
                     if (webView != null && webView.CoreWebView2 != null)
                     {
-                        // Make this the single WebMessageReceived router. The old
-                        // main handler used to consume dr_register_document first
-                        // and call JarvisTools.ExecuteRegisterDrDocument directly,
-                        // bypassing DrExpenseDocumentRegistrar entirely.
                         webView.CoreWebView2.WebMessageReceived -= CoreWebView2_WebMessageReceived;
                         webView.CoreWebView2.WebMessageReceived -= DrRecognitionFlow_WebMessageReceived;
                         webView.CoreWebView2.WebMessageReceived += DrRecognitionFlow_WebMessageReceived;
@@ -58,17 +54,12 @@ namespace S1Jarvis.UI
             try { cmd = JObject.Parse(e.TryGetWebMessageAsString()); }
             catch
             {
-                // Preserve all non-JSON/legacy behavior in the original router.
                 CoreWebView2_WebMessageReceived(sender, e);
                 return;
             }
 
             string commandType = (string)cmd["type"];
 
-            // IMPORTANT: handle BOTH names. The UI normally sends the original
-            // dr_register_document command. Routing happens here in C#, not via
-            // a fragile JavaScript wrapper, so expense posting cannot fall back
-            // silently to the legacy zero-value path.
             if (string.Equals(commandType, "dr_register_document", StringComparison.Ordinal) ||
                 string.Equals(commandType, "dr_register_document_v2", StringComparison.Ordinal))
             {
@@ -118,8 +109,6 @@ namespace S1Jarvis.UI
                 return;
             }
 
-            // Everything outside this DR-specific router continues through the
-            // established Jarvis command handler unchanged.
             CoreWebView2_WebMessageReceived(sender, e);
         }
 
@@ -135,14 +124,9 @@ namespace S1Jarvis.UI
                 string result = await Task.Run(() => DrExpenseDocumentRegistrar.Register(_xSupport, cmd));
                 JObject parsed = JObject.Parse(result);
 
-                // Every successful DR-created FINDOC is marked after the normal
-                // business-object registration, regardless of whether the actual
-                // posting path was expense-aware or the established purchase/
-                // service registrar. Audit failure never invalidates a document
-                // that has already been posted; it is returned/logged separately.
                 if ((bool?)parsed["success"] == true && (int?)parsed["findocId"] > 0)
                 {
-                    string auditError;
+                    string auditError = null;
                     bool auditMarked = await Task.Run(() =>
                         DrDocumentAuditMarker.TryMark(_xSupport, cmd, parsed, out auditError));
                     parsed["jarvisAuditMarked"] = auditMarked;
