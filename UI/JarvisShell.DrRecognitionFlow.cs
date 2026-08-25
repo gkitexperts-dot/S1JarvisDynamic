@@ -41,10 +41,7 @@ namespace S1Jarvis.UI
                     await Task.Delay(50);
                 }
             }
-            catch (Exception ex)
-            {
-                DebugLog.Log("[dr-recognition-flow] startup EXCEPTION: " + ex);
-            }
+            catch (Exception ex) { DebugLog.Log("[dr-recognition-flow] startup EXCEPTION: " + ex); }
         }
 
         private async void DrRecognitionFlow_WebMessageReceived(object sender,
@@ -55,19 +52,18 @@ namespace S1Jarvis.UI
             catch { return; }
 
             string commandType = (string)cmd["type"];
-
             if (string.Equals(commandType, "dr_resolve_line_mappings", StringComparison.Ordinal))
             {
-                await HandleDrResolveLineMappingsAsync(cmd);
-                return;
+                await HandleDrResolveLineMappingsAsync(cmd); return;
             }
-
             if (string.Equals(commandType, "dr_select_precedent", StringComparison.Ordinal))
             {
-                await HandleDrSelectPrecedentAsync(cmd);
-                return;
+                await HandleDrSelectPrecedentAsync(cmd); return;
             }
-
+            if (string.Equals(commandType, "dr_confirm_precedent_mapping", StringComparison.Ordinal))
+            {
+                await HandleDrConfirmPrecedentMappingAsync(cmd); return;
+            }
             if (!string.Equals(commandType, "dr_resolve_document_pattern", StringComparison.Ordinal) &&
                 !string.Equals(commandType, "dr_analyze_posting", StringComparison.Ordinal)) return;
 
@@ -78,11 +74,8 @@ namespace S1Jarvis.UI
                 int sourceLineCount = (int?)cmd["sourceLineCount"] ?? 0;
                 string documentType = cmd["documentType"]?.ToString();
                 string documentSeries = cmd["documentSeries"]?.ToString();
-
                 JObject result = await Task.Run(() =>
-                    DrDocumentPatternResolver.Resolve(
-                        _xSupport, trdrId, documentType, documentSeries, sourceLineCount));
-
+                    DrDocumentPatternResolver.Resolve(_xSupport, trdrId, documentType, documentSeries, sourceLineCount));
                 result["type"] = "dr_document_pattern_result";
                 result["fileId"] = fileId;
                 webView.CoreWebView2.PostWebMessageAsString(result.ToString(Formatting.None));
@@ -92,15 +85,39 @@ namespace S1Jarvis.UI
                 DebugLog.Log("[dr-recognition-flow] resolve_document_pattern EXCEPTION: " + ex);
                 webView.CoreWebView2.PostWebMessageAsString(new JObject
                 {
-                    ["type"] = "dr_document_pattern_result",
-                    ["fileId"] = fileId,
-                    ["success"] = false,
-                    ["resolver"] = "resolve_document_pattern",
-                    ["version"] = 4,
-                    ["mode"] = "Unknown",
-                    ["needsReview"] = true,
-                    ["reason"] = "pattern_resolution_failed",
+                    ["type"] = "dr_document_pattern_result", ["fileId"] = fileId,
+                    ["success"] = false, ["resolver"] = "resolve_document_pattern", ["version"] = 4,
+                    ["mode"] = "Unknown", ["needsReview"] = true, ["reason"] = "pattern_resolution_failed",
                     ["errorMessage"] = ex.Message
+                }.ToString(Formatting.None));
+            }
+        }
+
+        private async Task HandleDrConfirmPrecedentMappingAsync(JObject cmd)
+        {
+            string fileId = cmd["fileId"]?.ToString();
+            try
+            {
+                if ((bool?)cmd["confirm"] != true)
+                    throw new InvalidOperationException("Operator confirmation is required for CCCMAPITEMS learning.");
+                int trdrId = (int?)cmd["trdrId"] ?? 0;
+                int targetMtrlId = (int?)cmd["targetMtrlId"] ?? 0;
+                JArray mappings = cmd["mappings"] as JArray ?? new JArray();
+                JObject result = await Task.Run(() =>
+                    DrItemCodeResolver.LearnMappings(_xSupport, trdrId, targetMtrlId, mappings));
+                result["type"] = "dr_precedent_mapping_confirmed";
+                result["fileId"] = fileId;
+                result["operatorConfirmed"] = true;
+                webView.CoreWebView2.PostWebMessageAsString(result.ToString(Formatting.None));
+            }
+            catch (Exception ex)
+            {
+                DebugLog.Log("[dr-recognition-flow] confirm_precedent_mapping EXCEPTION: " + ex);
+                webView.CoreWebView2.PostWebMessageAsString(new JObject
+                {
+                    ["type"] = "dr_precedent_mapping_confirmed", ["fileId"] = fileId,
+                    ["success"] = false, ["resolver"] = "learn_supplier_code_mapping", ["version"] = 1,
+                    ["operatorConfirmed"] = true, ["reason"] = "learning_write_failed", ["errorMessage"] = ex.Message
                 }.ToString(Formatting.None));
             }
         }
@@ -112,9 +129,7 @@ namespace S1Jarvis.UI
             {
                 int trdrId = (int?)cmd["trdrId"] ?? 0;
                 int findocId = (int?)cmd["findocId"] ?? 0;
-                JObject result = await Task.Run(() =>
-                    DrPrecedentResolver.Resolve(_xSupport, trdrId, findocId));
-
+                JObject result = await Task.Run(() => DrPrecedentResolver.Resolve(_xSupport, trdrId, findocId));
                 result["type"] = "dr_precedent_result";
                 result["fileId"] = fileId;
                 result["operatorSelected"] = true;
@@ -125,15 +140,10 @@ namespace S1Jarvis.UI
                 DebugLog.Log("[dr-recognition-flow] select_precedent EXCEPTION: " + ex);
                 webView.CoreWebView2.PostWebMessageAsString(new JObject
                 {
-                    ["type"] = "dr_precedent_result",
-                    ["fileId"] = fileId,
-                    ["success"] = false,
-                    ["resolver"] = "resolve_historical_precedent",
-                    ["version"] = 1,
-                    ["operatorSelected"] = true,
-                    ["reason"] = "precedent_resolution_failed",
-                    ["errorMessage"] = ex.Message,
-                    ["lines"] = new JArray()
+                    ["type"] = "dr_precedent_result", ["fileId"] = fileId, ["success"] = false,
+                    ["resolver"] = "resolve_historical_precedent", ["version"] = 1,
+                    ["operatorSelected"] = true, ["reason"] = "precedent_resolution_failed",
+                    ["errorMessage"] = ex.Message, ["lines"] = new JArray()
                 }.ToString(Formatting.None));
             }
         }
@@ -145,33 +155,23 @@ namespace S1Jarvis.UI
             {
                 int trdrId = (int?)cmd["trdrId"] ?? 0;
                 JArray requestedLines = cmd["lines"] as JArray ?? new JArray();
-
                 JArray results = await Task.Run(() =>
                 {
                     var output = new JArray();
                     foreach (JToken token in requestedLines)
                     {
                         JObject line = token as JObject ?? new JObject();
-                        int lineIndex = (int?)line["lineIndex"] ?? -1;
-                        string supplierCode = line["supplierCode"]?.ToString();
-
-                        JObject result = DrItemCodeResolver.Resolve(_xSupport, trdrId, supplierCode);
-                        result["lineIndex"] = lineIndex;
+                        JObject result = DrItemCodeResolver.Resolve(_xSupport, trdrId, line["supplierCode"]?.ToString());
+                        result["lineIndex"] = (int?)line["lineIndex"] ?? -1;
                         output.Add(result);
                     }
                     return output;
                 });
-
                 webView.CoreWebView2.PostWebMessageAsString(new JObject
                 {
-                    ["type"] = "dr_line_mappings_result",
-                    ["fileId"] = fileId,
-                    ["success"] = true,
-                    ["resolver"] = "resolve_supplier_code_mapping",
-                    ["version"] = 1,
-                    ["readOnly"] = true,
-                    ["trdrId"] = trdrId,
-                    ["results"] = results
+                    ["type"] = "dr_line_mappings_result", ["fileId"] = fileId, ["success"] = true,
+                    ["resolver"] = "resolve_supplier_code_mapping", ["version"] = 2,
+                    ["readOnly"] = true, ["trdrId"] = trdrId, ["results"] = results
                 }.ToString(Formatting.None));
             }
             catch (Exception ex)
@@ -179,14 +179,9 @@ namespace S1Jarvis.UI
                 DebugLog.Log("[dr-recognition-flow] resolve_line_mappings EXCEPTION: " + ex);
                 webView.CoreWebView2.PostWebMessageAsString(new JObject
                 {
-                    ["type"] = "dr_line_mappings_result",
-                    ["fileId"] = fileId,
-                    ["success"] = false,
-                    ["resolver"] = "resolve_supplier_code_mapping",
-                    ["version"] = 1,
-                    ["readOnly"] = true,
-                    ["errorMessage"] = ex.Message,
-                    ["results"] = new JArray()
+                    ["type"] = "dr_line_mappings_result", ["fileId"] = fileId, ["success"] = false,
+                    ["resolver"] = "resolve_supplier_code_mapping", ["version"] = 2,
+                    ["readOnly"] = true, ["errorMessage"] = ex.Message, ["results"] = new JArray()
                 }.ToString(Formatting.None));
             }
         }
