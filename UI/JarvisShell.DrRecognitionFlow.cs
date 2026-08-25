@@ -35,8 +35,14 @@ namespace S1Jarvis.UI
                 {
                     if (webView != null && webView.CoreWebView2 != null)
                     {
+                        // Make this the single WebMessageReceived router. The old
+                        // main handler used to consume dr_register_document first
+                        // and call JarvisTools.ExecuteRegisterDrDocument directly,
+                        // bypassing DrExpenseDocumentRegistrar entirely.
+                        webView.CoreWebView2.WebMessageReceived -= CoreWebView2_WebMessageReceived;
+                        webView.CoreWebView2.WebMessageReceived -= DrRecognitionFlow_WebMessageReceived;
                         webView.CoreWebView2.WebMessageReceived += DrRecognitionFlow_WebMessageReceived;
-                        await InstallDrRegistrationV2BridgeAsync();
+                        DebugLog.Log("[dr-recognition-flow] installed as primary WebMessageReceived router.");
                         return;
                     }
                     await Task.Delay(50);
@@ -45,67 +51,29 @@ namespace S1Jarvis.UI
             catch (Exception ex) { DebugLog.Log("[dr-recognition-flow] startup EXCEPTION: " + ex); }
         }
 
-        // Route every final DR write command through the V2 handler. The bridge
-        // is registered for every new WebView document, because a navigation or
-        // reload destroys any wrapper that was installed only in the previous
-        // page. The small polling loop waits until index.html has defined
-        // postCommand and then wraps the current function exactly once.
-        private async Task InstallDrRegistrationV2BridgeAsync()
-        {
-            const string persistentScript = @"
-(function(){
-  function install(){
-    var current=window.postCommand;
-    if(typeof current!=='function')return false;
-    if(current.__jarvisDrRegistrationV2Wrapper===true)return true;
-    var original=current;
-    var wrapped=function(payload){
-      if(payload&&payload.type==='dr_register_document'){
-        var copy=Object.assign({},payload);
-        copy.type='dr_register_document_v2';
-        return original(copy);
-      }
-      return original(payload);
-    };
-    wrapped.__jarvisDrRegistrationV2Wrapper=true;
-    wrapped.__jarvisDrRegistrationV2Original=original;
-    window.postCommand=wrapped;
-    return true;
-  }
-  if(install())return;
-  var attempts=0;
-  var timer=setInterval(function(){
-    attempts++;
-    if(install()||attempts>=240)clearInterval(timer);
-  },50);
-})();";
-
-            try
-            {
-                // Persist across future navigations/reloads.
-                await webView.CoreWebView2.AddScriptToExecuteOnDocumentCreatedAsync(persistentScript);
-
-                // Also patch the document that is already loaded now.
-                await webView.CoreWebView2.ExecuteScriptAsync(persistentScript);
-                DebugLog.Log("[dr-recognition-flow] registration-v2 persistent bridge installed.");
-            }
-            catch (Exception ex)
-            {
-                DebugLog.Log("[dr-recognition-flow] registration-v2 bridge EXCEPTION: " + ex);
-            }
-        }
-
         private async void DrRecognitionFlow_WebMessageReceived(object sender,
             Microsoft.Web.WebView2.Core.CoreWebView2WebMessageReceivedEventArgs e)
         {
             JObject cmd;
             try { cmd = JObject.Parse(e.TryGetWebMessageAsString()); }
-            catch { return; }
+            catch
+            {
+                // Preserve all non-JSON/legacy behavior in the original router.
+                CoreWebView2_WebMessageReceived(sender, e);
+                return;
+            }
 
             string commandType = (string)cmd["type"];
-            if (string.Equals(commandType, "dr_register_document_v2", StringComparison.Ordinal))
+
+            // IMPORTANT: handle BOTH names. The UI normally sends the original
+            // dr_register_document command. Routing happens here in C#, not via
+            // a fragile JavaScript wrapper, so expense posting cannot fall back
+            // silently to the legacy zero-value path.
+            if (string.Equals(commandType, "dr_register_document", StringComparison.Ordinal) ||
+                string.Equals(commandType, "dr_register_document_v2", StringComparison.Ordinal))
             {
-                await HandleDrRegisterDocumentV2Async(cmd); return;
+                await HandleDrRegisterDocumentV2Async(cmd);
+                return;
             }
             if (string.Equals(commandType, "dr_resolve_line_mappings", StringComparison.Ordinal))
             {
@@ -119,33 +87,40 @@ namespace S1Jarvis.UI
             {
                 await HandleDrConfirmPrecedentMappingAsync(cmd); return;
             }
-            if (!string.Equals(commandType, "dr_resolve_document_pattern", StringComparison.Ordinal) &&
-                !string.Equals(commandType, "dr_analyze_posting", StringComparison.Ordinal)) return;
 
-            string fileId = cmd["fileId"]?.ToString();
-            try
+            if (string.Equals(commandType, "dr_resolve_document_pattern", StringComparison.Ordinal) ||
+                string.Equals(commandType, "dr_analyze_posting", StringComparison.Ordinal))
             {
-                int trdrId = (int?)cmd["trdrId"] ?? 0;
-                int sourceLineCount = (int?)cmd["sourceLineCount"] ?? 0;
-                string documentType = cmd["documentType"]?.ToString();
-                string documentSeries = cmd["documentSeries"]?.ToString();
-                JObject result = await Task.Run(() =>
-                    DrDocumentPatternResolver.Resolve(_xSupport, trdrId, documentType, documentSeries, sourceLineCount));
-                result["type"] = "dr_document_pattern_result";
-                result["fileId"] = fileId;
-                webView.CoreWebView2.PostWebMessageAsString(result.ToString(Formatting.None));
-            }
-            catch (Exception ex)
-            {
-                DebugLog.Log("[dr-recognition-flow] resolve_document_pattern EXCEPTION: " + ex);
-                webView.CoreWebView2.PostWebMessageAsString(new JObject
+                string fileId = cmd["fileId"]?.ToString();
+                try
                 {
-                    ["type"] = "dr_document_pattern_result", ["fileId"] = fileId,
-                    ["success"] = false, ["resolver"] = "resolve_document_pattern", ["version"] = 4,
-                    ["mode"] = "Unknown", ["needsReview"] = true, ["reason"] = "pattern_resolution_failed",
-                    ["errorMessage"] = ex.Message
-                }.ToString(Formatting.None));
+                    int trdrId = (int?)cmd["trdrId"] ?? 0;
+                    int sourceLineCount = (int?)cmd["sourceLineCount"] ?? 0;
+                    string documentType = cmd["documentType"]?.ToString();
+                    string documentSeries = cmd["documentSeries"]?.ToString();
+                    JObject result = await Task.Run(() =>
+                        DrDocumentPatternResolver.Resolve(_xSupport, trdrId, documentType, documentSeries, sourceLineCount));
+                    result["type"] = "dr_document_pattern_result";
+                    result["fileId"] = fileId;
+                    webView.CoreWebView2.PostWebMessageAsString(result.ToString(Formatting.None));
+                }
+                catch (Exception ex)
+                {
+                    DebugLog.Log("[dr-recognition-flow] resolve_document_pattern EXCEPTION: " + ex);
+                    webView.CoreWebView2.PostWebMessageAsString(new JObject
+                    {
+                        ["type"] = "dr_document_pattern_result", ["fileId"] = fileId,
+                        ["success"] = false, ["resolver"] = "resolve_document_pattern", ["version"] = 4,
+                        ["mode"] = "Unknown", ["needsReview"] = true, ["reason"] = "pattern_resolution_failed",
+                        ["errorMessage"] = ex.Message
+                    }.ToString(Formatting.None));
+                }
+                return;
             }
+
+            // Everything outside this DR-specific router continues through the
+            // established Jarvis command handler unchanged.
+            CoreWebView2_WebMessageReceived(sender, e);
         }
 
         private async Task HandleDrRegisterDocumentV2Async(JObject cmd)
@@ -153,6 +128,10 @@ namespace S1Jarvis.UI
             string fileId = cmd?["fileId"]?.ToString();
             try
             {
+                DebugLog.Log("[dr-recognition-flow] final registration routed to DrExpenseDocumentRegistrar. " +
+                    "mode=" + (cmd?["mode"]?.ToString() ?? "auto") +
+                    " sosource=" + ((int?)cmd?["sosource"] ?? 0));
+
                 string result = await Task.Run(() => DrExpenseDocumentRegistrar.Register(_xSupport, cmd));
                 JObject parsed = JObject.Parse(result);
                 parsed["type"] = "dr_register_document_result";
