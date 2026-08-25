@@ -64,7 +64,9 @@ namespace S1Jarvis.UI
                 return;
             }
 
-            if (!string.Equals((string)cmd["type"], "dr_analyze_posting", StringComparison.Ordinal))
+            string commandType = (string)cmd["type"];
+            if (!string.Equals(commandType, "dr_resolve_document_pattern", StringComparison.Ordinal) &&
+                !string.Equals(commandType, "dr_analyze_posting", StringComparison.Ordinal))
                 return;
 
             string fileId = cmd["fileId"]?.ToString();
@@ -74,25 +76,37 @@ namespace S1Jarvis.UI
                 int series = (int?)cmd["series"] ?? 0;
                 int sosource = (int?)cmd["sosource"] ?? 0;
                 int sourceLineCount = (int?)cmd["sourceLineCount"] ?? 0;
+                string documentType = cmd["documentType"]?.ToString();
+                string documentSeries = cmd["documentSeries"]?.ToString();
+                string documentNumber = cmd["documentNumber"]?.ToString();
 
                 JObject result = await Task.Run(() =>
-                    DrPostingProposal.Analyze(_xSupport, trdrId, series, sosource, sourceLineCount));
+                    DrPostingProposal.ResolveDocumentPattern(
+                        _xSupport,
+                        trdrId,
+                        series,
+                        sosource,
+                        documentType,
+                        documentSeries,
+                        documentNumber,
+                        sourceLineCount));
 
-                result["type"] = "dr_posting_proposal_result";
+                result["type"] = "dr_document_pattern_result";
                 result["fileId"] = fileId;
                 webView.CoreWebView2.PostWebMessageAsString(result.ToString(Formatting.None));
             }
             catch (Exception ex)
             {
-                DebugLog.Log("[dr-recognition-flow] posting proposal EXCEPTION: " + ex);
+                DebugLog.Log("[dr-recognition-flow] resolve_document_pattern EXCEPTION: " + ex);
                 webView.CoreWebView2.PostWebMessageAsString(new JObject
                 {
-                    ["type"] = "dr_posting_proposal_result",
+                    ["type"] = "dr_document_pattern_result",
                     ["fileId"] = fileId,
                     ["success"] = false,
+                    ["resolver"] = "resolve_document_pattern",
                     ["mode"] = "Unknown",
                     ["needsReview"] = true,
-                    ["reason"] = "proposal_failed",
+                    ["reason"] = "pattern_resolution_failed",
                     ["errorMessage"] = ex.Message
                 }.ToString(Formatting.None));
             }
