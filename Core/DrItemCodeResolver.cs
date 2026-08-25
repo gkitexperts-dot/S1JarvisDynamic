@@ -100,6 +100,7 @@ namespace S1Jarvis.Core
 
             DataRow target = targetTable.Rows[0];
             int sodtype = ToInt(target["SODTYPE"]);
+            string objectName = ObjectNameForSodtype(sodtype);
             var requestedTokens = new List<string>();
             foreach (JToken raw in requestedMappings)
             {
@@ -157,19 +158,44 @@ namespace S1Jarvis.Core
 
             if (toAppend.Count > 0)
             {
-                string objectName = ObjectNameForSodtype(sodtype);
-                XModule module = xSupport.CreateModule(objectName);
-                module.LocateData(targetMtrlId);
-                XTable mtrl = module.GetTable("MTRL");
-                mtrl.Current["CCCMAPITEMS"] = updated;
-                int posted = module.PostData();
-                if (posted <= 0) throw new Exception("CCCMAPITEMS update failed (PostData returned 0).");
+                XModule module = null;
+                XTable mtrl = null;
+                try
+                {
+                    module = xSupport.CreateModule(objectName);
+                    module.LocateData(targetMtrlId);
+                    mtrl = module.GetTable("MTRL");
+                    mtrl.Current["CCCMAPITEMS"] = updated;
+                    int posted = module.PostData();
+                    if (posted <= 0) throw new Exception("CCCMAPITEMS update failed (PostData returned 0).");
+                }
+                finally
+                {
+                    if (mtrl != null) mtrl.Dispose();
+                    if (module != null) module.Dispose();
+                }
             }
 
-            XTable verifyRaw = xSupport.GetSQLDataSet(
-                "SELECT TOP 1 CCCMAPITEMS FROM MTRL WHERE COMPANY=:1 AND MTRL=:2", company, targetMtrlId);
-            DataTable verifyTable = verifyRaw != null ? verifyRaw.CreateDataTable(true) : null;
-            string verifiedText = verifyTable != null && verifyTable.Rows.Count > 0 ? ToText(verifyTable.Rows[0]["CCCMAPITEMS"]) : null;
+            // Verify through the same Soft1 business object used for the write.
+            // This avoids a second raw SQL lookup after PostData(), which has
+            // proven unreliable in some Soft1 runtimes even when the initial
+            // MTRL query succeeds normally.
+            string verifiedText = null;
+            XModule verifyModule = null;
+            XTable verifyMtrl = null;
+            try
+            {
+                verifyModule = xSupport.CreateModule(objectName);
+                verifyModule.LocateData(targetMtrlId);
+                verifyMtrl = verifyModule.GetTable("MTRL");
+                verifiedText = ToText(verifyMtrl.Current["CCCMAPITEMS"]);
+            }
+            finally
+            {
+                if (verifyMtrl != null) verifyMtrl.Dispose();
+                if (verifyModule != null) verifyModule.Dispose();
+            }
+
             var learned = new JArray();
             foreach (string token in requestedTokens)
             {
