@@ -62,6 +62,7 @@ namespace S1Jarvis.UI
             await ExecuteEmbeddedDrScriptAsync("S1Jarvis.web.dr-recognition-workspace.js");
             await ExecuteEmbeddedDrScriptAsync("S1Jarvis.web.dr-posting-proposal-ui.js");
             await ExecuteEmbeddedDrScriptAsync("S1Jarvis.web.dr-auto-recognition.js");
+            await ExecuteEmbeddedDrScriptAsync("S1Jarvis.web.dr-precedent-proposal-ui.js");
             await ExecuteEmbeddedDrScriptAsync("S1Jarvis.web.dr-trader-role-ui.js");
         }
 
