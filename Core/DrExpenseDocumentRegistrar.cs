@@ -225,7 +225,10 @@ namespace S1Jarvis.Core
                 string fullDocIdentifier = string.Join(" ",
                     new[] { docType, docNumber }.Where(s => !string.IsNullOrWhiteSpace(s)));
                 if (!string.IsNullOrWhiteSpace(fullDocIdentifier))
-                    findoc.Current["REMARKS"] = "Jarvis DR - πηγή παραστατικό: " + fullDocIdentifier;
+                {
+                    string remarks = "Jarvis DR - πηγή παραστατικό: " + fullDocIdentifier;
+                    findoc.Current["REMARKS"] = ToSoft1GreekAnsi(remarks);
+                }
 
                 string manualFincodeHint = null;
                 if (!string.IsNullOrWhiteSpace(docNumber))
@@ -234,13 +237,13 @@ namespace S1Jarvis.Core
                     switch (fincodeMode)
                     {
                         case FincodeMode.AutoFull:
-                            findoc.Current["COMMENTS"] = fullDocIdentifier;
+                            findoc.Current["COMMENTS"] = ToSoft1GreekAnsi(fullDocIdentifier);
                             break;
                         case FincodeMode.AutoPrefixOnly:
                             manualFincodeHint = docNumber;
                             break;
                         default:
-                            findoc.Current["FINCODE"] = fullDocIdentifier;
+                            findoc.Current["FINCODE"] = ToSoft1GreekAnsi(fullDocIdentifier);
                             break;
                     }
                 }
@@ -491,6 +494,29 @@ namespace S1Jarvis.Core
                 CultureInfo.InvariantCulture, out double parsed)
                 ? parsed
                 : 0;
+        }
+
+        /// <summary>
+        /// Soft1's XDll/XTable string setter crosses an ANSI boundary in this
+        /// installation. A normal Unicode Greek string is converted through a
+        /// Western code page and Greek characters become '?'. Preserve the
+        /// Windows-1253 bytes by carrying them through Windows-1252 characters;
+        /// the Soft1 side then receives the exact Greek ANSI byte sequence.
+        /// ASCII characters are unchanged by this conversion.
+        /// </summary>
+        private static string ToSoft1GreekAnsi(string value)
+        {
+            if (string.IsNullOrEmpty(value)) return value;
+            try
+            {
+                byte[] greekBytes = System.Text.Encoding.GetEncoding(1253).GetBytes(value);
+                return System.Text.Encoding.GetEncoding(1252).GetString(greekBytes);
+            }
+            catch (Exception ex)
+            {
+                DebugLog.Log("[dr-expense-register] ToSoft1GreekAnsi failed: " + ex);
+                return value;
+            }
         }
 
         private static object NormalizeNumeric(object value)
