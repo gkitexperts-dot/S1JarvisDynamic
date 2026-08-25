@@ -11,6 +11,8 @@ namespace S1Jarvis.Core
     /// <summary>
     /// New DR historical resolver. It discovers posting coordinates from the
     /// correct trader's history; SOSOURCE/SERIES are outputs, never scoring hints.
+    /// BUNIT is intentionally not read from FINDOC until the authoritative
+    /// Soft1 field/schema is confirmed for the current installation.
     /// </summary>
     internal static class DrDocumentPatternResolver
     {
@@ -25,7 +27,7 @@ namespace S1Jarvis.Core
 
             int company = xSupport.ConnectionInfo.CompanyId;
             XTable raw = xSupport.GetSQLDataSet(
-                "SELECT TOP 50 F.FINDOC,F.FINCODE,F.TRNDATE,F.SOSOURCE,F.SERIES,F.BUNIT," +
+                "SELECT TOP 50 F.FINDOC,F.FINCODE,F.TRNDATE,F.SOSOURCE,F.SERIES," +
                 " (SELECT COUNT(*) FROM MTRLINES L WHERE L.COMPANY=F.COMPANY AND L.FINDOC=F.FINDOC) AS LINECOUNT " +
                 "FROM FINDOC F WHERE F.COMPANY=:1 AND F.TRDR=:2 " +
                 "ORDER BY F.TRNDATE DESC,F.FINDOC DESC", company, trdrId);
@@ -47,7 +49,6 @@ namespace S1Jarvis.Core
                     Date = ToDate(r["TRNDATE"]),
                     Sosource = ToInt(r["SOSOURCE"]),
                     Series = ToInt(r["SERIES"]),
-                    Bunit = ToInt(r["BUNIT"]),
                     LineCount = ToInt(r["LINECOUNT"])
                 };
                 if (c.Findoc <= 0) continue;
@@ -65,7 +66,6 @@ namespace S1Jarvis.Core
 
             var sosource = Consensus(similar, x => x.Sosource);
             var series = Consensus(similar, x => x.Series);
-            var bunit = Consensus(similar.Where(x => x.Bunit > 0).ToList(), x => x.Bunit);
             var lineShape = Consensus(similar.Where(x => x.LineCount > 0).ToList(), x => x.LineCount);
 
             string mode = "Unknown";
@@ -76,7 +76,6 @@ namespace S1Jarvis.Core
             {
                 sosource.Ratio,
                 series.Ratio,
-                bunit.SampleSize > 0 ? bunit.Ratio : 1.0,
                 lineShape.SampleSize > 0 ? lineShape.Ratio : 0.0
             }.Average();
             double confidence = Math.Min(1.0, 0.35 * bestScore + 0.65 * coordinateConfidence);
@@ -93,7 +92,7 @@ namespace S1Jarvis.Core
                     ["date"] = c.Date == DateTime.MinValue ? null : JToken.FromObject(c.Date),
                     ["sosource"] = c.Sosource,
                     ["series"] = c.Series,
-                    ["bunit"] = c.Bunit,
+                    ["bunit"] = null,
                     ["lineCount"] = c.LineCount,
                     ["similarity"] = Math.Round(c.Score, 4),
                     ["isStrongPrecedent"] = c == ranked[0] && bestScore >= ConsensusThreshold
@@ -104,7 +103,7 @@ namespace S1Jarvis.Core
             {
                 ["success"] = true,
                 ["resolver"] = "resolve_document_pattern",
-                ["version"] = 3,
+                ["version"] = 4,
                 ["mode"] = mode,
                 ["needsReview"] = needsReview,
                 ["confidence"] = Math.Round(confidence, 4),
@@ -117,10 +116,17 @@ namespace S1Jarvis.Core
                 ["precedentSimilarity"] = Math.Round(bestScore, 4),
                 ["resolvedSosource"] = sosource.Ratio >= ConsensusThreshold ? sosource.Value : (int?)null,
                 ["resolvedSeries"] = series.Ratio >= ConsensusThreshold ? series.Value : (int?)null,
-                ["resolvedBunit"] = bunit.SampleSize > 0 && bunit.Ratio >= ConsensusThreshold ? bunit.Value : (int?)null,
+                ["resolvedBunit"] = null,
                 ["sosourceEvidence"] = Json(sosource),
                 ["seriesEvidence"] = Json(series),
-                ["bunitEvidence"] = Json(bunit),
+                ["bunitEvidence"] = new JObject
+                {
+                    ["value"] = null,
+                    ["matches"] = 0,
+                    ["sampleSize"] = 0,
+                    ["ratio"] = 0.0,
+                    ["reason"] = "authoritative_field_not_confirmed"
+                },
                 ["lineShapeEvidence"] = Json(lineShape),
                 ["reason"] = bestScore >= ConsensusThreshold ? "similar_historical_precedent" : "historical_consensus",
                 ["evidence"] = evidence
@@ -175,12 +181,12 @@ namespace S1Jarvis.Core
 
         private static JObject Empty(string reason, int lines) => new JObject
         {
-            ["success"] = true,["resolver"]="resolve_document_pattern",["version"]=3,["mode"]="Unknown",
+            ["success"] = true,["resolver"]="resolve_document_pattern",["version"]=4,["mode"]="Unknown",
             ["needsReview"]=true,["confidence"]=0.0,["reason"]=reason,["sampleSize"]=0,["sourceLineCount"]=lines,["evidence"]=new JArray()
         };
         private static JObject Failure(string reason) => new JObject
         {
-            ["success"] = false,["resolver"]="resolve_document_pattern",["version"]=3,["mode"]="Unknown",
+            ["success"] = false,["resolver"]="resolve_document_pattern",["version"]=4,["mode"]="Unknown",
             ["needsReview"]=true,["reason"]=reason,["evidence"]=new JArray()
         };
         private static string Normalize(string s){if(string.IsNullOrWhiteSpace(s))return string.Empty;return Regex.Replace(s.Trim().ToUpperInvariant(),"[^0-9A-ZΑ-Ω]",string.Empty);}
@@ -188,7 +194,7 @@ namespace S1Jarvis.Core
         private static string ToText(object v)=>v==null||v==DBNull.Value?null:Convert.ToString(v);
         private static DateTime ToDate(object v){if(v==null||v==DBNull.Value)return DateTime.MinValue;DateTime d;return DateTime.TryParse(Convert.ToString(v),out d)?d:DateTime.MinValue;}
 
-        private sealed class Candidate{public int Findoc,Sosource,Series,Bunit,LineCount;public string Fincode;public DateTime Date;public double Score;}
+        private sealed class Candidate{public int Findoc,Sosource,Series,LineCount;public string Fincode;public DateTime Date;public double Score;}
         private sealed class ConsensusValue{public int Value,Count,SampleSize;public double Ratio;}
     }
 }
