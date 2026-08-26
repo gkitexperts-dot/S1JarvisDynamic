@@ -1,15 +1,21 @@
 using System;
 using System.Drawing;
 using System.Reflection;
+using System.Text;
 using System.Windows.Forms;
 using System.Windows.Forms.Integration;
+using S1Jarvis.SoftoneIntegration;
 
 namespace S1Jarvis.UI
 {
-    // Thin Soft1-visible Dll Form entrypoint for the licensing screen.
-    // The real WPF maintenance shell lives in the embedded runtime assembly.
+    // Thin Soft1-visible Dll Form entrypoint for licensing.
+    // Keep the constructor side-effect free so Soft1 can discover/instantiate the
+    // form during startup without forcing the embedded runtime to load. The actual
+    // WPF licensing shell is created only when the operator opens the form.
     public class VerilicMaintenanceHostForm : Form
     {
+        private bool _initialized;
+
         public VerilicMaintenanceHostForm()
         {
             Text = "Verilic Licensing";
@@ -17,33 +23,75 @@ namespace S1Jarvis.UI
             Location = new Point(0, 0);
             Width = 10;
             Height = 10;
+            Shown += VerilicMaintenanceHostForm_Shown;
+        }
+
+        private void VerilicMaintenanceHostForm_Shown(object sender, EventArgs e)
+        {
+            if (_initialized)
+                return;
+
+            _initialized = true;
 
             try
             {
-                var shell = S1Jarvis.SoftoneIntegration.JarvisRuntimeLoader.CreateVerilicMaintenanceShell();
+                var shell = JarvisRuntimeLoader.CreateVerilicMaintenanceShell();
                 var host = new ElementHost
                 {
                     Dock = DockStyle.Fill,
                     Child = shell
                 };
+
                 Controls.Add(host);
+                host.BringToFront();
             }
             catch (Exception ex)
             {
-                Exception root = ex;
-                while (root is TargetInvocationException && root.InnerException != null)
-                    root = root.InnerException;
-                while (root.InnerException != null)
-                    root = root.InnerException;
-
+                Exception root = Unwrap(ex);
                 MessageBox.Show(
-                    "Verilic maintenance startup failed.\r\n\r\n" +
-                    root.GetType().FullName + "\r\n" + root.Message +
-                    (string.IsNullOrWhiteSpace(root.StackTrace) ? string.Empty : "\r\n\r\n" + root.StackTrace),
+                    BuildDiagnosticMessage(ex, root),
                     "S1Jarvis licensing error",
                     MessageBoxButtons.OK,
                     MessageBoxIcon.Error);
             }
+        }
+
+        private static Exception Unwrap(Exception ex)
+        {
+            Exception current = ex;
+            while (current != null && current.InnerException != null &&
+                   (current is TargetInvocationException || current is TypeInitializationException))
+            {
+                current = current.InnerException;
+            }
+            return current ?? ex;
+        }
+
+        private static string BuildDiagnosticMessage(Exception original, Exception root)
+        {
+            var sb = new StringBuilder();
+            sb.AppendLine("Verilic licensing failed while opening.");
+            sb.AppendLine();
+            sb.AppendLine("Root exception:");
+            sb.AppendLine(root.GetType().FullName);
+            sb.AppendLine(root.Message);
+
+            if (!ReferenceEquals(original, root))
+            {
+                sb.AppendLine();
+                sb.AppendLine("Wrapper exception:");
+                sb.AppendLine(original.GetType().FullName);
+                sb.AppendLine(original.Message);
+            }
+
+            if (!string.IsNullOrWhiteSpace(root.StackTrace))
+            {
+                sb.AppendLine();
+                sb.AppendLine("Stack trace:");
+                sb.AppendLine(root.StackTrace);
+            }
+
+            return sb.ToString();
         }
     }
 }
