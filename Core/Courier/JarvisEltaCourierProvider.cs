@@ -211,17 +211,18 @@ namespace S1Jarvis.Core.Courier
             if (b64List == null || b64List.Count == 0)
                 throw new Exception("ELTA voucher " + voucherNum + ": Δεν επιστράφηκε PDF");
 
-            // Jarvis Courier v1 is single-voucher only. ELTA normally returns a
-            // single PDF for the master; if multiple PDFs are returned for a
-            // multi-piece shipment, return the first non-empty one until the
-            // Jarvis-native PDF merger is introduced with batch support.
+            var pdfs = new List<byte[]>();
             foreach (var token in b64List)
             {
                 string value = token?.ToString();
                 if (!string.IsNullOrWhiteSpace(value))
-                    return Convert.FromBase64String(value);
+                    pdfs.Add(Convert.FromBase64String(value));
             }
-            throw new Exception("ELTA voucher " + voucherNum + ": κενά PDF στη λίστα");
+
+            if (pdfs.Count == 0)
+                throw new Exception("ELTA voucher " + voucherNum + ": κενά PDF στη λίστα");
+
+            return JarvisCourierPdfHelper.MergePdfs(pdfs);
         }
 
         public async Task<byte[]> GetVoucherAsync(string shipmentNumber)
