@@ -33,15 +33,9 @@ namespace S1Jarvis.Access.Verilic
             new[] { "Jarvis", "Atlas", "Forge", "Compass", "Echo", "Sprint", "Scout", "Sage" },
             StringComparer.OrdinalIgnoreCase);
 
-        // One AskAsync execution is one async flow. The first provider request
-        // has the full tool set, so it gives an unambiguous structural role.
-        // The last iteration deliberately has tools=[], therefore it must keep
-        // the role chosen earlier instead of re-inferring from prompt prose.
         private static readonly AsyncLocal<string> ActiveAgentContext =
             new AsyncLocal<string>();
 
-        // Non-secret runtime snapshot for the in-process UAT harness. Never
-        // store AgentAccountRef or credentials here.
         internal static string LastRuntimeAgent { get; private set; }
         internal static string LastRuntimeProvider { get; private set; }
         internal static string LastRuntimeModel { get; private set; }
@@ -101,13 +95,6 @@ namespace S1Jarvis.Access.Verilic
                 SecurityProtocolType.Tls12 | SecurityProtocolType.Tls13;
         }
 
-        /// <summary>
-        /// Compatibility entry point for the existing mature JarvisAgentClient.
-        /// Resolution is structural, not based on broad prompt keyword search.
-        /// Precedence intentionally mirrors JarvisAgentClient.activeAgentName:
-        /// Scout/Sprint dedicated curtains first, then Forge, Compass, Echo,
-        /// Sage, otherwise Atlas.
-        /// </summary>
         public Task<AgentProxyResponse> SendAsync(
             XSupport xSupport,
             string providerRequestJson,
@@ -117,11 +104,6 @@ namespace S1Jarvis.Access.Verilic
             return SendAsync(xSupport, agentName, providerRequestJson, cancellationToken);
         }
 
-        /// <summary>
-        /// Explicit logical-agent entry point. Verilic still re-resolves and
-        /// owns the effective provider account/model; this value selects only
-        /// the Jarvis logical role.
-        /// </summary>
         public async Task<AgentProxyResponse> SendAsync(
             XSupport xSupport,
             string agentName,
@@ -138,6 +120,10 @@ namespace S1Jarvis.Access.Verilic
             agentName = agentName.Trim();
             if (!AllowedAgents.Contains(agentName))
                 return Failure("routing_agent_invalid");
+
+            // Local-only correlation id for Soft1 usage telemetry. It contains
+            // no prompt/response content and is not sent to the provider.
+            string usageRequestId = Guid.NewGuid().ToString("N");
 
             try
             {
@@ -239,11 +225,22 @@ namespace S1Jarvis.Access.Verilic
 
                         if (!result.Success && HasProviderDiagnostic(result.ReasonCode))
                         {
-                            // Verilic already redacts provider secrets before returning
-                            // diagnostics. Keep the full safe diagnostic in the local
-                            // debug log, but never surface it as normal Jarvis chat text.
                             DebugLog.Log("[VERILIC] provider diagnostic=" + result.ReasonCode);
                         }
+
+                        // One raw event per parsed Verilic/provider response.
+                        // This is deliberately best-effort: the logger catches
+                        // all SQL errors and never blocks the AI response.
+                        JarvisAiUsageLogger.TryWrite(
+                            xSupport,
+                            usageRequestId,
+                            string.IsNullOrWhiteSpace(result.Agent) ? agentName : result.Agent,
+                            result.Provider,
+                            result.Model,
+                            result.UsageInputTokens,
+                            result.UsageOutputTokens,
+                            result.Success,
+                            result.Success ? null : GetBaseReasonCode(result.ReasonCode));
 
                         return new AgentProxyResponse
                         {
@@ -284,9 +281,6 @@ namespace S1Jarvis.Access.Verilic
                 JObject request = JObject.Parse(providerRequestJson);
                 HashSet<string> tools = ReadToolNames(request["tools"]);
 
-                // Non-final iterations carry capabilities. They are the source
-                // of truth and reset any value inherited by the async context
-                // from a previous turn.
                 if (tools.Count > 0)
                 {
                     string resolved = ResolveFromCapabilities(tools, request["system"]);
@@ -294,13 +288,9 @@ namespace S1Jarvis.Access.Verilic
                     return resolved;
                 }
 
-                // Final iteration intentionally has no tools. Keep exactly the
-                // role selected on an earlier iteration of this AskAsync flow.
                 if (!string.IsNullOrWhiteSpace(ActiveAgentContext.Value))
                     return ActiveAgentContext.Value;
 
-                // Defensive fallback for a one-iteration/no-tools call. Only
-                // dedicated mode headings are considered; never broad prose.
                 return ResolveDedicatedModeHeading(request["system"]) ?? "Atlas";
             }
             catch
@@ -313,8 +303,6 @@ namespace S1Jarvis.Access.Verilic
             HashSet<string> tools,
             JToken systemToken)
         {
-            // Dedicated curtains first. Browser also has item/email tools, so
-            // it must win before Forge/Echo exactly like activeAgentName does.
             if (tools.Contains("open_url") && tools.Contains("read_page_content"))
                 return "Scout";
             if (tools.Contains("show_courier_documents") ||
@@ -322,8 +310,6 @@ namespace S1Jarvis.Access.Verilic
                 tools.Contains("create_courier_voucher"))
                 return "Sprint";
 
-            // Main routed domains. Precedence mirrors activeAgentName:
-            // item > trader > email.
             if (tools.Contains("get_item_template") || tools.Contains("create_item"))
                 return "Forge";
             if (tools.Contains("find_trader_by_afm") ||
@@ -336,9 +322,6 @@ namespace S1Jarvis.Access.Verilic
                 tools.Contains("read_calendar"))
                 return "Echo";
 
-            // Help currently shares generic Atlas tools, therefore the only
-            // narrow prompt signal retained is its actual dedicated mode
-            // heading. Descriptive references to Browser/Item/etc are ignored.
             string dedicated = ResolveDedicatedModeHeading(systemToken);
             if (string.Equals(dedicated, "Sage", StringComparison.Ordinal))
                 return "Sage";
@@ -352,9 +335,6 @@ namespace S1Jarvis.Access.Verilic
             if (string.IsNullOrWhiteSpace(text))
                 return null;
 
-            // These are headings injected only by the matching dedicated mode.
-            // They are deliberately checked as line-oriented headings rather
-            // than arbitrary Contains("BROWSER MODE") prose.
             string[] lines = text.Replace("\r\n", "\n").Replace('\r', '\n').Split('\n');
             foreach (string raw in lines)
             {
