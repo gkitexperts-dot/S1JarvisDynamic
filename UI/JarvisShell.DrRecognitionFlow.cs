@@ -1,5 +1,4 @@
 using System;
-using System.Threading.Tasks;
 using System.Windows;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
@@ -25,29 +24,33 @@ namespace S1Jarvis.UI
             if (shell != null) shell.StartDrRecognitionFlow();
         }
 
-        private async void StartDrRecognitionFlow()
+        // Soft1/XSupport integration is deliberately synchronous. The DR router is
+        // installed only after CoreWebView2 exists; JarvisShell_Loaded calls this
+        // method again immediately after WebView2 initialization.
+        private void StartDrRecognitionFlow()
         {
             if (_drRecognitionFlowStarted) return;
-            _drRecognitionFlowStarted = true;
             try
             {
-                for (int attempt = 0; attempt < 240; attempt++)
+                if (webView == null || webView.CoreWebView2 == null)
                 {
-                    if (webView != null && webView.CoreWebView2 != null)
-                    {
-                        webView.CoreWebView2.WebMessageReceived -= CoreWebView2_WebMessageReceived;
-                        webView.CoreWebView2.WebMessageReceived -= DrRecognitionFlow_WebMessageReceived;
-                        webView.CoreWebView2.WebMessageReceived += DrRecognitionFlow_WebMessageReceived;
-                        DebugLog.Log("[dr-recognition-flow] installed as primary WebMessageReceived router.");
-                        return;
-                    }
-                    await Task.Delay(50);
+                    DebugLog.Log("[dr-recognition-flow] router deferred until WebView2 is ready.");
+                    return;
                 }
+
+                webView.CoreWebView2.WebMessageReceived -= CoreWebView2_WebMessageReceived;
+                webView.CoreWebView2.WebMessageReceived -= DrRecognitionFlow_WebMessageReceived;
+                webView.CoreWebView2.WebMessageReceived += DrRecognitionFlow_WebMessageReceived;
+                _drRecognitionFlowStarted = true;
+                DebugLog.Log("[dr-recognition-flow] installed synchronously as primary WebMessageReceived router.");
             }
-            catch (Exception ex) { DebugLog.Log("[dr-recognition-flow] startup EXCEPTION: " + ex); }
+            catch (Exception ex)
+            {
+                DebugLog.Log("[dr-recognition-flow] startup EXCEPTION: " + ex);
+            }
         }
 
-        private async void DrRecognitionFlow_WebMessageReceived(object sender,
+        private void DrRecognitionFlow_WebMessageReceived(object sender,
             Microsoft.Web.WebView2.Core.CoreWebView2WebMessageReceivedEventArgs e)
         {
             JObject cmd;
@@ -63,20 +66,23 @@ namespace S1Jarvis.UI
             if (string.Equals(commandType, "dr_register_document", StringComparison.Ordinal) ||
                 string.Equals(commandType, "dr_register_document_v2", StringComparison.Ordinal))
             {
-                await HandleDrRegisterDocumentV2Async(cmd);
+                HandleDrRegisterDocumentV2(cmd);
                 return;
             }
             if (string.Equals(commandType, "dr_resolve_line_mappings", StringComparison.Ordinal))
             {
-                await HandleDrResolveLineMappingsAsync(cmd); return;
+                HandleDrResolveLineMappings(cmd);
+                return;
             }
             if (string.Equals(commandType, "dr_select_precedent", StringComparison.Ordinal))
             {
-                await HandleDrSelectPrecedentAsync(cmd); return;
+                HandleDrSelectPrecedent(cmd);
+                return;
             }
             if (string.Equals(commandType, "dr_confirm_precedent_mapping", StringComparison.Ordinal))
             {
-                await HandleDrConfirmPrecedentMappingAsync(cmd); return;
+                HandleDrConfirmPrecedentMapping(cmd);
+                return;
             }
 
             if (string.Equals(commandType, "dr_resolve_document_pattern", StringComparison.Ordinal) ||
@@ -89,8 +95,8 @@ namespace S1Jarvis.UI
                     int sourceLineCount = (int?)cmd["sourceLineCount"] ?? 0;
                     string documentType = cmd["documentType"]?.ToString();
                     string documentSeries = cmd["documentSeries"]?.ToString();
-                    JObject result = await Task.Run(() =>
-                        DrDocumentPatternResolver.Resolve(_xSupport, trdrId, documentType, documentSeries, sourceLineCount));
+                    JObject result = DrDocumentPatternResolver.Resolve(
+                        _xSupport, trdrId, documentType, documentSeries, sourceLineCount);
                     result["type"] = "dr_document_pattern_result";
                     result["fileId"] = fileId;
                     webView.CoreWebView2.PostWebMessageAsString(result.ToString(Formatting.None));
@@ -112,23 +118,23 @@ namespace S1Jarvis.UI
             CoreWebView2_WebMessageReceived(sender, e);
         }
 
-        private async Task HandleDrRegisterDocumentV2Async(JObject cmd)
+        private void HandleDrRegisterDocumentV2(JObject cmd)
         {
             string fileId = cmd?["fileId"]?.ToString();
             try
             {
-                DebugLog.Log("[dr-recognition-flow] final registration routed to DrExpenseDocumentRegistrar. " +
+                DebugLog.Log("[dr-recognition-flow] final registration routed synchronously to DrExpenseDocumentRegistrar. " +
                     "mode=" + (cmd?["mode"]?.ToString() ?? "auto") +
                     " sosource=" + ((int?)cmd?["sosource"] ?? 0));
 
-                string result = await Task.Run(() => DrExpenseDocumentRegistrar.Register(_xSupport, cmd));
+                string result = DrExpenseDocumentRegistrar.Register(_xSupport, cmd);
                 JObject parsed = JObject.Parse(result);
 
                 if ((bool?)parsed["success"] == true && (int?)parsed["findocId"] > 0)
                 {
                     string auditError = null;
-                    bool auditMarked = await Task.Run(() =>
-                        DrDocumentAuditMarker.TryMark(_xSupport, cmd, parsed, out auditError));
+                    bool auditMarked = DrDocumentAuditMarker.TryMark(
+                        _xSupport, cmd, parsed, out auditError);
                     parsed["jarvisAuditMarked"] = auditMarked;
                     parsed["jarvisFlowVersion"] = DrDocumentAuditMarker.FlowVersion;
                     if (!auditMarked && !string.IsNullOrWhiteSpace(auditError))
@@ -165,7 +171,7 @@ namespace S1Jarvis.UI
             }
         }
 
-        private async Task HandleDrConfirmPrecedentMappingAsync(JObject cmd)
+        private void HandleDrConfirmPrecedentMapping(JObject cmd)
         {
             string fileId = cmd["fileId"]?.ToString();
             try
@@ -175,8 +181,8 @@ namespace S1Jarvis.UI
                 int trdrId = (int?)cmd["trdrId"] ?? 0;
                 int targetMtrlId = (int?)cmd["targetMtrlId"] ?? 0;
                 JArray mappings = cmd["mappings"] as JArray ?? new JArray();
-                JObject result = await Task.Run(() =>
-                    DrItemCodeResolver.LearnMappings(_xSupport, trdrId, targetMtrlId, mappings));
+                JObject result = DrItemCodeResolver.LearnMappings(
+                    _xSupport, trdrId, targetMtrlId, mappings);
                 result["type"] = "dr_precedent_mapping_confirmed";
                 result["fileId"] = fileId;
                 result["operatorConfirmed"] = true;
@@ -194,14 +200,14 @@ namespace S1Jarvis.UI
             }
         }
 
-        private async Task HandleDrSelectPrecedentAsync(JObject cmd)
+        private void HandleDrSelectPrecedent(JObject cmd)
         {
             string fileId = cmd["fileId"]?.ToString();
             try
             {
                 int trdrId = (int?)cmd["trdrId"] ?? 0;
                 int findocId = (int?)cmd["findocId"] ?? 0;
-                JObject result = await Task.Run(() => DrPrecedentResolver.Resolve(_xSupport, trdrId, findocId));
+                JObject result = DrPrecedentResolver.Resolve(_xSupport, trdrId, findocId);
                 result["type"] = "dr_precedent_result";
                 result["fileId"] = fileId;
                 result["operatorSelected"] = true;
@@ -220,30 +226,28 @@ namespace S1Jarvis.UI
             }
         }
 
-        private async Task HandleDrResolveLineMappingsAsync(JObject cmd)
+        private void HandleDrResolveLineMappings(JObject cmd)
         {
             string fileId = cmd["fileId"]?.ToString();
             try
             {
                 int trdrId = (int?)cmd["trdrId"] ?? 0;
                 JArray requestedLines = cmd["lines"] as JArray ?? new JArray();
-                JArray results = await Task.Run(() =>
+                var output = new JArray();
+                foreach (JToken token in requestedLines)
                 {
-                    var output = new JArray();
-                    foreach (JToken token in requestedLines)
-                    {
-                        JObject line = token as JObject ?? new JObject();
-                        JObject result = DrItemCodeResolver.Resolve(_xSupport, trdrId, line["supplierCode"]?.ToString());
-                        result["lineIndex"] = (int?)line["lineIndex"] ?? -1;
-                        output.Add(result);
-                    }
-                    return output;
-                });
+                    JObject line = token as JObject ?? new JObject();
+                    JObject result = DrItemCodeResolver.Resolve(
+                        _xSupport, trdrId, line["supplierCode"]?.ToString());
+                    result["lineIndex"] = (int?)line["lineIndex"] ?? -1;
+                    output.Add(result);
+                }
+
                 webView.CoreWebView2.PostWebMessageAsString(new JObject
                 {
                     ["type"] = "dr_line_mappings_result", ["fileId"] = fileId, ["success"] = true,
                     ["resolver"] = "resolve_supplier_code_mapping", ["version"] = 2,
-                    ["readOnly"] = true, ["trdrId"] = trdrId, ["results"] = results
+                    ["readOnly"] = true, ["trdrId"] = trdrId, ["results"] = output
                 }.ToString(Formatting.None));
             }
             catch (Exception ex)
