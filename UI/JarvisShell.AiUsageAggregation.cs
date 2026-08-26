@@ -9,6 +9,30 @@ namespace S1Jarvis.UI
 {
     public partial class JarvisShell
     {
+        private bool _aiUsageAggregationEnabled;
+
+        public void EnableAiUsageAggregation()
+        {
+            if (_aiUsageAggregationEnabled)
+                return;
+
+            _aiUsageAggregationEnabled = true;
+            Loaded += JarvisShell_AiUsageAggregationLoaded;
+        }
+
+        private async void JarvisShell_AiUsageAggregationLoaded(object sender, RoutedEventArgs e)
+        {
+            try
+            {
+                await RunAiUsageAggregationOnBootAsync();
+            }
+            catch (Exception ex)
+            {
+                try { DebugLog.Log("[AI-USAGE-AGG-UI] startup hook failed; continuing: " + ex.Message); }
+                catch { }
+            }
+        }
+
         private async Task RunAiUsageAggregationOnBootAsync()
         {
             if (!JarvisAiUsageAggregator.ShouldRunToday(_xSupport))
@@ -31,7 +55,7 @@ namespace S1Jarvis.UI
                 await Dispatcher.Yield(System.Windows.Threading.DispatcherPriority.Background);
 
                 // XSupport is a Soft1 host object. Keep the DB call on the UI/host
-                // thread rather than moving it to Task.Run and risking COM/thread
+                // thread rather than moving it to Task.Run and risking host thread
                 // affinity problems.
                 bool ok = JarvisAiUsageAggregator.TryAggregatePreviousDays(_xSupport);
 
