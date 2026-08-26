@@ -49,76 +49,35 @@
     <Compile Include="SoftoneIntegration\JarvisObject.cs" />
     <Compile Include="SoftoneIntegration\JarvisRuntimeLoader.cs" />
     <Compile Include="SoftoneIntegration\JarvisHostFormBootstrap.cs" />
+    <Compile Include="SoftoneIntegration\VerilicMaintenanceHostFormBootstrap.cs" />
   </ItemGroup>
 
   <ItemGroup>
     <None Include="app.config" />
   </ItemGroup>
 
-  <!--
-    IMPORTANT: these resources are declared statically so MSBuild knows about them
-    before PrepareResources/CoreCompile. The old execution-time wildcard was too late
-    in some Visual Studio/MSBuild paths and could produce a small bootstrap DLL with
-    no S1Jarvis.Private.* resources. Files are produced by BuildJarvisRuntime below.
-  -->
   <ItemGroup>
-    <EmbeddedResource Include="$(JarvisRuntimeOutput)S1Jarvis.Runtime.dll">
-      <LogicalName>S1Jarvis.Private.S1Jarvis.Runtime.dll</LogicalName>
-    </EmbeddedResource>
-    <EmbeddedResource Include="$(JarvisRuntimeOutput)Microsoft.Web.WebView2.Core.dll">
-      <LogicalName>S1Jarvis.Private.Microsoft.Web.WebView2.Core.dll</LogicalName>
-    </EmbeddedResource>
-    <EmbeddedResource Include="$(JarvisRuntimeOutput)Microsoft.Web.WebView2.Wpf.dll">
-      <LogicalName>S1Jarvis.Private.Microsoft.Web.WebView2.Wpf.dll</LogicalName>
-    </EmbeddedResource>
-    <EmbeddedResource Include="$(JarvisRuntimeOutput)Newtonsoft.Json.dll">
-      <LogicalName>S1Jarvis.Private.Newtonsoft.Json.dll</LogicalName>
-    </EmbeddedResource>
-    <EmbeddedResource Include="$(JarvisRuntimeOutput)Microsoft.Identity.Client.dll">
-      <LogicalName>S1Jarvis.Private.Microsoft.Identity.Client.dll</LogicalName>
-    </EmbeddedResource>
-    <EmbeddedResource Include="$(JarvisRuntimeOutput)Microsoft.IdentityModel.Abstractions.dll">
-      <LogicalName>S1Jarvis.Private.Microsoft.IdentityModel.Abstractions.dll</LogicalName>
-    </EmbeddedResource>
-    <EmbeddedResource Include="$(JarvisRuntimeOutput)PdfSharp.dll">
-      <LogicalName>S1Jarvis.Private.PdfSharp.dll</LogicalName>
-    </EmbeddedResource>
-    <EmbeddedResource Include="$(JarvisRuntimeOutput)PdfSharp.Charting.dll">
-      <LogicalName>S1Jarvis.Private.PdfSharp.Charting.dll</LogicalName>
-    </EmbeddedResource>
-    <EmbeddedResource Include="$(JarvisRuntimeOutput)System.Buffers.dll">
-      <LogicalName>S1Jarvis.Private.System.Buffers.dll</LogicalName>
-    </EmbeddedResource>
-    <EmbeddedResource Include="$(JarvisRuntimeOutput)System.Diagnostics.DiagnosticSource.dll">
-      <LogicalName>S1Jarvis.Private.System.Diagnostics.DiagnosticSource.dll</LogicalName>
-    </EmbeddedResource>
-    <EmbeddedResource Include="$(JarvisRuntimeOutput)System.Memory.dll">
-      <LogicalName>S1Jarvis.Private.System.Memory.dll</LogicalName>
-    </EmbeddedResource>
-    <EmbeddedResource Include="$(JarvisRuntimeOutput)System.Numerics.Vectors.dll">
-      <LogicalName>S1Jarvis.Private.System.Numerics.Vectors.dll</LogicalName>
-    </EmbeddedResource>
-    <EmbeddedResource Include="$(JarvisRuntimeOutput)System.Runtime.CompilerServices.Unsafe.dll">
-      <LogicalName>S1Jarvis.Private.System.Runtime.CompilerServices.Unsafe.dll</LogicalName>
-    </EmbeddedResource>
+    <EmbeddedResource Include="$(JarvisRuntimeOutput)S1Jarvis.Runtime.dll"><LogicalName>S1Jarvis.Private.S1Jarvis.Runtime.dll</LogicalName></EmbeddedResource>
+    <EmbeddedResource Include="$(JarvisRuntimeOutput)Microsoft.Web.WebView2.Core.dll"><LogicalName>S1Jarvis.Private.Microsoft.Web.WebView2.Core.dll</LogicalName></EmbeddedResource>
+    <EmbeddedResource Include="$(JarvisRuntimeOutput)Microsoft.Web.WebView2.Wpf.dll"><LogicalName>S1Jarvis.Private.Microsoft.Web.WebView2.Wpf.dll</LogicalName></EmbeddedResource>
+    <EmbeddedResource Include="$(JarvisRuntimeOutput)Newtonsoft.Json.dll"><LogicalName>S1Jarvis.Private.Newtonsoft.Json.dll</LogicalName></EmbeddedResource>
+    <EmbeddedResource Include="$(JarvisRuntimeOutput)Microsoft.Identity.Client.dll"><LogicalName>S1Jarvis.Private.Microsoft.Identity.Client.dll</LogicalName></EmbeddedResource>
+    <EmbeddedResource Include="$(JarvisRuntimeOutput)Microsoft.IdentityModel.Abstractions.dll"><LogicalName>S1Jarvis.Private.Microsoft.IdentityModel.Abstractions.dll</LogicalName></EmbeddedResource>
+    <EmbeddedResource Include="$(JarvisRuntimeOutput)PdfSharp.dll"><LogicalName>S1Jarvis.Private.PdfSharp.dll</LogicalName></EmbeddedResource>
+    <EmbeddedResource Include="$(JarvisRuntimeOutput)PdfSharp.Charting.dll"><LogicalName>S1Jarvis.Private.PdfSharp.Charting.dll</LogicalName></EmbeddedResource>
+    <EmbeddedResource Include="$(JarvisRuntimeOutput)System.Buffers.dll"><LogicalName>S1Jarvis.Private.System.Buffers.dll</LogicalName></EmbeddedResource>
+    <EmbeddedResource Include="$(JarvisRuntimeOutput)System.Diagnostics.DiagnosticSource.dll"><LogicalName>S1Jarvis.Private.System.Diagnostics.DiagnosticSource.dll</LogicalName></EmbeddedResource>
+    <EmbeddedResource Include="$(JarvisRuntimeOutput)System.Memory.dll"><LogicalName>S1Jarvis.Private.System.Memory.dll</LogicalName></EmbeddedResource>
+    <EmbeddedResource Include="$(JarvisRuntimeOutput)System.Numerics.Vectors.dll"><LogicalName>S1Jarvis.Private.System.Numerics.Vectors.dll</LogicalName></EmbeddedResource>
+    <EmbeddedResource Include="$(JarvisRuntimeOutput)System.Runtime.CompilerServices.Unsafe.dll"><LogicalName>S1Jarvis.Private.System.Runtime.CompilerServices.Unsafe.dll</LogicalName></EmbeddedResource>
   </ItemGroup>
 
   <Target Name="BuildJarvisRuntime" BeforeTargets="PrepareResources">
-    <MSBuild Projects="$(MSBuildProjectDirectory)\S1Jarvis.Runtime\S1Jarvis.Runtime.csproj"
-             Targets="Restore"
-             Properties="Configuration=$(Configuration);Platform=AnyCPU"
-             BuildInParallel="false" />
-    <MSBuild Projects="$(MSBuildProjectDirectory)\S1Jarvis.Runtime\S1Jarvis.Runtime.csproj"
-             Targets="Build"
-             Properties="Configuration=$(Configuration);Platform=AnyCPU"
-             BuildInParallel="false" />
-
-    <Error Condition="!Exists('$(JarvisRuntimeOutput)S1Jarvis.Runtime.dll')"
-           Text="S1Jarvis.Runtime.dll was not built; embedded runtime package cannot be created." />
-    <Error Condition="!Exists('$(JarvisRuntimeOutput)Microsoft.Web.WebView2.Core.dll')"
-           Text="Microsoft.Web.WebView2.Core.dll was not produced by S1Jarvis.Runtime." />
-    <Error Condition="!Exists('$(JarvisRuntimeOutput)Microsoft.Web.WebView2.Wpf.dll')"
-           Text="Microsoft.Web.WebView2.Wpf.dll was not produced by S1Jarvis.Runtime." />
+    <MSBuild Projects="$(MSBuildProjectDirectory)\S1Jarvis.Runtime\S1Jarvis.Runtime.csproj" Targets="Restore" Properties="Configuration=$(Configuration);Platform=AnyCPU" BuildInParallel="false" />
+    <MSBuild Projects="$(MSBuildProjectDirectory)\S1Jarvis.Runtime\S1Jarvis.Runtime.csproj" Targets="Build" Properties="Configuration=$(Configuration);Platform=AnyCPU" BuildInParallel="false" />
+    <Error Condition="!Exists('$(JarvisRuntimeOutput)S1Jarvis.Runtime.dll')" Text="S1Jarvis.Runtime.dll was not built; embedded runtime package cannot be created." />
+    <Error Condition="!Exists('$(JarvisRuntimeOutput)Microsoft.Web.WebView2.Core.dll')" Text="Microsoft.Web.WebView2.Core.dll was not produced by S1Jarvis.Runtime." />
+    <Error Condition="!Exists('$(JarvisRuntimeOutput)Microsoft.Web.WebView2.Wpf.dll')" Text="Microsoft.Web.WebView2.Wpf.dll was not produced by S1Jarvis.Runtime." />
     <Message Importance="High" Text="Jarvis runtime ready for deterministic resource embedding from $(JarvisRuntimeOutput)" />
   </Target>
 
