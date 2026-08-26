@@ -164,7 +164,7 @@ namespace S1Jarvis.Core.Courier
             }
             catch (Exception ex)
             {
-                DebugLog.Error(ex, "Jarvis ELTA CreateShipment");
+                DebugLog.Log("[courier][ELTA] CreateShipment error: " + ex);
                 return new JarvisCourierShipmentResult { Success = false, ErrorMessage = ex.Message };
             }
         }
@@ -189,7 +189,7 @@ namespace S1Jarvis.Core.Courier
             }
             catch (Exception ex)
             {
-                DebugLog.Error(ex, "Jarvis ELTA CancelShipment");
+                DebugLog.Log("[courier][ELTA] CancelShipment error: " + ex);
                 return new JarvisCourierCancelResult { Success = false, ErrorMessage = ex.Message };
             }
         }
@@ -279,7 +279,7 @@ namespace S1Jarvis.Core.Courier
             }
             catch (Exception ex)
             {
-                DebugLog.Error(ex, "Jarvis ELTA TrackShipment");
+                DebugLog.Log("[courier][ELTA] TrackShipment error: " + ex);
                 return new JarvisCourierTrackingResult { Success = false, ErrorMessage = ex.Message };
             }
         }
