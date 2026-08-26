@@ -7,9 +7,8 @@ using S1Courier.Models;
 
 namespace S1Jarvis.Core.Courier
 {
-    // Transitional bridge while Geniki is moved into Jarvis.
-    // Delete this file when the last legacy provider is ported and the
-    // S1Courier assembly reference is removed.
+    // Transitional bridge kept only until JarvisCourier.cs is switched to
+    // Jarvis-owned contracts. All four concrete providers are now native.
     internal sealed class JarvisCourierLegacyAdapter : IJarvisCourierProvider
     {
         private readonly ICourierProvider _inner;
@@ -128,40 +127,9 @@ namespace S1Jarvis.Core.Courier
             if (code == "COURIER CENTER") return new JarvisCourierCenterProvider(config);
             if (code == "ELTA COURIER") return new JarvisEltaCourierProvider(config);
             if (code == "ACS COURIER") return new JarvisAcsCourierProvider(config);
+            if (code == "GENIKI TAXYDROMIKI") return new JarvisGenikiCourierProvider(config);
 
-            var legacy = new CourierProviderConfig
-            {
-                ID = config.Id,
-                ProviderName = config.ProviderName,
-                ProviderCode = config.ProviderCode,
-                ApiUrl = config.ApiUrl,
-                ApiKey = config.ApiKey,
-                UserAlias = config.UserAlias,
-                CredentialValue = config.CredentialValue,
-                AccountCode = config.AccountCode,
-                IsActive = config.IsActive,
-                CompanyId = config.CompanyId,
-                CompanyPassword = config.CompanyPassword,
-                UserId = config.UserId,
-                UserPassword = config.UserPassword,
-                BillingCode = config.BillingCode,
-                CodPaywayCode = config.CodPaywayCode,
-                Company = config.Company,
-                Branch = config.Branch,
-                IsDefault = config.IsDefault,
-                PrintType = config.PrintType,
-                PrintTemplate = config.PrintTemplate,
-                SubCode = config.SubCode,
-                CustCode = config.CustCode,
-                CustUser = config.CustUser,
-                CustPass = config.CustPass,
-                PelCode = config.PelCode,
-                TwoStepAuth = config.TwoStepAuth,
-                MaxBatch = config.MaxBatch,
-                LastFinalized = config.LastFinalized
-            };
-
-            return new JarvisCourierLegacyAdapter(CourierProviderFactory.Create(legacy));
+            throw new NotSupportedException("Μη υποστηριζόμενος courier provider: " + config.ProviderCode);
         }
     }
 }
