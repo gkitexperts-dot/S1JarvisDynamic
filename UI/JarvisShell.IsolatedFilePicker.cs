@@ -132,6 +132,9 @@ namespace S1Jarvis.UI
     }
   }
 
+  // Only click/browse is intercepted. Native Chromium drag/drop must remain
+  // untouched so the existing drDropzone dragenter/dragover/drop handlers
+  // receive DataTransfer.files directly and feed the same addDrFiles pipeline.
   document.addEventListener('click',function(ev){
     var t=ev.target;
     if(!t)return;
@@ -143,10 +146,20 @@ namespace S1Jarvis.UI
     if(attach){ev.preventDefault();ev.stopImmediatePropagation();pick('chat',false);return;}
     if(drBrowse||drDrop){ev.preventDefault();ev.stopImmediatePropagation();pick('dr',true);return;}
   },true);
+
+  var dz=document.getElementById('drDropzone');
+  if(dz){
+    dz.addEventListener('dragenter',function(ev){
+      if(ev.dataTransfer&&ev.dataTransfer.types&&Array.prototype.indexOf.call(ev.dataTransfer.types,'Files')>=0){
+        dz.classList.add('dragover');
+      }
+    },true);
+    dz.addEventListener('drop',function(){dz.classList.remove('dragover');},true);
+  }
 })();";
 
                 await webView.CoreWebView2.ExecuteScriptAsync(script);
-                DebugLog.Log("[file-picker] UI interception script installed for DR + paperclip.");
+                DebugLog.Log("[file-picker] UI interception installed for click/browse; native DR drag/drop preserved.");
             }
             catch (Exception ex)
             {
