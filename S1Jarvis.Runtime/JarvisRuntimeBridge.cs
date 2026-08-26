@@ -7,11 +7,6 @@ using S1Jarvis.Access.Verilic;
 
 namespace S1Jarvis.Runtime
 {
-    /// <summary>
-    /// Public bridge used by the thin Soft1 bootstrap assembly. The outer S1Jarvis.dll
-    /// never references WebView2 or the full runtime at compile time; it loads this
-    /// embedded runtime only after Soft1 has finished scanning the NETDLL assembly.
-    /// </summary>
     public static class JarvisRuntimeBridge
     {
         private static readonly string[] VerilicActivationProducts =
@@ -23,7 +18,14 @@ namespace S1Jarvis.Runtime
 
         public static FrameworkElement CreateShell(XSupport xSupport)
         {
-            return new S1Jarvis.UI.JarvisShell(xSupport);
+            if (xSupport == null)
+                throw new ArgumentNullException("xSupport");
+
+            var shell = new S1Jarvis.UI.JarvisShell(xSupport);
+            shell.EnableProviderHealthCheck();
+            shell.EnableAiUsageUi();
+            shell.EnableAiUsageAggregation();
+            return shell;
         }
 
         public static string ActivateVerilicAll()
@@ -91,20 +93,9 @@ namespace S1Jarvis.Runtime
             }
         }
 
-        public static string ActivateVerilicJarvis()
-        {
-            return ActivateVerilicProduct(JarvisProducts.Jarvis);
-        }
-
-        public static string ActivateVerilicCourier()
-        {
-            return ActivateVerilicProduct(JarvisProducts.JarvisCourier);
-        }
-
-        public static string ActivateVerilicDocReader()
-        {
-            return ActivateVerilicProduct(JarvisProducts.JarvisDocReader);
-        }
+        public static string ActivateVerilicJarvis() { return ActivateVerilicProduct(JarvisProducts.Jarvis); }
+        public static string ActivateVerilicCourier() { return ActivateVerilicProduct(JarvisProducts.JarvisCourier); }
+        public static string ActivateVerilicDocReader() { return ActivateVerilicProduct(JarvisProducts.JarvisDocReader); }
 
         public static string GetVerilicReadiness()
         {
@@ -153,10 +144,7 @@ namespace S1Jarvis.Runtime
         {
             string text = "Verilic activation result:" + Environment.NewLine + "- " +
                           string.Join(Environment.NewLine + "- ", messages);
-            MessageBox.Show(
-                text,
-                "Verilic licensing",
-                MessageBoxButton.OK,
+            MessageBox.Show(text, "Verilic licensing", MessageBoxButton.OK,
                 isError ? MessageBoxImage.Error : MessageBoxImage.Information);
             return text;
         }
@@ -175,10 +163,7 @@ namespace S1Jarvis.Runtime
                    " | runtimeReady=" + Flag(readiness.RuntimeReady);
         }
 
-        private static string Flag(bool value)
-        {
-            return value ? "yes" : "no";
-        }
+        private static string Flag(bool value) { return value ? "yes" : "no"; }
 
         private static string SafeReason(string reasonCode)
         {
