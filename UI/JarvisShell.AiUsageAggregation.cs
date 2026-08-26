@@ -49,10 +49,12 @@ namespace S1Jarvis.UI
                 Panel.SetZIndex(overlay, 10000);
 
                 SetUsageAggregationProgress(bar, status, 15, "Έλεγχος ημερήσιων AI usage...");
-                await Dispatcher.Yield(System.Windows.Threading.DispatcherPriority.Background);
+                await System.Windows.Threading.Dispatcher.Yield(
+                    System.Windows.Threading.DispatcherPriority.Background);
 
                 SetUsageAggregationProgress(bar, status, 45, "Συγκέντρωση προηγούμενων ημερών...");
-                await Dispatcher.Yield(System.Windows.Threading.DispatcherPriority.Background);
+                await System.Windows.Threading.Dispatcher.Yield(
+                    System.Windows.Threading.DispatcherPriority.Background);
 
                 // XSupport is a Soft1 host object. Keep the DB call on the UI/host
                 // thread rather than moving it to Task.Run and risking host thread
