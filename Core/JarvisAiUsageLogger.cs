@@ -56,25 +56,30 @@ namespace S1Jarvis.Core
                 }
 
                 var info = xSupport.ConnectionInfo;
-                string serial = info.SerialNum == null ? null : info.SerialNum.ToString();
+                string serial = info.SerialNum == null ? string.Empty : info.SerialNum.ToString();
                 int totalTokens = Math.Max(0, inputTokens) + Math.Max(0, outputTokens);
 
+                // Soft1 ExecuteSQL/ADO does not reliably infer a parameter type
+                // when a raw null is supplied. Successful AI calls normally have
+                // errorCode == null, which caused 800A0E7C (improperly defined
+                // parameter). Pass empty strings for optional text parameters;
+                // they retain the same semantic meaning for the reporting table.
                 xSupport.ExecuteSQL(
                     InsertSql,
                     serial,
                     info.CompanyId,
                     info.BranchId,
                     info.UserId,
-                    Truncate(agent, 30),
-                    Truncate(provider, 30),
-                    Truncate(model, 80),
+                    Truncate(agent, 30) ?? string.Empty,
+                    Truncate(provider, 30) ?? string.Empty,
+                    Truncate(model, 80) ?? string.Empty,
                     Math.Max(0, inputTokens),
                     Math.Max(0, outputTokens),
                     totalTokens,
-                    Truncate(requestId, 64),
+                    Truncate(requestId, 64) ?? string.Empty,
                     DateTime.Now,
                     success ? 1 : 0,
-                    Truncate(errorCode, 50));
+                    Truncate(errorCode, 50) ?? string.Empty);
 
                 logged = true;
             }
