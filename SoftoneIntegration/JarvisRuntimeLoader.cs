@@ -80,11 +80,11 @@ namespace S1Jarvis.SoftoneIntegration
             if (_resolverInstalled)
                 return;
 
-            AppDomain.CurrentDomain.AssemblyResolve += ResolveEmbeddedAssembly;
+            AppDomain.CurrentDomain.AssemblyResolve += ResolvePrivateAssembly;
             _resolverInstalled = true;
         }
 
-        private static Assembly ResolveEmbeddedAssembly(object sender, ResolveEventArgs args)
+        private static Assembly ResolvePrivateAssembly(object sender, ResolveEventArgs args)
         {
             try
             {
@@ -93,22 +93,107 @@ namespace S1Jarvis.SoftoneIntegration
                 if (string.IsNullOrWhiteSpace(simpleName))
                     return null;
 
-                foreach (Assembly existing in AppDomain.CurrentDomain.GetAssemblies())
-                {
-                    AssemblyName existingName;
-                    try { existingName = existing.GetName(); }
-                    catch { continue; }
-                    if (string.Equals(existingName.Name, simpleName, StringComparison.OrdinalIgnoreCase))
-                        return existing;
-                }
+                // First preference: if Soft1 has already loaded an assembly with this
+                // simple name, reuse it. This is particularly important for WebView2
+                // on Application Server installations, where the host may own the DLL.
+                Assembly existing = FindLoadedAssembly(simpleName);
+                if (existing != null)
+                    return existing;
 
                 lock (Sync)
                 {
                     Assembly cached;
                     if (Loaded.TryGetValue(simpleName, out cached))
                         return cached;
+
+                    // WebView2 is host-sensitive. If the Soft1 directory already
+                    // contains Core/Wpf, prefer that host copy over our embedded one.
+                    // This keeps us aligned with the host and avoids a second WebView2
+                    // assembly in the same AppDomain. On a clean machine where Soft1
+                    // does not ship those managed DLLs, we fall back to the embedded
+                    // exact build-time copy and remain single-file deployable.
+                    if (IsWebView2Assembly(simpleName))
+                    {
+                        Assembly hostAssembly = TryLoadHostAssembly(simpleName);
+                        if (hostAssembly != null)
+                        {
+                            Loaded[simpleName] = hostAssembly;
+                            return hostAssembly;
+                        }
+                    }
+
                     return LoadEmbeddedAssembly(simpleName);
                 }
+            }
+            catch
+            {
+                return null;
+            }
+        }
+
+        private static Assembly FindLoadedAssembly(string simpleName)
+        {
+            foreach (Assembly existing in AppDomain.CurrentDomain.GetAssemblies())
+            {
+                AssemblyName existingName;
+                try { existingName = existing.GetName(); }
+                catch { continue; }
+
+                if (string.Equals(existingName.Name, simpleName, StringComparison.OrdinalIgnoreCase))
+                    return existing;
+            }
+
+            return null;
+        }
+
+        private static bool IsWebView2Assembly(string simpleName)
+        {
+            return string.Equals(simpleName, "Microsoft.Web.WebView2.Core", StringComparison.OrdinalIgnoreCase) ||
+                   string.Equals(simpleName, "Microsoft.Web.WebView2.Wpf", StringComparison.OrdinalIgnoreCase);
+        }
+
+        private static Assembly TryLoadHostAssembly(string simpleName)
+        {
+            string fileName = simpleName + ".dll";
+            string[] candidateDirectories =
+            {
+                GetOuterAssemblyDirectory(),
+                AppDomain.CurrentDomain.BaseDirectory
+            };
+
+            for (int i = 0; i < candidateDirectories.Length; i++)
+            {
+                string directory = candidateDirectories[i];
+                if (string.IsNullOrWhiteSpace(directory))
+                    continue;
+
+                string path;
+                try { path = Path.Combine(directory, fileName); }
+                catch { continue; }
+
+                if (!File.Exists(path))
+                    continue;
+
+                try
+                {
+                    return Assembly.LoadFrom(path);
+                }
+                catch
+                {
+                    // If the host copy cannot be loaded, do not fail Jarvis startup;
+                    // the embedded copy below remains the deterministic fallback.
+                }
+            }
+
+            return null;
+        }
+
+        private static string GetOuterAssemblyDirectory()
+        {
+            try
+            {
+                string location = typeof(JarvisRuntimeLoader).Assembly.Location;
+                return string.IsNullOrWhiteSpace(location) ? null : Path.GetDirectoryName(location);
             }
             catch
             {
@@ -130,7 +215,8 @@ namespace S1Jarvis.SoftoneIntegration
                 while (offset < bytes.Length)
                 {
                     int read = stream.Read(bytes, offset, bytes.Length - offset);
-                    if (read <= 0) break;
+                    if (read <= 0)
+                        break;
                     offset += read;
                 }
 
