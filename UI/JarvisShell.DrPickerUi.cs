@@ -95,23 +95,18 @@ namespace S1Jarvis.UI
   if(!dz||dz.dataset.jarvisPickerUi==='1')return;
   dz.dataset.jarvisPickerUi='1';
 
-  // The native external picker is now the supported upload path. Reuse the
-  // existing #drDropzone click target because JarvisShell.IsolatedFilePicker
-  // already intercepts it and routes the selected files into addDrFiles(...).
-  // The existing #drFileList therefore keeps rendering the chosen documents
-  // with the normal DR file cards/icons; no downstream workflow changes.
   dz.setAttribute('role','button');
   dz.setAttribute('aria-label','Άνοιγμα αρχείων');
   dz.setAttribute('tabindex','0');
   dz.title='Άνοιγμα αρχείων';
   dz.innerHTML=''
-    +'<div style="display:flex;align-items:center;justify-content:center;gap:10px;width:100%;">'
-    +  '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="width:22px;height:22px;flex:none;">'
-    +    '<path d="M3 7a2 2 0 0 1 2-2h5l2 2h7a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"></path>'
+    +'<div style=""display:flex;align-items:center;justify-content:center;gap:10px;width:100%;"">'
+    +  '<svg viewBox=""0 0 24 24"" fill=""none"" stroke=""currentColor"" stroke-width=""2"" stroke-linecap=""round"" stroke-linejoin=""round"" style=""width:22px;height:22px;flex:none;"">'
+    +    '<path d=""M3 7a2 2 0 0 1 2-2h5l2 2h7a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z""></path>'
     +  '</svg>'
-    +  '<span style="font-size:15px;font-weight:650;letter-spacing:.1px;">Άνοιγμα</span>'
+    +  '<span style=""font-size:15px;font-weight:650;letter-spacing:.1px;"">Άνοιγμα</span>'
     +'</div>'
-    +'<div style="margin-top:5px;font-size:11.5px;opacity:.72;">Επίλεξε ένα ή περισσότερα αρχεία</div>';
+    +'<div style=""margin-top:5px;font-size:11.5px;opacity:.72;"">Επίλεξε ένα ή περισσότερα αρχεία</div>';
 
   dz.style.width='100%';
   dz.style.minHeight='74px';
@@ -123,9 +118,6 @@ namespace S1Jarvis.UI
   dz.style.flexDirection='column';
   dz.style.alignItems='center';
   dz.style.justifyContent='center';
-
-  // Remove the drag/drop affordance visually. Drag events may still exist in
-  // legacy page code, but the UI no longer advertises or depends on them.
   dz.classList.remove('dragover');
 
   dz.addEventListener('keydown',function(ev){
