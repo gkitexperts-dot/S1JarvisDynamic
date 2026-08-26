@@ -59,6 +59,18 @@ namespace S1Jarvis.Core
                 string serial = info.SerialNum == null ? string.Empty : info.SerialNum.ToString();
                 int totalTokens = Math.Max(0, inputTokens) + Math.Max(0, outputTokens);
 
+                DebugLog.Log(
+                    "[AI-USAGE] insert begin; serial=" + serial +
+                    " company=" + info.CompanyId.ToString() +
+                    " branch=" + info.BranchId.ToString() +
+                    " user=" + info.UserId.ToString() +
+                    " agent=" + (agent ?? "") +
+                    " provider=" + (provider ?? "") +
+                    " model=" + (model ?? "") +
+                    " in=" + Math.Max(0, inputTokens).ToString() +
+                    " out=" + Math.Max(0, outputTokens).ToString() +
+                    " total=" + totalTokens.ToString());
+
                 // Soft1 ExecuteSQL/ADO does not reliably infer a parameter type
                 // when a raw null is supplied. Successful AI calls normally have
                 // errorCode == null, which caused 800A0E7C (improperly defined
@@ -76,12 +88,14 @@ namespace S1Jarvis.Core
                     Math.Max(0, inputTokens),
                     Math.Max(0, outputTokens),
                     totalTokens,
-                    Truncate(requestId, 64) ?? string.Empty,
+                    Truncate(requestId, 30) ?? string.Empty,
                     DateTime.Now,
                     success ? 1 : 0,
                     Truncate(errorCode, 50) ?? string.Empty);
 
                 logged = true;
+                DebugLog.Log("[AI-USAGE] insert success; requestId=" +
+                             (Truncate(requestId, 30) ?? string.Empty));
             }
             catch (Exception ex)
             {
@@ -102,7 +116,11 @@ namespace S1Jarvis.Core
                         " model=" + (model ?? "") +
                         " in=" + inputTokens.ToString() +
                         " out=" + outputTokens.ToString() +
+                        " exception=" + ex.GetType().FullName +
+                        " hresult=0x" + ex.HResult.ToString("X8") +
                         " error=" + ex.Message);
+
+                    WriteSchemaDiagnostic(xSupport);
                 }
                 catch
                 {
@@ -123,6 +141,45 @@ namespace S1Jarvis.Core
                     Logged = logged
                 });
             }
+        }
+
+        private static void WriteSchemaDiagnostic(XSupport xSupport)
+        {
+            if (xSupport == null)
+                return;
+
+            try
+            {
+                var ds = xSupport.GetSQLDataSet(
+                    "SELECT " +
+                    "OBJECT_ID('dbo.CCCJAILOG') AS OBJID, " +
+                    "COL_LENGTH('dbo.CCCJAILOG','CCCSERIAL') AS SERIAL_LEN, " +
+                    "COL_LENGTH('dbo.CCCJAILOG','CCCREQID') AS REQID_LEN, " +
+                    "COL_LENGTH('dbo.CCCJAILOG','CCCMODEL') AS MODEL_LEN");
+
+                if (ds == null || ds.Count == 0)
+                {
+                    DebugLog.Log("[AI-USAGE] schema diagnostic returned no rows");
+                    return;
+                }
+
+                DebugLog.Log(
+                    "[AI-USAGE] schema diagnostic; objectId=" + SafeValue(ds.Current["OBJID"]) +
+                    " serialLen=" + SafeValue(ds.Current["SERIAL_LEN"]) +
+                    " requestIdLen=" + SafeValue(ds.Current["REQID_LEN"]) +
+                    " modelLen=" + SafeValue(ds.Current["MODEL_LEN"]));
+            }
+            catch (Exception diagnosticEx)
+            {
+                DebugLog.Log(
+                    "[AI-USAGE] schema diagnostic failed: " +
+                    diagnosticEx.GetType().FullName + " - " + diagnosticEx.Message);
+            }
+        }
+
+        private static string SafeValue(object value)
+        {
+            return value == null || value == DBNull.Value ? "NULL" : Convert.ToString(value);
         }
 
         private static void NotifyUsageRecorded(JarvisAiUsageEvent usage)
