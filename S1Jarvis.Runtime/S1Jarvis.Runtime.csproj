@@ -57,16 +57,11 @@
     <PackageReference Include="PDFsharp" Version="1.50.5147" />
   </ItemGroup>
 
-  <!--
-    This assembly contains the real Jarvis runtime, including every type that has
-    compile-time references to WebView2. It deliberately contains NO TXCode / WorksOn
-    entrypoints. Soft1 discovers only the tiny outer S1Jarvis.dll; this assembly is
-    loaded later through JarvisRuntimeLoader after NETDLL discovery has completed.
-  -->
   <ItemGroup>
     <Compile Include="..\Access\**\*.cs"><Link>Access\%(RecursiveDir)%(Filename)%(Extension)</Link></Compile>
     <Compile Include="..\Core\**\*.cs"><Link>Core\%(RecursiveDir)%(Filename)%(Extension)</Link></Compile>
-    <Compile Include="..\UI\*.cs"><Link>UI\%(Filename)%(Extension)</Link></Compile>
+    <Compile Include="..\UI\*.cs" Exclude="..\UI\JarvisShell.UatPipeline.cs"><Link>UI\%(Filename)%(Extension)</Link></Compile>
+    <Compile Include="..\SoftoneIntegration\S1Init.cs"><Link>SoftoneIntegration\S1Init.cs</Link></Compile>
     <Compile Include="JarvisRuntimeBridge.cs" />
     <Compile Include="Properties\AssemblyInfo.cs" />
   </ItemGroup>
