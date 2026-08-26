@@ -11,6 +11,7 @@ namespace S1Jarvis.UI
     {
         private static readonly bool DrRecognitionFlowClassHandlerRegistered = RegisterDrRecognitionFlowClassHandler();
         private bool _drRecognitionFlowStarted;
+        private bool _drRecognitionInitHooked;
 
         private static bool RegisterDrRecognitionFlowClassHandler()
         {
@@ -22,12 +23,71 @@ namespace S1Jarvis.UI
         private static void JarvisShell_DrRecognitionFlowLoaded(object sender, RoutedEventArgs e)
         {
             var shell = sender as JarvisShell;
-            if (shell != null) shell.StartDrRecognitionFlow();
+            if (shell == null) return;
+
+            // Loaded fires before EnsureCoreWebView2Async has necessarily completed.
+            // If CoreWebView2 is not ready yet, hook the deterministic initialization
+            // event and install the synchronous DR router as soon as it becomes ready.
+            shell.EnsureDrRecognitionFlowRouterInstalled();
+        }
+
+        private void EnsureDrRecognitionFlowRouterInstalled()
+        {
+            if (_drRecognitionFlowStarted) return;
+
+            try
+            {
+                if (webView == null)
+                {
+                    DebugLog.Log("[dr-recognition-flow] webView is null; router not installed.");
+                    return;
+                }
+
+                if (webView.CoreWebView2 != null)
+                {
+                    StartDrRecognitionFlow();
+                    return;
+                }
+
+                if (_drRecognitionInitHooked) return;
+
+                _drRecognitionInitHooked = true;
+                webView.CoreWebView2InitializationCompleted += WebView_DrRecognitionInitializationCompleted;
+                DebugLog.Log("[dr-recognition-flow] waiting for CoreWebView2 initialization.");
+            }
+            catch (Exception ex)
+            {
+                DebugLog.Log("[dr-recognition-flow] initialization hook EXCEPTION: " + ex);
+            }
+        }
+
+        private void WebView_DrRecognitionInitializationCompleted(object sender,
+            Microsoft.Web.WebView2.Core.CoreWebView2InitializationCompletedEventArgs e)
+        {
+            try
+            {
+                if (webView != null)
+                    webView.CoreWebView2InitializationCompleted -= WebView_DrRecognitionInitializationCompleted;
+                _drRecognitionInitHooked = false;
+
+                if (!e.IsSuccess)
+                {
+                    DebugLog.Log("[dr-recognition-flow] CoreWebView2 initialization failed; router not installed. " +
+                        (e.InitializationException == null ? string.Empty : e.InitializationException.ToString()));
+                    return;
+                }
+
+                DebugLog.Log("[dr-recognition-flow] CoreWebView2 initialized; installing synchronous router.");
+                StartDrRecognitionFlow();
+            }
+            catch (Exception ex)
+            {
+                DebugLog.Log("[dr-recognition-flow] initialization-completed EXCEPTION: " + ex);
+            }
         }
 
         // Soft1/XSupport integration is deliberately synchronous. The DR router is
-        // installed only after CoreWebView2 exists; JarvisShell_Loaded calls this
-        // method again immediately after WebView2 initialization.
+        // installed only after CoreWebView2 exists.
         private void StartDrRecognitionFlow()
         {
             if (_drRecognitionFlowStarted) return;
@@ -36,9 +96,14 @@ namespace S1Jarvis.UI
                 if (webView == null || webView.CoreWebView2 == null)
                 {
                     DebugLog.Log("[dr-recognition-flow] router deferred until WebView2 is ready.");
+                    EnsureDrRecognitionFlowRouterInstalled();
                     return;
                 }
 
+                // Replace the legacy async router for WebMessageReceived with one
+                // synchronous entry point. Non-DR messages are forwarded to the
+                // mature legacy handler, but DR boot and all Soft1/XSupport work
+                // are intercepted before any async/Task.Run boundary.
                 webView.CoreWebView2.WebMessageReceived -= CoreWebView2_WebMessageReceived;
                 webView.CoreWebView2.WebMessageReceived -= DrRecognitionFlow_WebMessageReceived;
                 webView.CoreWebView2.WebMessageReceived += DrRecognitionFlow_WebMessageReceived;
@@ -114,13 +179,20 @@ namespace S1Jarvis.UI
                 catch (Exception ex)
                 {
                     DebugLog.Log("[dr-recognition-flow] resolve_document_pattern EXCEPTION: " + ex);
-                    webView.CoreWebView2.PostWebMessageAsString(new JObject
+                    try
                     {
-                        ["type"] = "dr_document_pattern_result", ["fileId"] = fileId,
-                        ["success"] = false, ["resolver"] = "resolve_document_pattern", ["version"] = 4,
-                        ["mode"] = "Unknown", ["needsReview"] = true, ["reason"] = "pattern_resolution_failed",
-                        ["errorMessage"] = ex.Message
-                    }.ToString(Formatting.None));
+                        webView.CoreWebView2.PostWebMessageAsString(new JObject
+                        {
+                            ["type"] = "dr_document_pattern_result", ["fileId"] = fileId,
+                            ["success"] = false, ["resolver"] = "resolve_document_pattern", ["version"] = 4,
+                            ["mode"] = "Unknown", ["needsReview"] = true, ["reason"] = "pattern_resolution_failed",
+                            ["errorMessage"] = ex.Message
+                        }.ToString(Formatting.None));
+                    }
+                    catch (Exception postEx)
+                    {
+                        DebugLog.Log("[dr-recognition-flow] resolve_document_pattern result post EXCEPTION: " + postEx);
+                    }
                 }
                 return;
             }
@@ -218,11 +290,18 @@ namespace S1Jarvis.UI
             catch (Exception ex)
             {
                 DebugLog.Log("[dr-recognition-flow] register_document_v2 EXCEPTION: " + ex);
-                webView.CoreWebView2.PostWebMessageAsString(new JObject
+                try
                 {
-                    ["type"] = "dr_register_document_result", ["fileId"] = fileId,
-                    ["success"] = false, ["errorMessage"] = ex.Message
-                }.ToString(Formatting.None));
+                    webView.CoreWebView2.PostWebMessageAsString(new JObject
+                    {
+                        ["type"] = "dr_register_document_result", ["fileId"] = fileId,
+                        ["success"] = false, ["errorMessage"] = ex.Message
+                    }.ToString(Formatting.None));
+                }
+                catch (Exception postEx)
+                {
+                    DebugLog.Log("[dr-recognition-flow] register_document_v2 result post EXCEPTION: " + postEx);
+                }
             }
         }
 
@@ -246,12 +325,19 @@ namespace S1Jarvis.UI
             catch (Exception ex)
             {
                 DebugLog.Log("[dr-recognition-flow] confirm_precedent_mapping EXCEPTION: " + ex);
-                webView.CoreWebView2.PostWebMessageAsString(new JObject
+                try
                 {
-                    ["type"] = "dr_precedent_mapping_confirmed", ["fileId"] = fileId,
-                    ["success"] = false, ["resolver"] = "learn_supplier_code_mapping", ["version"] = 1,
-                    ["operatorConfirmed"] = true, ["reason"] = "learning_write_failed", ["errorMessage"] = ex.Message
-                }.ToString(Formatting.None));
+                    webView.CoreWebView2.PostWebMessageAsString(new JObject
+                    {
+                        ["type"] = "dr_precedent_mapping_confirmed", ["fileId"] = fileId,
+                        ["success"] = false, ["resolver"] = "learn_supplier_code_mapping", ["version"] = 1,
+                        ["operatorConfirmed"] = true, ["reason"] = "learning_write_failed", ["errorMessage"] = ex.Message
+                    }.ToString(Formatting.None));
+                }
+                catch (Exception postEx)
+                {
+                    DebugLog.Log("[dr-recognition-flow] confirm_precedent_mapping result post EXCEPTION: " + postEx);
+                }
             }
         }
 
@@ -271,13 +357,20 @@ namespace S1Jarvis.UI
             catch (Exception ex)
             {
                 DebugLog.Log("[dr-recognition-flow] select_precedent EXCEPTION: " + ex);
-                webView.CoreWebView2.PostWebMessageAsString(new JObject
+                try
                 {
-                    ["type"] = "dr_precedent_result", ["fileId"] = fileId, ["success"] = false,
-                    ["resolver"] = "resolve_historical_precedent", ["version"] = 1,
-                    ["operatorSelected"] = true, ["reason"] = "precedent_resolution_failed",
-                    ["errorMessage"] = ex.Message, ["lines"] = new JArray()
-                }.ToString(Formatting.None));
+                    webView.CoreWebView2.PostWebMessageAsString(new JObject
+                    {
+                        ["type"] = "dr_precedent_result", ["fileId"] = fileId, ["success"] = false,
+                        ["resolver"] = "resolve_historical_precedent", ["version"] = 1,
+                        ["operatorSelected"] = true, ["reason"] = "precedent_resolution_failed",
+                        ["errorMessage"] = ex.Message, ["lines"] = new JArray()
+                    }.ToString(Formatting.None));
+                }
+                catch (Exception postEx)
+                {
+                    DebugLog.Log("[dr-recognition-flow] select_precedent result post EXCEPTION: " + postEx);
+                }
             }
         }
 
@@ -308,12 +401,19 @@ namespace S1Jarvis.UI
             catch (Exception ex)
             {
                 DebugLog.Log("[dr-recognition-flow] resolve_line_mappings EXCEPTION: " + ex);
-                webView.CoreWebView2.PostWebMessageAsString(new JObject
+                try
                 {
-                    ["type"] = "dr_line_mappings_result", ["fileId"] = fileId, ["success"] = false,
-                    ["resolver"] = "resolve_supplier_code_mapping", ["version"] = 2,
-                    ["readOnly"] = true, ["errorMessage"] = ex.Message, ["results"] = new JArray()
-                }.ToString(Formatting.None));
+                    webView.CoreWebView2.PostWebMessageAsString(new JObject
+                    {
+                        ["type"] = "dr_line_mappings_result", ["fileId"] = fileId, ["success"] = false,
+                        ["resolver"] = "resolve_supplier_code_mapping", ["version"] = 2,
+                        ["readOnly"] = true, ["errorMessage"] = ex.Message, ["results"] = new JArray()
+                    }.ToString(Formatting.None));
+                }
+                catch (Exception postEx)
+                {
+                    DebugLog.Log("[dr-recognition-flow] resolve_line_mappings result post EXCEPTION: " + postEx);
+                }
             }
         }
     }
