@@ -26,12 +26,6 @@
     <DefineConstants>TRACE</DefineConstants><ErrorReport>prompt</ErrorReport><WarningLevel>4</WarningLevel><PlatformTarget>x86</PlatformTarget>
   </PropertyGroup>
 
-  <!--
-    IMPORTANT: this outer NETDLL is intentionally tiny. Soft1 reflects over every
-    type in S1Jarvis.dll during NETDLL discovery, so WebView2 and all other private
-    runtime dependencies live in the embedded S1Jarvis.Runtime assembly instead.
-    The only compile-time host dependency left here is Softone.Lib.
-  -->
   <ItemGroup>
     <Reference Include="PresentationFramework" />
     <Reference Include="WindowsBase" />
@@ -55,25 +49,17 @@
     <None Include="app.config" />
   </ItemGroup>
 
-  <!--
-    The runtime is intentionally NOT a normal assembly reference of this outer
-    project. We invoke its Build target explicitly below so the nested project is
-    guaranteed to exist before MSBuild tries to collect EmbeddedResource items.
-    This also avoids Visual Studio solution/configuration ordering differences.
-  -->
   <Target Name="BuildJarvisRuntime" BeforeTargets="CollectJarvisRuntimeResources">
+    <MSBuild Projects="$(MSBuildProjectDirectory)\S1Jarvis.Runtime\S1Jarvis.Runtime.csproj"
+             Targets="Restore"
+             Properties="Configuration=$(Configuration);Platform=AnyCPU"
+             BuildInParallel="false" />
     <MSBuild Projects="$(MSBuildProjectDirectory)\S1Jarvis.Runtime\S1Jarvis.Runtime.csproj"
              Targets="Build"
              Properties="Configuration=$(Configuration);Platform=AnyCPU"
              BuildInParallel="false" />
   </Target>
 
-  <!--
-    The runtime project is built first, then every private managed DLL produced in
-    its output directory is embedded as an opaque resource. Because these are only
-    resources, Soft1's GetTypes() scan never needs WebView2/Newtonsoft/MSAL/PDFsharp.
-    JarvisRuntimeLoader installs AssemblyResolve immediately before opening Jarvis.
-  -->
   <Target Name="CollectJarvisRuntimeResources" BeforeTargets="PrepareResources" DependsOnTargets="BuildJarvisRuntime">
     <PropertyGroup>
       <JarvisRuntimeOutput>$(MSBuildProjectDirectory)\S1Jarvis.Runtime\bin\$(Configuration)\</JarvisRuntimeOutput>
@@ -85,8 +71,7 @@
         <LogicalName>S1Jarvis.Private.%(Filename)%(Extension)</LogicalName>
       </EmbeddedResource>
     </ItemGroup>
-    <Message Importance="High"
-             Text="Embedding Jarvis runtime bundle: @(EmbeddedResource->'%(LogicalName)', ', ')" />
+    <Message Importance="High" Text="Embedding Jarvis runtime bundle: @(EmbeddedResource->'%(LogicalName)', ', ')" />
   </Target>
 
   <Target Name="BuildJarvisDeployPackage" AfterTargets="Build" Condition="'$(Configuration)' == 'Release'">
@@ -95,8 +80,7 @@
     <Copy SourceFiles="$(TargetPath)" DestinationFiles="$(JarvisDeployDir)$(AssemblyName).dll" />
     <Copy SourceFiles="$(TargetPath).config" DestinationFiles="$(JarvisDeployDir)$(AssemblyName).dll.config" Condition="Exists('$(TargetPath).config')" />
     <Error Condition="!Exists('$(JarvisDeployDir)$(AssemblyName).dll')" Text="Jarvis deployment package was not created." />
-    <Message Importance="High"
-             Text="JarvisDeploy ready: $(JarvisDeployDir)$(AssemblyName).dll (Soft1 bootstrap + embedded runtime bundle)." />
+    <Message Importance="High" Text="JarvisDeploy ready: $(JarvisDeployDir)$(AssemblyName).dll (Soft1 bootstrap + embedded runtime bundle)." />
   </Target>
 
   <Import Project="$(MSBuildToolsPath)\Microsoft.CSharp.targets" />
