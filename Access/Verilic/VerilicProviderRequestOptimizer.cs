@@ -12,10 +12,15 @@ namespace S1Jarvis.Access.Verilic
     ///
     /// Safety rules:
     /// - Provider/model/routing authority is never changed.
-    /// - Ambiguous or multi-domain work fails open to the original request.
+    /// - Ambiguous work fails open to the mature request whenever safe compaction
+    ///   cannot be proven.
     /// - Write/action capability is never added by the optimizer.
-    /// - Conversational fast-path is used only for obviously non-business chatter.
-    /// - Structured history (tool results, images, documents) is never pruned.
+    /// - Conversational fast-path is reserved for unambiguous greetings/chatter;
+    ///   short confirmations such as "ναι" are NOT treated as chat because they
+    ///   may confirm an email, voucher or another pending action.
+    /// - Tool traces from the CURRENT human turn are preserved byte-for-byte.
+    /// - Completed tool_use/tool_result/thinking traces from OLDER turns may be
+    ///   removed while visible user/assistant text is retained.
     /// - Dedicated agents receive only their role tools and a compact role prompt.
     /// - Any optimizer exception is non-fatal and returns the original request.
     /// </summary>
@@ -23,6 +28,11 @@ namespace S1Jarvis.Access.Verilic
     {
         private const int ConversationalMaxOutputTokens = 512;
         private const int ConversationalHistoryMessages = 6;
+        private const int ToolBudgetTopCount = 10;
+
+        private static readonly object ToolBudgetLock = new object();
+        private static readonly HashSet<string> LoggedToolBudgetSignatures =
+            new HashSet<string>(StringComparer.Ordinal);
 
         private static readonly HashSet<string> AtlasReadOnlyTools = Set(
             "query_data", "export_query_to_file", "open_document",
@@ -36,9 +46,12 @@ namespace S1Jarvis.Access.Verilic
             "query_data", "open_document", "find_trader_by_afm", "get_aade_data",
             "create_trader_from_aade", "export_query_to_file", "export_shown_table");
 
+        // Email flows often need to query Soft1 and export the result before send_email.
+        // Keeping export tools here avoids falling back to the entire main Jarvis catalog
+        // for report -> file -> email workflows.
         private static readonly HashSet<string> EchoTools = Set(
-            "query_data", "open_document", "create_crm_task",
-            "read_email", "download_email_attachment", "read_calendar",
+            "query_data", "open_document", "export_query_to_file", "export_shown_table",
+            "create_crm_task", "read_email", "download_email_attachment", "read_calendar",
             "filter_email_inbox", "filter_calendar", "show_calendar_entries",
             "send_email", "reply_email", "show_contact_results",
             "search_outlook_contacts", "create_outlook_event");
@@ -75,24 +88,24 @@ namespace S1Jarvis.Access.Verilic
             "νεο ειδος", "νεο πελατ", "νεο προμηθευτ", "εισαγωγ", "import"
         };
 
-        // Strong business vocabulary prevents a short operational request from
-        // being mistaken for harmless chat merely because it contains few words.
         private static readonly string[] BusinessSignals =
         {
             "soft1", "πελατ", "προμηθευτ", "συναλλασσομεν", "αφμ", "ειδος", "ειδη",
             "τιμολογ", "παραστατικ", "σειρα", "findoc", "trdr", "κωδικ", "ποσο",
             "υπολοιπ", "τζιρ", "πωλησ", "αγορ", "crm", "calendar", "ημερολογ",
             "courier", "voucher", "browser", "σελιδα", "url", "excel", "pdf",
-            "export", "sql", "query", "ααδε", "mydata", "παραγγελι", "αποθηκ"
+            "export", "sql", "query", "ααδε", "mydata", "παραγγελι", "αποθηκ",
+            "εισερχομεν", "inbox", "outlook"
         };
 
+        // Deliberately excludes "ναι", "οκ", "ωραία", "τέλεια" etc. Those
+        // can be confirmations of pending write/external actions.
         private static readonly string[] ConversationalExact =
         {
             "γεια", "γεια σου", "καλημερα", "καλησπερα", "καληνυχτα",
             "εισαι εδω", "εισαι εδω;", "με ακους", "με ακους;",
             "τι κανεις", "τι κανεις;", "πως εισαι", "πως εισαι;",
-            "ευχαριστω", "ευχαριστω πολυ", "οκ", "ok", "okay",
-            "ναι", "οχι", "τελεια", "ωραια", "μπραβο",
+            "ευχαριστω", "ευχαριστω πολυ",
             "ποιος εισαι", "ποιος εισαι;", "τι εισαι", "τι εισαι;"
         };
 
@@ -107,19 +120,25 @@ namespace S1Jarvis.Access.Verilic
                 JObject request = JObject.Parse(providerRequestJson);
                 JArray tools = request["tools"] as JArray;
                 JArray messages = request["messages"] as JArray;
+
+                int originalChars = providerRequestJson.Length;
+                string originalSystemText = ReadSystemText(request["system"]);
+                int originalSystemChars = originalSystemText.Length;
+                int originalToolCount = tools == null ? 0 : tools.Count;
+                int originalMessageCount = messages == null ? 0 : messages.Count;
+
+                LogToolSchemaBudget(agentName, tools);
+
+                HistoryCompactionStats historyStats = CompactCompletedToolHistory(request);
+                messages = request["messages"] as JArray;
+
                 string userText = FindLatestHumanText(messages);
+                int latestHumanIndex = FindLatestHumanMessageIndex(messages);
+                string previousAssistantText = FindPreviousAssistantText(messages, latestHumanIndex);
                 string systemText = ReadSystemText(request["system"]);
                 string contextLine = ExtractContextLine(systemText);
                 string role = (agentName ?? string.Empty).Trim().ToLowerInvariant();
 
-                int originalChars = providerRequestJson.Length;
-                int originalSystemChars = systemText.Length;
-                int originalToolCount = tools == null ? 0 : tools.Count;
-                int originalMessageCount = messages == null ? 0 : messages.Count;
-
-                // Level 1: obvious non-business conversation. This is intentionally
-                // provider-neutral and may apply to any logical agent. No tool schema
-                // is useful for "είσαι εδώ;" and similar turns.
                 if (IsClearlyConversational(userText) &&
                     !HasStructuredCurrentUserContent(messages))
                 {
@@ -128,21 +147,26 @@ namespace S1Jarvis.Access.Verilic
                     request["max_tokens"] = ConversationalMaxOutputTokens;
                     CompactPlainTextHistory(request, ConversationalHistoryMessages);
                     return Finish(request, agentName, "conversation", originalChars,
-                        originalSystemChars, originalToolCount, originalMessageCount);
+                        originalSystemChars, originalToolCount, originalMessageCount, historyStats);
                 }
 
-                // A no-tools final iteration still benefits from a compact role prompt
-                // for dedicated agents. Main Jarvis remains untouched unless the turn
-                // was classified above, because it may be finalizing arbitrary work.
+                // Final no-tools iterations can still shed completed OLD tool traces.
+                // Dedicated roles also receive their compact final prompt.
                 if (tools == null || tools.Count == 0)
                 {
                     string finalPrompt = BuildDedicatedPrompt(role, contextLine);
-                    if (string.IsNullOrWhiteSpace(finalPrompt))
-                        return providerRequestJson;
+                    if (!string.IsNullOrWhiteSpace(finalPrompt))
+                    {
+                        request["system"] = CompactSystem(finalPrompt);
+                        return Finish(request, agentName, "final-role", originalChars,
+                            originalSystemChars, originalToolCount, originalMessageCount, historyStats);
+                    }
 
-                    request["system"] = CompactSystem(finalPrompt);
-                    return Finish(request, agentName, "final-role", originalChars,
-                        originalSystemChars, originalToolCount, originalMessageCount);
+                    if (historyStats.Changed)
+                        return Finish(request, agentName, "history-only", originalChars,
+                            originalSystemChars, originalToolCount, originalMessageCount, historyStats);
+
+                    return providerRequestJson;
                 }
 
                 HashSet<string> allowed = null;
@@ -152,76 +176,72 @@ namespace S1Jarvis.Access.Verilic
                 switch (role)
                 {
                     case "jarvis":
-                        ResolveMainJarvisOptimization(userText, tools, contextLine,
-                            out allowed, out compactPrompt, out mode);
+                        ResolveMainJarvisOptimization(userText, previousAssistantText, tools,
+                            contextLine, out allowed, out compactPrompt, out mode);
                         break;
 
                     case "atlas":
-                        if (!IsClearlyReadOnly(userText))
-                            return providerRequestJson;
-                        allowed = AtlasReadOnlyTools;
-                        compactPrompt = BuildCompactAtlasPrompt(contextLine);
-                        mode = "atlas-read";
+                        if (IsClearlyReadOnly(userText))
+                        {
+                            allowed = AtlasReadOnlyTools;
+                            compactPrompt = BuildCompactAtlasPrompt(contextLine);
+                            mode = "atlas-read";
+                        }
                         break;
 
                     case "forge":
-                        if (HasForeignDedicatedTools(tools, "Forge"))
-                            return providerRequestJson;
                         allowed = ForgeTools;
                         compactPrompt = BuildCompactForgePrompt(contextLine);
                         mode = "forge";
                         break;
 
                     case "compass":
-                        if (HasForeignDedicatedTools(tools, "Compass"))
-                            return providerRequestJson;
                         allowed = CompassTools;
                         compactPrompt = BuildCompactCompassPrompt(contextLine);
                         mode = "compass";
                         break;
 
                     case "echo":
-                        if (HasForeignDedicatedTools(tools, "Echo"))
-                            return providerRequestJson;
                         allowed = EchoTools;
                         compactPrompt = BuildCompactEchoPrompt(contextLine);
                         mode = "echo";
                         break;
 
                     case "sprint":
-                        if (HasForeignDedicatedTools(tools, "Sprint"))
-                            return providerRequestJson;
                         allowed = SprintTools;
                         compactPrompt = BuildCompactSprintPrompt(contextLine);
                         mode = "sprint";
                         break;
 
                     case "scout":
-                        if (HasForeignDedicatedTools(tools, "Scout"))
-                            return providerRequestJson;
                         allowed = ScoutTools;
                         compactPrompt = BuildCompactScoutPrompt(contextLine);
                         mode = "scout";
                         break;
 
                     case "sage":
-                        if (HasForeignDedicatedTools(tools, "Sage"))
-                            return providerRequestJson;
                         allowed = SageTools;
                         compactPrompt = BuildCompactSagePrompt(contextLine);
                         mode = "sage";
                         break;
-
-                    default:
-                        return providerRequestJson;
                 }
 
                 if (allowed == null || string.IsNullOrWhiteSpace(compactPrompt))
+                {
+                    if (historyStats.Changed)
+                        return Finish(request, agentName, "history-only", originalChars,
+                            originalSystemChars, originalToolCount, originalMessageCount, historyStats);
                     return providerRequestJson;
+                }
 
                 JArray filtered = FilterTools(tools, allowed);
                 if (filtered.Count == 0)
+                {
+                    if (historyStats.Changed)
+                        return Finish(request, agentName, "history-only", originalChars,
+                            originalSystemChars, originalToolCount, originalMessageCount, historyStats);
                     return providerRequestJson;
+                }
 
                 if (filtered[filtered.Count - 1] is JObject lastTool)
                     lastTool["cache_control"] = new JObject { ["type"] = "ephemeral" };
@@ -230,7 +250,7 @@ namespace S1Jarvis.Access.Verilic
                 request["system"] = CompactSystem(compactPrompt);
 
                 return Finish(request, agentName, mode ?? "role", originalChars,
-                    originalSystemChars, originalToolCount, originalMessageCount);
+                    originalSystemChars, originalToolCount, originalMessageCount, historyStats);
             }
             catch (Exception ex)
             {
@@ -242,6 +262,7 @@ namespace S1Jarvis.Access.Verilic
 
         private static void ResolveMainJarvisOptimization(
             string userText,
+            string previousAssistantText,
             JArray tools,
             string contextLine,
             out HashSet<string> allowed,
@@ -252,69 +273,283 @@ namespace S1Jarvis.Access.Verilic
             compactPrompt = null;
             mode = null;
 
+            if (IsShortConfirmation(userText))
+            {
+                string pendingDomain = InferPendingDomain(previousAssistantText);
+                if (string.Equals(pendingDomain, "echo", StringComparison.Ordinal))
+                {
+                    allowed = EchoTools;
+                    compactPrompt = BuildCompactEchoPrompt(contextLine);
+                    mode = "jarvis-echo-followup";
+                    return;
+                }
+                if (string.Equals(pendingDomain, "sprint", StringComparison.Ordinal))
+                {
+                    allowed = SprintTools;
+                    compactPrompt = BuildCompactSprintPrompt(contextLine);
+                    mode = "jarvis-sprint-followup";
+                    return;
+                }
+            }
+
             if (IsClearlyReadOnly(userText) && !ContainsAny(userText, ActionSignals))
             {
                 allowed = AtlasReadOnlyTools;
-                compactPrompt = BuildCompactAtlasPrompt(contextLine);
+                compactPrompt = BuildCompactJarvisReadPrompt(contextLine);
                 mode = "jarvis-read";
                 return;
             }
 
             string normalized = NormalizeGreek(userText);
-            int domains = 0;
-            HashSet<string> candidate = null;
-            string prompt = null;
-            string candidateMode = null;
+            var domains = new List<string>();
+            var union = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
             if (ContainsAnyNormalized(normalized,
                 "ειδος", "ειδη", "item", "κωδικο ειδ", "create item"))
             {
-                domains++;
-                candidate = ForgeTools;
-                prompt = BuildCompactForgePrompt(contextLine);
-                candidateMode = "jarvis-forge";
+                domains.Add("Forge");
+                UnionInto(union, ForgeTools);
             }
+
             if (ContainsAnyNormalized(normalized,
                 "αφμ", "συναλλασσομεν", "πελατ", "προμηθευτ", "ααδε"))
             {
-                domains++;
-                candidate = CompassTools;
-                prompt = BuildCompactCompassPrompt(contextLine);
-                candidateMode = "jarvis-compass";
+                domains.Add("Compass");
+                UnionInto(union, CompassTools);
             }
+
             if (ContainsAnyNormalized(normalized,
-                "email", "mail", "ημερολογ", "calendar", "ραντεβου", "outlook", "contact"))
+                "email", "mail", "εισερχομεν", "inbox", "outlook",
+                "ημερολογ", "calendar", "ραντεβου", "contact"))
             {
-                domains++;
-                candidate = EchoTools;
-                prompt = BuildCompactEchoPrompt(contextLine);
-                candidateMode = "jarvis-echo";
+                domains.Add("Echo");
+                UnionInto(union, EchoTools);
             }
+
             if (ContainsAnyNormalized(normalized,
                 "courier", "voucher", "tracking", "αποστολ", "δεμα"))
             {
-                domains++;
-                candidate = SprintTools;
-                prompt = BuildCompactSprintPrompt(contextLine);
-                candidateMode = "jarvis-sprint";
+                domains.Add("Sprint");
+                UnionInto(union, SprintTools);
             }
+
             if (ContainsAnyNormalized(normalized,
                 "http", "www", "url", "browser", "ιστοσελ", "σελιδα", "web "))
             {
-                domains++;
-                candidate = ScoutTools;
-                prompt = BuildCompactScoutPrompt(contextLine);
-                candidateMode = "jarvis-scout";
+                domains.Add("Scout");
+                UnionInto(union, ScoutTools);
             }
 
-            // Exactly one clear domain may be compacted. Composite or uncertain
-            // requests keep the mature full Jarvis contract.
-            if (domains == 1 && candidate != null && HasAtLeastOneTool(tools, candidate))
+            // Up to two explicit domains are safely unioned. This handles common
+            // real workflows such as customer+email and report+email without loading
+            // the entire Jarvis tool catalog. More complex/uncertain turns fail open.
+            if (domains.Count >= 1 && domains.Count <= 2 && HasAtLeastOneTool(tools, union))
             {
-                allowed = candidate;
-                compactPrompt = prompt;
-                mode = candidateMode;
+                allowed = union;
+                compactPrompt = BuildCompactMainJarvisPrompt(contextLine, domains);
+                mode = "jarvis-" + string.Join("+", domains.ToArray()).ToLowerInvariant();
             }
+        }
+
+        private static HistoryCompactionStats CompactCompletedToolHistory(JObject request)
+        {
+            var stats = new HistoryCompactionStats();
+            JArray messages = request["messages"] as JArray;
+            if (messages == null || messages.Count < 3)
+                return stats;
+
+            int anchor = FindLatestHumanMessageIndex(messages);
+            if (anchor <= 0)
+                return stats;
+
+            var compacted = new JArray();
+            for (int i = 0; i < messages.Count; i++)
+            {
+                JToken original = messages[i];
+                if (i >= anchor)
+                {
+                    compacted.Add(original.DeepClone());
+                    continue;
+                }
+
+                JObject message = original as JObject;
+                if (message == null)
+                {
+                    compacted.Add(original.DeepClone());
+                    continue;
+                }
+
+                JObject cleaned = StripCompletedInternalBlocks(message, stats);
+                if (cleaned != null)
+                    compacted.Add(cleaned);
+                else
+                    stats.RemovedMessages++;
+            }
+
+            if (stats.RemovedBlocks > 0 || stats.RemovedMessages > 0)
+            {
+                request["messages"] = compacted;
+                stats.Changed = true;
+            }
+
+            return stats;
+        }
+
+        private static JObject StripCompletedInternalBlocks(
+            JObject message,
+            HistoryCompactionStats stats)
+        {
+            JToken content = message["content"];
+            if (content == null || content.Type == JTokenType.String)
+                return (JObject)message.DeepClone();
+
+            JArray blocks = content as JArray;
+            if (blocks == null)
+                return (JObject)message.DeepClone();
+
+            var kept = new JArray();
+            foreach (JToken block in blocks)
+            {
+                string type = block?["type"]?.ToString();
+                if (IsCompletedInternalBlock(type))
+                {
+                    stats.RemovedBlocks++;
+                    stats.RemovedChars += block.ToString(Newtonsoft.Json.Formatting.None).Length;
+                    continue;
+                }
+                kept.Add(block.DeepClone());
+            }
+
+            if (kept.Count == 0)
+                return null;
+
+            JObject clone = (JObject)message.DeepClone();
+            clone["content"] = kept;
+            return clone;
+        }
+
+        private static bool IsCompletedInternalBlock(string type)
+        {
+            return string.Equals(type, "tool_use", StringComparison.OrdinalIgnoreCase) ||
+                   string.Equals(type, "tool_result", StringComparison.OrdinalIgnoreCase) ||
+                   string.Equals(type, "thinking", StringComparison.OrdinalIgnoreCase) ||
+                   string.Equals(type, "redacted_thinking", StringComparison.OrdinalIgnoreCase);
+        }
+
+        private static int FindLatestHumanMessageIndex(JArray messages)
+        {
+            if (messages == null) return -1;
+            for (int i = messages.Count - 1; i >= 0; i--)
+            {
+                JObject message = messages[i] as JObject;
+                if (message == null ||
+                    !string.Equals(message["role"]?.ToString(), "user", StringComparison.OrdinalIgnoreCase))
+                    continue;
+                if (HasHumanText(message["content"]))
+                    return i;
+            }
+            return -1;
+        }
+
+        private static bool HasHumanText(JToken content)
+        {
+            if (content == null) return false;
+            if (content.Type == JTokenType.String)
+                return !string.IsNullOrWhiteSpace(content.ToString());
+
+            JArray blocks = content as JArray;
+            if (blocks == null) return false;
+            foreach (JToken block in blocks)
+            {
+                if (!string.Equals(block?["type"]?.ToString(), "text", StringComparison.OrdinalIgnoreCase))
+                    continue;
+                if (!string.IsNullOrWhiteSpace(block?["text"]?.ToString()))
+                    return true;
+            }
+            return false;
+        }
+
+        private static string FindPreviousAssistantText(JArray messages, int beforeIndex)
+        {
+            if (messages == null || beforeIndex <= 0) return null;
+            for (int i = beforeIndex - 1; i >= 0; i--)
+            {
+                JObject message = messages[i] as JObject;
+                if (message == null ||
+                    !string.Equals(message["role"]?.ToString(), "assistant", StringComparison.OrdinalIgnoreCase))
+                    continue;
+                string text = ExtractText(message["content"]);
+                if (!string.IsNullOrWhiteSpace(text))
+                    return text;
+            }
+            return null;
+        }
+
+        private static bool IsShortConfirmation(string text)
+        {
+            string n = NormalizeGreek(text).Trim().TrimEnd('?', '!', '.');
+            return n == "ναι" || n == "yes" || n == "ok" || n == "οκ" ||
+                   n == "προχωρα" || n == "καντο" || n == "κανε το" ||
+                   n == "στειλτο" || n == "ναι στειλτο" || n == "ναι προχωρα";
+        }
+
+        private static string InferPendingDomain(string previousAssistantText)
+        {
+            string n = NormalizeGreek(previousAssistantText);
+            if (string.IsNullOrWhiteSpace(n)) return null;
+
+            if (ContainsAnyNormalized(n,
+                "draft", "email", "mail", "προς:", "θεμα:", "να το στειλω",
+                "να στειλω", "προχειρο email", "παραληπτ"))
+                return "echo";
+
+            if (ContainsAnyNormalized(n,
+                "voucher", "courier", "tracking", "να εκδωσω", "να ακυρωσω"))
+                return "sprint";
+
+            return null;
+        }
+
+        private static void LogToolSchemaBudget(string agentName, JArray tools)
+        {
+            if (tools == null || tools.Count == 0) return;
+
+            var sizes = new List<ToolSize>();
+            int totalChars = 0;
+            var signatureBuilder = new StringBuilder(agentName ?? string.Empty);
+
+            foreach (JToken tool in tools)
+            {
+                string name = tool?["name"]?.ToString() ?? "?";
+                int chars = tool.ToString(Newtonsoft.Json.Formatting.None).Length;
+                totalChars += chars;
+                sizes.Add(new ToolSize { Name = name, Chars = chars });
+                signatureBuilder.Append('|').Append(name).Append(':').Append(chars);
+            }
+
+            string signature = signatureBuilder.ToString();
+            lock (ToolBudgetLock)
+            {
+                if (LoggedToolBudgetSignatures.Contains(signature)) return;
+                LoggedToolBudgetSignatures.Add(signature);
+            }
+
+            sizes.Sort((a, b) => b.Chars.CompareTo(a.Chars));
+            var top = new List<string>();
+            int take = Math.Min(ToolBudgetTopCount, sizes.Count);
+            for (int i = 0; i < take; i++)
+                top.Add(sizes[i].Name + ":" + sizes[i].Chars);
+
+            try
+            {
+                DebugLog.Log(
+                    "[AI-TOOL-BUDGET] agent=" + agentName +
+                    " tools=" + tools.Count +
+                    " schemaChars=" + totalChars +
+                    " estTokens~" + Math.Max(1, totalChars / 4) +
+                    " top=" + string.Join(",", top.ToArray()));
+            }
+            catch { }
         }
 
         private static JArray CompactSystem(string prompt)
@@ -337,7 +572,8 @@ namespace S1Jarvis.Access.Verilic
             int originalChars,
             int originalSystemChars,
             int originalToolCount,
-            int originalMessageCount)
+            int originalMessageCount,
+            HistoryCompactionStats historyStats)
         {
             string optimized = request.ToString(Newtonsoft.Json.Formatting.None);
             int newSystemChars = ReadSystemText(request["system"]).Length;
@@ -352,7 +588,9 @@ namespace S1Jarvis.Access.Verilic
                     " requestChars=" + originalChars + "->" + optimized.Length +
                     " systemChars=" + originalSystemChars + "->" + newSystemChars +
                     " tools=" + originalToolCount + "->" + (newTools == null ? 0 : newTools.Count) +
-                    " messages=" + originalMessageCount + "->" + (newMessages == null ? 0 : newMessages.Count));
+                    " messages=" + originalMessageCount + "->" + (newMessages == null ? 0 : newMessages.Count) +
+                    " oldTraceBlocksRemoved=" + historyStats.RemovedBlocks +
+                    " oldTraceCharsRemoved=" + historyStats.RemovedChars);
             }
             catch { }
 
@@ -386,17 +624,11 @@ namespace S1Jarvis.Access.Verilic
             return false;
         }
 
-        private static bool HasForeignDedicatedTools(JArray tools, string agent)
+        private static void UnionInto(HashSet<string> target, HashSet<string> source)
         {
-            bool hasForge = ContainsTool(tools, "get_item_template") || ContainsTool(tools, "create_item");
-            bool hasCompass = ContainsTool(tools, "find_trader_by_afm") || ContainsTool(tools, "get_aade_data") || ContainsTool(tools, "create_trader_from_aade");
-            bool hasEcho = ContainsTool(tools, "filter_email_inbox") || ContainsTool(tools, "filter_calendar") || ContainsTool(tools, "read_calendar");
-            bool hasSprint = ContainsTool(tools, "show_courier_documents") || ContainsTool(tools, "create_courier_voucher") || ContainsTool(tools, "cancel_courier_voucher");
-            bool hasScout = ContainsTool(tools, "open_url") || ContainsTool(tools, "read_page_content");
-
-            int domains = (hasForge ? 1 : 0) + (hasCompass ? 1 : 0) + (hasEcho ? 1 : 0) +
-                          (hasSprint ? 1 : 0) + (hasScout ? 1 : 0);
-            return domains > 1;
+            if (target == null || source == null) return;
+            foreach (string value in source)
+                target.Add(value);
         }
 
         private static bool IsClearlyReadOnly(string text)
@@ -452,22 +684,17 @@ namespace S1Jarvis.Access.Verilic
             if (messages == null || messages.Count == 0)
                 return false;
 
-            for (int i = messages.Count - 1; i >= 0; i--)
-            {
-                JObject message = messages[i] as JObject;
-                if (message == null ||
-                    !string.Equals(message["role"]?.ToString(), "user", StringComparison.OrdinalIgnoreCase))
-                    continue;
+            int index = FindLatestHumanMessageIndex(messages);
+            if (index < 0) return false;
+            JObject message = messages[index] as JObject;
+            JArray blocks = message?["content"] as JArray;
+            if (blocks == null) return false;
 
-                JArray blocks = message["content"] as JArray;
-                if (blocks == null) return false;
-                foreach (JToken block in blocks)
-                {
-                    string type = block?["type"]?.ToString();
-                    if (!string.Equals(type, "text", StringComparison.OrdinalIgnoreCase))
-                        return true;
-                }
-                return false;
+            foreach (JToken block in blocks)
+            {
+                string type = block?["type"]?.ToString();
+                if (!string.Equals(type, "text", StringComparison.OrdinalIgnoreCase))
+                    return true;
             }
             return false;
         }
@@ -478,7 +705,6 @@ namespace S1Jarvis.Access.Verilic
             if (messages == null || messages.Count <= keepLast || keepLast < 1)
                 return;
 
-            // Never prune a conversation containing provider/tool/attachment state.
             foreach (JToken token in messages)
             {
                 JObject message = token as JObject;
@@ -506,46 +732,30 @@ namespace S1Jarvis.Access.Verilic
 
         private static string FindLatestHumanText(JArray messages)
         {
-            if (messages == null) return null;
-
-            for (int i = messages.Count - 1; i >= 0; i--)
-            {
-                JObject message = messages[i] as JObject;
-                if (message == null ||
-                    !string.Equals(message["role"]?.ToString(), "user", StringComparison.OrdinalIgnoreCase))
-                    continue;
-
-                JToken content = message["content"];
-                if (content == null) continue;
-                if (content.Type == JTokenType.String) return content.ToString();
-
-                JArray blocks = content as JArray;
-                if (blocks == null) continue;
-
-                var text = new StringBuilder();
-                foreach (JToken block in blocks)
-                {
-                    if (!string.Equals(block?["type"]?.ToString(), "text", StringComparison.OrdinalIgnoreCase))
-                        continue;
-                    string value = block?["text"]?.ToString();
-                    if (!string.IsNullOrWhiteSpace(value))
-                    {
-                        if (text.Length > 0) text.Append(' ');
-                        text.Append(value);
-                    }
-                }
-                if (text.Length > 0) return text.ToString();
-            }
-            return null;
+            int index = FindLatestHumanMessageIndex(messages);
+            if (index < 0) return null;
+            JObject message = messages[index] as JObject;
+            return ExtractText(message?["content"]);
         }
 
-        private static bool ContainsTool(JArray tools, string name)
+        private static string ExtractText(JToken content)
         {
-            if (tools == null) return false;
-            foreach (JToken tool in tools)
-                if (string.Equals(tool?["name"]?.ToString(), name, StringComparison.OrdinalIgnoreCase))
-                    return true;
-            return false;
+            if (content == null) return null;
+            if (content.Type == JTokenType.String) return content.ToString();
+
+            JArray blocks = content as JArray;
+            if (blocks == null) return null;
+            var text = new StringBuilder();
+            foreach (JToken block in blocks)
+            {
+                if (!string.Equals(block?["type"]?.ToString(), "text", StringComparison.OrdinalIgnoreCase))
+                    continue;
+                string value = block?["text"]?.ToString();
+                if (string.IsNullOrWhiteSpace(value)) continue;
+                if (text.Length > 0) text.Append(' ');
+                text.Append(value);
+            }
+            return text.Length == 0 ? null : text.ToString();
         }
 
         private static bool ContainsAny(string text, string[] signals)
@@ -624,6 +834,22 @@ namespace S1Jarvis.Access.Verilic
             return sb;
         }
 
+        private static string BuildCompactJarvisReadPrompt(string contextLine)
+        {
+            StringBuilder sb = PromptBase("Jarvis", "read/reporting orchestrator", contextLine);
+            AppendSoft1ReadHints(sb);
+            return sb.ToString().Trim();
+        }
+
+        private static string BuildCompactMainJarvisPrompt(string contextLine, List<string> domains)
+        {
+            StringBuilder sb = PromptBase("Jarvis", "multi-domain Soft1 assistant", contextLine);
+            sb.AppendLine("Ενεργά domains αυτού του turn: " + string.Join(", ", domains.ToArray()) + ". Μην χρησιμοποιείς capability εκτός των tools που σου δόθηκαν.");
+            sb.AppendLine("Για δεδομένα Soft1 χρησιμοποίησε query_data. Για εξωτερική αποστολή/εγγραφή χρησιμοποίησε το αντίστοιχο tool μόνο όταν η πρόθεση ή η επιβεβαίωση του χειριστή είναι σαφής.");
+            AppendSoft1ReadHints(sb);
+            return sb.ToString().Trim();
+        }
+
         private static string BuildDedicatedPrompt(string role, string contextLine)
         {
             switch (role)
@@ -642,58 +868,60 @@ namespace S1Jarvis.Access.Verilic
         private static string BuildCompactAtlasPrompt(string contextLine)
         {
             StringBuilder sb = PromptBase("Atlas", "read/reporting agent", contextLine);
-            sb.AppendLine("Για δεδομένα Soft1 χρησιμοποίησε query_data (μόνο SELECT). Μην μαντεύεις άγνωστα tables/columns: χρησιμοποίησε INFORMATION_SCHEMA μόνο όταν λείπει πραγματικά το schema.");
+            AppendSoft1ReadHints(sb);
+            sb.AppendLine("Δεν έχεις write/action tools σε αυτό το turn.");
+            return sb.ToString().Trim();
+        }
+
+        private static void AppendSoft1ReadHints(StringBuilder sb)
+        {
+            sb.AppendLine("Για δεδομένα Soft1 χρησιμοποίησε query_data (μόνο SELECT). Μην μαντεύεις άγνωστα tables/columns: INFORMATION_SCHEMA μόνο όταν λείπει πραγματικά το schema.");
             sb.AppendLine("Γνωστό schema: TRDR(TRDR,CODE,NAME,AFM,SODTYPE), FINDOC(FINDOC,TRDR,TRNDATE,FINCODE,SUMAMNT,SERIES,SOSOURCE,COMPANY), SERIES join σε COMPANY+SERIES+SOSOURCE, TRDBALSHEET(TRDR,FISCPRD,LDEBIT,LCREDIT), USERS(USERS,NAME). Δεν υπάρχει FINTRD.");
             sb.AppendLine("SOSOURCE: 1351 πωλήσεις, 1353 υπηρεσίες πωλήσεων, 1251 αγορές/παραλαβές, 1253 υπηρεσίες αγορών, 5151 ενδοδιακίνηση/παραγωγή, 1412 έμβασμα προμηθευτή, 1413 έμβασμα πελάτη, 2021 CRM εργασία.");
-            sb.AppendLine("Πίνακες σε Markdown. Γνωστό παραστατικό: [FINCODE](doc:SOSOURCE:FINDOC). Αν totalRowCount>100, preview και πρότεινε export. Δεν έχεις write/action tools σε αυτό το turn.");
-            return sb.ToString().Trim();
+            sb.AppendLine("Πίνακες σε Markdown. Γνωστό παραστατικό: [FINCODE](doc:SOSOURCE:FINDOC). Αν totalRowCount>100, preview και πρότεινε export.");
         }
 
         private static string BuildCompactForgePrompt(string contextLine)
         {
             StringBuilder sb = PromptBase("Forge", "agent δημιουργίας/διαχείρισης ειδών", contextLine);
-            sb.AppendLine("Για αναζήτηση χρησιμοποίησε query_data. Για δημιουργία είδους χρησιμοποίησε πρώτα get_item_template όταν χρειάζεται πρότυπο και μετά create_item. Μην δημιουργείς τίποτα χωρίς σαφή οδηγία/επιβεβαίωση του χειριστή όταν η ενέργεια είναι μη αναστρέψιμη ή μαζική.");
-            sb.AppendLine("Σε bulk import κράτα μία επιβεβαίωση για όλο το batch, συνέχισε στα επόμενα αν αποτύχει μία γραμμή και στο τέλος δώσε σύντομη αναφορά επιτυχιών/αποτυχιών. Μην φορτώνεις άσχετους κανόνες email/CRM/browser.");
+            sb.AppendLine("Για αναζήτηση χρησιμοποίησε query_data. Για δημιουργία είδους χρησιμοποίησε πρώτα get_item_template όταν χρειάζεται πρότυπο και μετά create_item. Μην δημιουργείς τίποτα χωρίς σαφή οδηγία/επιβεβαίωση όταν η ενέργεια είναι μη αναστρέψιμη ή μαζική.");
+            sb.AppendLine("Σε bulk import κράτα μία επιβεβαίωση για όλο το batch και στο τέλος δώσε σύντομη αναφορά επιτυχιών/αποτυχιών.");
             return sb.ToString().Trim();
         }
 
         private static string BuildCompactCompassPrompt(string contextLine)
         {
             StringBuilder sb = PromptBase("Compass", "agent συναλλασσομένων/ΑΦΜ", contextLine);
-            sb.AppendLine("Για υπάρχοντα δεδομένα χρησιμοποίησε query_data/find_trader_by_afm. Για στοιχεία ΑΑΔΕ χρησιμοποίησε get_aade_data και για δημιουργία create_trader_from_aade. Μην δημιουργήσεις νέο συναλλασσόμενο αν υπάρχει ήδη σαφής αντιστοίχιση ή χωρίς επιβεβαίωση όταν υπάρχουν πολλαπλές πιθανές εγγραφές.");
-            sb.AppendLine("Δείξε καθαρά ποιον συναλλασσόμενο βρήκες/δημιούργησες και το ΑΦΜ. Μην φορτώνεις κανόνες ειδών, courier, browser ή email.");
+            sb.AppendLine("Για υπάρχοντα δεδομένα χρησιμοποίησε query_data/find_trader_by_afm. Για στοιχεία ΑΑΔΕ χρησιμοποίησε get_aade_data και για δημιουργία create_trader_from_aade. Μην δημιουργήσεις νέο συναλλασσόμενο αν υπάρχει ήδη σαφής αντιστοίχιση.");
             return sb.ToString().Trim();
         }
 
         private static string BuildCompactEchoPrompt(string contextLine)
         {
             StringBuilder sb = PromptBase("Echo", "agent email/calendar/contacts", contextLine);
-            sb.AppendLine("Για ανάγνωση email/calendar χρησιμοποίησε τα αντίστοιχα read/filter tools. Για φιλτράρισμα που πρέπει να φανεί στην κύρια κουρτίνα χρησιμοποίησε filter_email_inbox/filter_calendar ή show_calendar_entries. Για σύνθετη ανάλυση Soft1 χρησιμοποίησε query_data.");
-            sb.AppendLine("Αποστολή/reply email, δημιουργία CRM task ή Outlook event απαιτεί σαφή πρόθεση του χειριστή. Πριν από εξωτερική αποστολή βεβαιώσου ότι παραλήπτης/περιεχόμενο είναι ξεκάθαρα.");
+            sb.AppendLine("Για ανάγνωση email/calendar χρησιμοποίησε τα αντίστοιχα read/filter tools. Για Soft1 δεδομένα χρησιμοποίησε query_data και για attachment από πίνακα χρησιμοποίησε export_query_to_file/export_shown_table πριν από send_email.");
+            sb.AppendLine("Αποστολή/reply email, CRM task ή Outlook event απαιτεί σαφή πρόθεση/επιβεβαίωση. Σε follow-up επιβεβαίωση χρησιμοποίησε το ήδη ορατό draft/context αντί να επαναλάβεις άσχετες αναζητήσεις.");
             return sb.ToString().Trim();
         }
 
         private static string BuildCompactSprintPrompt(string contextLine)
         {
             StringBuilder sb = PromptBase("Sprint", "courier agent", contextLine);
-            sb.AppendLine("Χρησιμοποίησε query_data/open_document για στοιχεία παραστατικού και τα courier tools για αποστολές. Πριν create_courier_voucher ή cancel_courier_voucher παρουσίασε τα κρίσιμα στοιχεία και ζήτησε ρητή επιβεβαίωση. Μην εκδίδεις/ακυρώνεις voucher χωρίς επιβεβαίωση.");
-            sb.AppendLine("Μετά την επιτυχή έκδοση ή ακύρωση επέστρεψε σύντομη επιβεβαίωση με voucher/παραστατικό. Μην φορτώνεις email, item, trader ή browser κανόνες.");
+            sb.AppendLine("Χρησιμοποίησε query_data/open_document για στοιχεία παραστατικού και τα courier tools για αποστολές. Πριν create_courier_voucher ή cancel_courier_voucher ζήτησε ρητή επιβεβαίωση.");
             return sb.ToString().Trim();
         }
 
         private static string BuildCompactScoutPrompt(string contextLine)
         {
             StringBuilder sb = PromptBase("Scout", "browser/research agent", contextLine);
-            sb.AppendLine("Χρησιμοποίησε open_url/read_page_content/extract_page_tables για web περιεχόμενο και query_data για Soft1 όταν το αίτημα συνδυάζει εξωτερικά και εσωτερικά δεδομένα. Μην ισχυρίζεσαι ότι διάβασες σελίδα πριν χρησιμοποιήσεις read_page_content/extract_page_tables.");
-            sb.AppendLine("Για actions που είναι διαθέσιμα ως tools ακολούθησε ρητή πρόθεση/επιβεβαίωση πριν από εξωτερική αποστολή ή εγγραφή. Μην κάνεις άσχετη schema discovery αν έχεις ήδη τα δεδομένα.");
+            sb.AppendLine("Χρησιμοποίησε open_url/read_page_content/extract_page_tables για web περιεχόμενο και query_data για Soft1. Μην ισχυρίζεσαι ότι διάβασες σελίδα πριν χρησιμοποιήσεις read_page_content/extract_page_tables.");
             return sb.ToString().Trim();
         }
 
         private static string BuildCompactSagePrompt(string contextLine)
         {
             StringBuilder sb = PromptBase("Sage", "help/support agent", contextLine);
-            sb.AppendLine("Στόχος σου είναι να διαγνώσεις το πρόβλημα του χειριστή και να δώσεις πρακτικά βήματα. Χρησιμοποίησε query_data/open_document μόνο όταν χρειάζεται πραγματικό Soft1 context. Μην κάνεις εγγραφές ή εξωτερικές ενέργειες.");
-            sb.AppendLine("Όταν έχεις λύση, δώσε σύντομη περίληψη αιτήματος, βασικές λέξεις-κλειδιά και καθαρή λύση/βήματα. Αν λείπει κρίσιμη πληροφορία, ρώτα στοχευμένα αντί να μαντέψεις.");
+            sb.AppendLine("Διάγνωσε το πρόβλημα και δώσε πρακτικά βήματα. Χρησιμοποίησε query_data/open_document μόνο όταν χρειάζεται πραγματικό Soft1 context. Μην κάνεις εγγραφές ή εξωτερικές ενέργειες.");
             return sb.ToString().Trim();
         }
 
@@ -722,6 +950,20 @@ namespace S1Jarvis.Access.Verilic
                 }
             }
             return sb.ToString();
+        }
+
+        private sealed class HistoryCompactionStats
+        {
+            public bool Changed { get; set; }
+            public int RemovedBlocks { get; set; }
+            public int RemovedMessages { get; set; }
+            public int RemovedChars { get; set; }
+        }
+
+        private sealed class ToolSize
+        {
+            public string Name { get; set; }
+            public int Chars { get; set; }
         }
     }
 }
