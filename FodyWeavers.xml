@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Weavers>
+  <!--
+    Soft1 scans S1Jarvis.dll with reflection when loading NETDLLs. Merging third-party
+    assemblies into S1Jarvis (ILRepack) makes all their types visible to that scan and
+    can trigger ReflectionTypeLoadException before Jarvis.Initialize runs.
+
+    Costura keeps the Jarvis assembly type surface intact: private dependencies are
+    embedded as resources and resolved by its module bootstrapper at runtime.
+
+    Host-owned assemblies are not copy-local in the project (Softone.Lib + WebView2),
+    therefore Costura does not embed them. Newtonsoft.Json is intentionally private
+    to Jarvis and is embedded.
+  -->
+  <Costura
+    DisableCompression="true"
+    IncludeDebugSymbols="false"
+    CreateTemporaryAssemblies="false" />
+</Weavers>
