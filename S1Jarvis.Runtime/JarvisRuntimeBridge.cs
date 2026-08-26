@@ -28,6 +28,11 @@ namespace S1Jarvis.Runtime
             return shell;
         }
 
+        public static FrameworkElement CreateVerilicMaintenanceShell()
+        {
+            return new S1Jarvis.UI.VerilicMaintenanceShell();
+        }
+
         public static string ActivateVerilicAll()
         {
             MessageBoxResult confirmation = MessageBox.Show(
