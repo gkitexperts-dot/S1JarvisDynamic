@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Threading.Tasks;
@@ -126,8 +127,22 @@ namespace S1Jarvis.Core.Courier
 
     internal static class JarvisCourierProviderFactory
     {
+        static JarvisCourierProviderFactory()
+        {
+            System.Net.ServicePointManager.SecurityProtocol =
+                System.Net.SecurityProtocolType.Tls12 |
+                System.Net.SecurityProtocolType.Tls11 |
+                System.Net.SecurityProtocolType.Tls;
+        }
+
         public static IJarvisCourierProvider Create(JarvisCourierProviderConfig config)
         {
+            if (config == null) throw new ArgumentNullException(nameof(config));
+
+            string code = (config.ProviderCode ?? string.Empty).Trim().ToUpperInvariant();
+            if (code == "COURIER CENTER")
+                return new JarvisCourierCenterProvider(config);
+
             var legacy = new CourierProviderConfig
             {
                 ID = config.Id,
