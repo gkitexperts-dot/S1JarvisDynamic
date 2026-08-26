@@ -7,7 +7,7 @@ using S1Courier.Models;
 
 namespace S1Jarvis.Core.Courier
 {
-    // Transitional bridge while ACS and Geniki are moved into Jarvis.
+    // Transitional bridge while Geniki is moved into Jarvis.
     // Delete this file when the last legacy provider is ported and the
     // S1Courier assembly reference is removed.
     internal sealed class JarvisCourierLegacyAdapter : IJarvisCourierProvider
@@ -127,6 +127,7 @@ namespace S1Jarvis.Core.Courier
             string code = (config.ProviderCode ?? string.Empty).Trim().ToUpperInvariant();
             if (code == "COURIER CENTER") return new JarvisCourierCenterProvider(config);
             if (code == "ELTA COURIER") return new JarvisEltaCourierProvider(config);
+            if (code == "ACS COURIER") return new JarvisAcsCourierProvider(config);
 
             var legacy = new CourierProviderConfig
             {
