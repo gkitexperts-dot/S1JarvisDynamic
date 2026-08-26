@@ -7,10 +7,9 @@ using S1Courier.Models;
 
 namespace S1Jarvis.Core.Courier
 {
-    // Transitional bridge while the concrete providers are moved into Jarvis.
-    // It lets Jarvis-owned contracts become the stable boundary first, without
-    // changing voucher behavior in the same step. Delete this file when all
-    // providers are native and the S1Courier assembly reference is removed.
+    // Transitional bridge while ACS and Geniki are moved into Jarvis.
+    // Delete this file when the last legacy provider is ported and the
+    // S1Courier assembly reference is removed.
     internal sealed class JarvisCourierLegacyAdapter : IJarvisCourierProvider
     {
         private readonly ICourierProvider _inner;
@@ -45,22 +44,11 @@ namespace S1Jarvis.Core.Courier
         public async Task<JarvisCourierCancelResult> CancelShipmentAsync(string shipmentNumber, string providerJobId = null)
         {
             CancelResult result = await _inner.CancelShipmentAsync(shipmentNumber, providerJobId);
-            return new JarvisCourierCancelResult
-            {
-                Success = result.Success,
-                ErrorMessage = result.ErrorMessage
-            };
+            return new JarvisCourierCancelResult { Success = result.Success, ErrorMessage = result.ErrorMessage };
         }
 
-        public Task<byte[]> GetVoucherAsync(string shipmentNumber)
-        {
-            return _inner.GetVoucherAsync(shipmentNumber);
-        }
-
-        public Task<byte[]> GetBatchVoucherAsync(List<string> shipmentNumbers, string options)
-        {
-            return _inner.GetBatchVoucherAsync(shipmentNumbers, options);
-        }
+        public Task<byte[]> GetVoucherAsync(string shipmentNumber) => _inner.GetVoucherAsync(shipmentNumber);
+        public Task<byte[]> GetBatchVoucherAsync(List<string> shipmentNumbers, string options) => _inner.GetBatchVoucherAsync(shipmentNumbers, options);
 
         public async Task<JarvisCourierTrackingResult> TrackShipmentAsync(string trackingNumber)
         {
@@ -81,10 +69,7 @@ namespace S1Jarvis.Core.Courier
             };
         }
 
-        public Task<int> GetDeliveryDaysAsync(string originZip, string destZip)
-        {
-            return _inner.GetDeliveryDaysAsync(originZip, destZip);
-        }
+        public Task<int> GetDeliveryDaysAsync(string originZip, string destZip) => _inner.GetDeliveryDaysAsync(originZip, destZip);
 
         private static ShipmentRequest ToLegacyRequest(JarvisCourierShipmentRequest request)
         {
@@ -140,8 +125,8 @@ namespace S1Jarvis.Core.Courier
             if (config == null) throw new ArgumentNullException(nameof(config));
 
             string code = (config.ProviderCode ?? string.Empty).Trim().ToUpperInvariant();
-            if (code == "COURIER CENTER")
-                return new JarvisCourierCenterProvider(config);
+            if (code == "COURIER CENTER") return new JarvisCourierCenterProvider(config);
+            if (code == "ELTA COURIER") return new JarvisEltaCourierProvider(config);
 
             var legacy = new CourierProviderConfig
             {
