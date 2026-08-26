@@ -42,6 +42,7 @@ namespace S1Jarvis.UI
             var shell = new JarvisShell(JarvisCore.XSupport);
             shell.EnableProviderHealthCheck();
             shell.EnableAiUsageUi();
+            shell.EnableAiUsageAggregation();
 
             var host = new ElementHost
             {
