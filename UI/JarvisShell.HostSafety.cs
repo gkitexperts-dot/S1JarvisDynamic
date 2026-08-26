@@ -10,6 +10,7 @@ namespace S1Jarvis.UI
     {
         private static readonly bool HostSafetyClassHandlerRegistered = RegisterHostSafetyClassHandler();
         private bool _hostSafetyInitHooked;
+        private bool _hostSafetyNavigationHooked;
 
         private static bool RegisterHostSafetyClassHandler()
         {
@@ -37,6 +38,7 @@ namespace S1Jarvis.UI
 
                 if (webView.CoreWebView2 != null)
                 {
+                    EnsureHostSafetyNavigationHook();
                     Dispatcher.BeginInvoke(new Action(EnforceSinglePrimaryWebMessageRouter),
                         DispatcherPriority.ContextIdle);
                     return;
@@ -69,12 +71,43 @@ namespace S1Jarvis.UI
                     return;
                 }
 
+                EnsureHostSafetyNavigationHook();
                 Dispatcher.BeginInvoke(new Action(EnforceSinglePrimaryWebMessageRouter),
                     DispatcherPriority.ContextIdle);
             }
             catch (Exception ex)
             {
                 DebugLog.Log("[host-safety] initialization-completed EXCEPTION: " + ex);
+            }
+        }
+
+        private void EnsureHostSafetyNavigationHook()
+        {
+            if (_hostSafetyNavigationHooked || webView == null || webView.CoreWebView2 == null) return;
+
+            webView.CoreWebView2.NavigationCompleted += HostSafety_NavigationCompleted;
+            _hostSafetyNavigationHooked = true;
+            DebugLog.Log("[host-safety] post-navigation router enforcement hook installed.");
+        }
+
+        private void HostSafety_NavigationCompleted(object sender,
+            CoreWebView2NavigationCompletedEventArgs e)
+        {
+            try
+            {
+                if (!e.IsSuccess) return;
+
+                // JarvisShell_Loaded adds the legacy WebMessageReceived handler only
+                // after EnsureCoreWebView2Async returns. Enforcing only from the
+                // initialization-completed callback can therefore run too early.
+                // Queue one final pass after navigation, when all boot registrations
+                // have completed but before the user can interact with the DR UI.
+                Dispatcher.BeginInvoke(new Action(EnforceSinglePrimaryWebMessageRouter),
+                    DispatcherPriority.ContextIdle);
+            }
+            catch (Exception ex)
+            {
+                DebugLog.Log("[host-safety] post-navigation enforcement EXCEPTION: " + ex);
             }
         }
 
@@ -88,6 +121,8 @@ namespace S1Jarvis.UI
                     return;
                 }
 
+                // Remove every router we own first, then add exactly one primary
+                // router. -= is safe even when the delegate is not subscribed.
                 webView.CoreWebView2.WebMessageReceived -= CoreWebView2_WebMessageReceived;
                 webView.CoreWebView2.WebMessageReceived -= DrRecognitionFlow_WebMessageReceived;
                 webView.CoreWebView2.WebMessageReceived += DrRecognitionFlow_WebMessageReceived;
