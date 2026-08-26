@@ -21,18 +21,26 @@ namespace S1Jarvis.SoftoneIntegration
 
         internal static FrameworkElement CreateShell(XSupport xSupport)
         {
-            Type bridge = GetBridgeType();
-            MethodInfo method = bridge.GetMethod(
-                "CreateShell",
-                BindingFlags.Public | BindingFlags.Static);
-            if (method == null)
-                throw new MissingMethodException(RuntimeBridgeTypeName, "CreateShell");
+            return InvokeFrameworkElement("CreateShell", new object[] { xSupport });
+        }
 
-            object result = method.Invoke(null, new object[] { xSupport });
-            FrameworkElement shell = result as FrameworkElement;
-            if (shell == null)
-                throw new InvalidOperationException("Embedded Jarvis runtime returned an invalid shell.");
-            return shell;
+        internal static FrameworkElement CreateVerilicMaintenanceShell()
+        {
+            return InvokeFrameworkElement("CreateVerilicMaintenanceShell", null);
+        }
+
+        private static FrameworkElement InvokeFrameworkElement(string methodName, object[] arguments)
+        {
+            Type bridge = GetBridgeType();
+            MethodInfo method = bridge.GetMethod(methodName, BindingFlags.Public | BindingFlags.Static);
+            if (method == null)
+                throw new MissingMethodException(RuntimeBridgeTypeName, methodName);
+
+            object result = method.Invoke(null, arguments);
+            FrameworkElement element = result as FrameworkElement;
+            if (element == null)
+                throw new InvalidOperationException("Embedded Jarvis runtime returned an invalid element for " + methodName + ".");
+            return element;
         }
 
         internal static string InvokeString(string methodName)
@@ -93,9 +101,6 @@ namespace S1Jarvis.SoftoneIntegration
                 if (string.IsNullOrWhiteSpace(simpleName))
                     return null;
 
-                // First preference: if Soft1 has already loaded an assembly with this
-                // simple name, reuse it. This is particularly important for WebView2
-                // on Application Server installations, where the host may own the DLL.
                 Assembly existing = FindLoadedAssembly(simpleName);
                 if (existing != null)
                     return existing;
@@ -106,12 +111,6 @@ namespace S1Jarvis.SoftoneIntegration
                     if (Loaded.TryGetValue(simpleName, out cached))
                         return cached;
 
-                    // WebView2 is host-sensitive. If the Soft1 directory already
-                    // contains Core/Wpf, prefer that host copy over our embedded one.
-                    // This keeps us aligned with the host and avoids a second WebView2
-                    // assembly in the same AppDomain. On a clean machine where Soft1
-                    // does not ship those managed DLLs, we fall back to the embedded
-                    // exact build-time copy and remain single-file deployable.
                     if (IsWebView2Assembly(simpleName))
                     {
                         Assembly hostAssembly = TryLoadHostAssembly(simpleName);
@@ -174,15 +173,8 @@ namespace S1Jarvis.SoftoneIntegration
                 if (!File.Exists(path))
                     continue;
 
-                try
-                {
-                    return Assembly.LoadFrom(path);
-                }
-                catch
-                {
-                    // If the host copy cannot be loaded, do not fail Jarvis startup;
-                    // the embedded copy below remains the deterministic fallback.
-                }
+                try { return Assembly.LoadFrom(path); }
+                catch { }
             }
 
             return null;
