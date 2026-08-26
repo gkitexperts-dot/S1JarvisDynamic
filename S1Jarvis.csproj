@@ -53,12 +53,20 @@
 
   <ItemGroup>
     <None Include="app.config" />
-    <ProjectReference Include="S1Jarvis.Runtime\S1Jarvis.Runtime.csproj">
-      <Project>{0E8C51A9-7B8D-4C68-9D0A-5A2A01B5A8F4}</Project>
-      <Name>S1Jarvis.Runtime</Name>
-      <ReferenceOutputAssembly>false</ReferenceOutputAssembly>
-    </ProjectReference>
   </ItemGroup>
+
+  <!--
+    The runtime is intentionally NOT a normal assembly reference of this outer
+    project. We invoke its Build target explicitly below so the nested project is
+    guaranteed to exist before MSBuild tries to collect EmbeddedResource items.
+    This also avoids Visual Studio solution/configuration ordering differences.
+  -->
+  <Target Name="BuildJarvisRuntime" BeforeTargets="CollectJarvisRuntimeResources">
+    <MSBuild Projects="$(MSBuildProjectDirectory)\S1Jarvis.Runtime\S1Jarvis.Runtime.csproj"
+             Targets="Build"
+             Properties="Configuration=$(Configuration);Platform=AnyCPU"
+             BuildInParallel="false" />
+  </Target>
 
   <!--
     The runtime project is built first, then every private managed DLL produced in
@@ -66,9 +74,7 @@
     resources, Soft1's GetTypes() scan never needs WebView2/Newtonsoft/MSAL/PDFsharp.
     JarvisRuntimeLoader installs AssemblyResolve immediately before opening Jarvis.
   -->
-  <Target Name="CollectJarvisRuntimeResources"
-          BeforeTargets="PrepareResources"
-          DependsOnTargets="ResolveProjectReferences">
+  <Target Name="CollectJarvisRuntimeResources" BeforeTargets="PrepareResources" DependsOnTargets="BuildJarvisRuntime">
     <PropertyGroup>
       <JarvisRuntimeOutput>$(MSBuildProjectDirectory)\S1Jarvis.Runtime\bin\$(Configuration)\</JarvisRuntimeOutput>
     </PropertyGroup>
