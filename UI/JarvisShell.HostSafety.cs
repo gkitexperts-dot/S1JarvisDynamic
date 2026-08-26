@@ -1,6 +1,7 @@
 using System;
 using System.Windows;
 using System.Windows.Threading;
+using Microsoft.Web.WebView2.Core;
 using S1Jarvis.Core;
 
 namespace S1Jarvis.UI
@@ -8,6 +9,7 @@ namespace S1Jarvis.UI
     public partial class JarvisShell
     {
         private static readonly bool HostSafetyClassHandlerRegistered = RegisterHostSafetyClassHandler();
+        private bool _hostSafetyInitHooked;
 
         private static bool RegisterHostSafetyClassHandler()
         {
@@ -20,21 +22,71 @@ namespace S1Jarvis.UI
         {
             var shell = sender as JarvisShell;
             if (shell == null) return;
+            shell.EnsureHostSafetyRouterEnforcement();
+        }
 
-            // Loaded handlers are invoked in registration order. JarvisShell_Loaded may
-            // subscribe the legacy async WebMessageReceived handler after CoreWebView2's
-            // initialization-completed event has already installed the synchronous DR
-            // router. Re-apply routing after the current Loaded dispatch completes so
-            // there is exactly one primary message entry point.
-            shell.Dispatcher.BeginInvoke(new Action(shell.EnforceSinglePrimaryWebMessageRouter),
-                DispatcherPriority.ContextIdle);
+        private void EnsureHostSafetyRouterEnforcement()
+        {
+            try
+            {
+                if (webView == null)
+                {
+                    DebugLog.Log("[host-safety] webView is null; router enforcement deferred.");
+                    return;
+                }
+
+                if (webView.CoreWebView2 != null)
+                {
+                    Dispatcher.BeginInvoke(new Action(EnforceSinglePrimaryWebMessageRouter),
+                        DispatcherPriority.ContextIdle);
+                    return;
+                }
+
+                if (_hostSafetyInitHooked) return;
+                _hostSafetyInitHooked = true;
+                webView.CoreWebView2InitializationCompleted += WebView_HostSafetyInitializationCompleted;
+                DebugLog.Log("[host-safety] waiting for CoreWebView2 initialization.");
+            }
+            catch (Exception ex)
+            {
+                DebugLog.Log("[host-safety] enforcement hook EXCEPTION: " + ex);
+            }
+        }
+
+        private void WebView_HostSafetyInitializationCompleted(object sender,
+            CoreWebView2InitializationCompletedEventArgs e)
+        {
+            try
+            {
+                if (webView != null)
+                    webView.CoreWebView2InitializationCompleted -= WebView_HostSafetyInitializationCompleted;
+                _hostSafetyInitHooked = false;
+
+                if (!e.IsSuccess)
+                {
+                    DebugLog.Log("[host-safety] CoreWebView2 initialization failed; router not enforced. " +
+                        (e.InitializationException == null ? string.Empty : e.InitializationException.ToString()));
+                    return;
+                }
+
+                Dispatcher.BeginInvoke(new Action(EnforceSinglePrimaryWebMessageRouter),
+                    DispatcherPriority.ContextIdle);
+            }
+            catch (Exception ex)
+            {
+                DebugLog.Log("[host-safety] initialization-completed EXCEPTION: " + ex);
+            }
         }
 
         private void EnforceSinglePrimaryWebMessageRouter()
         {
             try
             {
-                if (webView == null || webView.CoreWebView2 == null) return;
+                if (webView == null || webView.CoreWebView2 == null)
+                {
+                    DebugLog.Log("[host-safety] CoreWebView2 unavailable at enforcement time.");
+                    return;
+                }
 
                 webView.CoreWebView2.WebMessageReceived -= CoreWebView2_WebMessageReceived;
                 webView.CoreWebView2.WebMessageReceived -= DrRecognitionFlow_WebMessageReceived;
