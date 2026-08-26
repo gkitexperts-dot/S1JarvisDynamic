@@ -1,21 +1,12 @@
 <?xml version="1.0" encoding="utf-8"?>
 <Weavers>
   <!--
-    Soft1 scans S1Jarvis.dll with reflection when loading NETDLLs. Costura keeps
-    third-party types out of the Jarvis type surface and embeds copy-local managed
-    dependencies as resources.
+    Legacy Costura weaving is intentionally disabled.
 
-    Jarvis now deliberately owns and embeds the exact managed WebView2 Core/WPF
-    assemblies it was built against, in addition to Newtonsoft.Json and the other
-    private dependencies. This avoids a clean-machine failure when the Soft1 host
-    does not provide the exact strong-named WebView2 managed assembly version.
-
-    Softone.Lib remains host-owned/external. The installed Microsoft Edge WebView2
-    Runtime remains an environment prerequisite; it is not a managed DLL dependency
-    and is not embedded here.
+    The outer S1Jarvis.dll is now a thin Soft1 bootstrap. The real Jarvis runtime
+    and all private managed dependencies are embedded explicitly as
+    S1Jarvis.Private.* resources by S1Jarvis.csproj and resolved at runtime by
+    JarvisRuntimeLoader. Keeping Costura active here would create a second packaging
+    mechanism and can mask or replace the deterministic runtime bundle.
   -->
-  <Costura
-    DisableCompression="true"
-    IncludeDebugSymbols="false"
-    CreateTemporaryAssemblies="false" />
 </Weavers>
