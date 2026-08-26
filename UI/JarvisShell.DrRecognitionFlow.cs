@@ -2,6 +2,7 @@ using System;
 using System.Windows;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
+using S1Jarvis.Access;
 using S1Jarvis.Core;
 
 namespace S1Jarvis.UI
@@ -63,6 +64,15 @@ namespace S1Jarvis.UI
 
             string commandType = (string)cmd["type"];
 
+            // DR boot is intentionally handled here, synchronously, before the
+            // legacy async CoreWebView2 router can route it through Task.Run.
+            // XSupport/Soft1 SDK calls must stay on the Soft1 UI thread.
+            if (string.Equals(commandType, "dr_start", StringComparison.Ordinal))
+            {
+                HandleDrStartSynchronous();
+                return;
+            }
+
             if (string.Equals(commandType, "dr_register_document", StringComparison.Ordinal) ||
                 string.Equals(commandType, "dr_register_document_v2", StringComparison.Ordinal))
             {
@@ -116,6 +126,51 @@ namespace S1Jarvis.UI
             }
 
             CoreWebView2_WebMessageReceived(sender, e);
+        }
+
+        private void HandleDrStartSynchronous()
+        {
+            _drAllowed = false;
+            try
+            {
+                DebugLog.Log("[dr-boot] entitlement check START on Soft1 UI thread.");
+
+                if (_xSupport == null)
+                    throw new InvalidOperationException("Soft1 XSupport context is not available.");
+
+                var access = JarvisLicenseGuard.CheckAccessSilent(
+                    _xSupport, AccessConfig.DocReaderToolName);
+
+                DebugLog.Log("[dr-boot] entitlement check RETURNED. allowed=" + access.Allowed);
+
+                if (!access.Allowed)
+                {
+                    string denyMsg = JarvisLicenseGuard.BuildMessage(access);
+                    DebugLog.Log("[dr] entitlement DENIED (toolName=" + AccessConfig.DocReaderToolName + "): " + denyMsg);
+                    webView.CoreWebView2.PostWebMessageAsString(JsonDrAccessResult(false, denyMsg));
+                    DebugLog.Log("[dr-boot] access-result DENIED posted to WebView2.");
+                    return;
+                }
+
+                _drAllowed = true;
+                DebugLog.Log("[dr] entitlement ALLOWED (toolName=" + AccessConfig.DocReaderToolName + ")");
+                webView.CoreWebView2.PostWebMessageAsString(JsonDrAccessResult(true, null));
+                DebugLog.Log("[dr-boot] access-result ALLOWED posted to WebView2.");
+            }
+            catch (Exception ex)
+            {
+                _drAllowed = false;
+                DebugLog.Log("[dr-boot] EXCEPTION: " + ex);
+                try
+                {
+                    webView.CoreWebView2.PostWebMessageAsString(
+                        JsonDrAccessResult(false, "Απρόσμενο σφάλμα ελέγχου άδειας: " + ex.Message));
+                }
+                catch (Exception postEx)
+                {
+                    DebugLog.Log("[dr-boot] error-result PostWebMessage EXCEPTION: " + postEx);
+                }
+            }
         }
 
         private void HandleDrRegisterDocumentV2(JObject cmd)
