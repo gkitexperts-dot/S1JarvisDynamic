@@ -57,11 +57,11 @@ namespace S1Jarvis.UI
       'line-height:1.25;letter-spacing:.1px;white-space:nowrap;user-select:text;';
 
     var inEl = document.createElement('span');
-    inEl.textContent = 'IN ' + usage.input.toLocaleString('en-US');
+    inEl.textContent = 'IN ' + Math.trunc(usage.input);
     inEl.style.cssText = 'color:#60a5fa;opacity:.82;font-weight:600;';
 
     var outEl = document.createElement('span');
-    outEl.textContent = 'OUT ' + usage.output.toLocaleString('en-US');
+    outEl.textContent = 'OUT ' + Math.trunc(usage.output);
     outEl.style.cssText = 'color:#ff6b6b;opacity:.82;font-weight:600;margin-left:8px;';
 
     var modelEl = document.createElement('span');
