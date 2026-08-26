@@ -32,6 +32,9 @@
     <Reference Include="WindowsBase" />
     <Reference Include="System" />
     <Reference Include="System.Core" />
+    <Reference Include="System.Drawing" />
+    <Reference Include="System.Windows.Forms" />
+    <Reference Include="WindowsFormsIntegration" />
     <Reference Include="Softone.Lib, Version=1.0.0.0, Culture=neutral, PublicKeyToken=307c481590b30bd3, processorArchitecture=x86">
       <SpecificVersion>False</SpecificVersion>
       <HintPath>..\..\..\..\..\Program Files\Soft1Core\Softone.Lib.dll</HintPath>
@@ -44,6 +47,7 @@
     <Compile Include="SoftoneIntegration\S1Init.cs" />
     <Compile Include="SoftoneIntegration\JarvisObject.cs" />
     <Compile Include="SoftoneIntegration\JarvisRuntimeLoader.cs" />
+    <Compile Include="SoftoneIntegration\JarvisHostFormBootstrap.cs" />
   </ItemGroup>
 
   <ItemGroup>
