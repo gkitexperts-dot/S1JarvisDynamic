@@ -60,7 +60,7 @@
   <ItemGroup>
     <Compile Include="..\Access\**\*.cs"><Link>Access\%(RecursiveDir)%(Filename)%(Extension)</Link></Compile>
     <Compile Include="..\Core\**\*.cs"><Link>Core\%(RecursiveDir)%(Filename)%(Extension)</Link></Compile>
-    <Compile Include="..\UI\*.cs" Exclude="..\UI\JarvisShell.UatPipeline.cs"><Link>UI\%(Filename)%(Extension)</Link></Compile>
+    <Compile Include="..\UI\*.cs" Exclude="..\UI\JarvisShell.UatPipeline.cs;..\UI\JarvisHostForm.cs"><Link>UI\%(Filename)%(Extension)</Link></Compile>
     <Compile Include="..\SoftoneIntegration\S1Init.cs"><Link>SoftoneIntegration\S1Init.cs</Link></Compile>
     <Compile Include="JarvisRuntimeBridge.cs" />
     <Compile Include="Properties\AssemblyInfo.cs" />
