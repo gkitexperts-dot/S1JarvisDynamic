@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
 using System.Text;
+using System.Threading;
 using System.Threading.Tasks;
 using System.Windows;
 using Microsoft.Web.WebView2.Core;
@@ -17,6 +18,7 @@ namespace S1Jarvis.UI
         private static readonly bool IsolatedPickerClassHandlerRegistered = RegisterIsolatedPickerClassHandler();
         private bool _isolatedPickerInstalled;
         private bool _isolatedPickerInitHooked;
+        private int _isolatedPickerInFlight;
 
         private static bool RegisterIsolatedPickerClassHandler()
         {
@@ -107,6 +109,7 @@ namespace S1Jarvis.UI
 (function(){
   if(window.__jarvisIsolatedPickerInstalled)return;
   window.__jarvisIsolatedPickerInstalled=true;
+  window.__jarvisPickerBusy=false;
 
   function b64ToFile(item){
     var raw=atob(item.base64||'');
@@ -116,6 +119,8 @@ namespace S1Jarvis.UI
   }
 
   async function pick(mode,multiple){
+    if(window.__jarvisPickerBusy)return;
+    window.__jarvisPickerBusy=true;
     try{
       var url='https://s1jarvis-picker.local/pick?mode='+encodeURIComponent(mode)+'&multiple='+(multiple?'1':'0');
       var r=await fetch(url,{method:'GET',cache:'no-store'});
@@ -129,6 +134,8 @@ namespace S1Jarvis.UI
       }
     }catch(err){
       try{console.error('Jarvis isolated file picker failed',err);}catch(_e){}
+    }finally{
+      window.__jarvisPickerBusy=false;
     }
   }
 
@@ -159,7 +166,7 @@ namespace S1Jarvis.UI
 })();";
 
                 await webView.CoreWebView2.ExecuteScriptAsync(script);
-                DebugLog.Log("[file-picker] UI interception installed for click/browse; native DR drag/drop preserved.");
+                DebugLog.Log("[file-picker] UI interception installed for click/browse; single-flight guard active; native DR drag/drop preserved.");
             }
             catch (Exception ex)
             {
@@ -177,6 +184,7 @@ namespace S1Jarvis.UI
             if (!string.Equals(uri.Host, "s1jarvis-picker.local", StringComparison.OrdinalIgnoreCase)) return;
 
             var deferral = e.GetDeferral();
+            bool ownsSingleFlight = false;
             try
             {
                 if (!string.Equals(uri.AbsolutePath, "/pick", StringComparison.OrdinalIgnoreCase))
@@ -185,6 +193,15 @@ namespace S1Jarvis.UI
                         new JObject { ["ok"] = false, ["error"] = "not_found" });
                     return;
                 }
+
+                if (Interlocked.CompareExchange(ref _isolatedPickerInFlight, 1, 0) != 0)
+                {
+                    DebugLog.Log("[file-picker] duplicate REQUEST ignored; picker already active.");
+                    e.Response = CreateIsolatedPickerResponse(200,
+                        new JObject { ["ok"] = false, ["busy"] = true, ["error"] = "picker_busy" });
+                    return;
+                }
+                ownsSingleFlight = true;
 
                 string mode = GetQueryValue(uri.Query, "mode") ?? "chat";
                 bool multiple = string.Equals(GetQueryValue(uri.Query, "multiple"), "1", StringComparison.Ordinal);
@@ -241,6 +258,7 @@ namespace S1Jarvis.UI
             }
             finally
             {
+                if (ownsSingleFlight) Interlocked.Exchange(ref _isolatedPickerInFlight, 0);
                 try { deferral.Complete(); } catch { }
             }
         }
