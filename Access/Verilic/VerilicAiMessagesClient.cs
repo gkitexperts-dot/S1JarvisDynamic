@@ -121,6 +121,12 @@ namespace S1Jarvis.Access.Verilic
             if (!AllowedAgents.Contains(agentName))
                 return Failure("routing_agent_invalid");
 
+            // Conservative fast path for clearly read-only Atlas/reporting turns.
+            // Dedicated agents and action requests remain byte-for-byte unchanged.
+            providerRequestJson = VerilicProviderRequestOptimizer.TryOptimize(
+                agentName,
+                providerRequestJson);
+
             // Local-only correlation id for Soft1 usage telemetry. It contains
             // no prompt/response content and is not sent to the provider.
             string usageRequestId = Guid.NewGuid().ToString("N");
