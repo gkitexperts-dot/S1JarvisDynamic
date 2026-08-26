@@ -4,6 +4,7 @@ using System.Windows;
 using Softone;
 using S1Jarvis.Access;
 using S1Jarvis.Access.Verilic;
+using S1Jarvis.Core;
 
 namespace S1Jarvis.Runtime
 {
@@ -21,11 +22,54 @@ namespace S1Jarvis.Runtime
             if (xSupport == null)
                 throw new ArgumentNullException("xSupport");
 
-            var shell = new S1Jarvis.UI.JarvisShell(xSupport);
-            shell.EnableProviderHealthCheck();
-            shell.EnableAiUsageUi();
-            shell.EnableAiUsageAggregation();
+            // Parameter inspection is deliberately non-blocking. Missing or
+            // malformed cccParams rows must never be able to terminate Soft1.
+            JarvisParameterAudit.Run(xSupport);
+
+            S1Jarvis.UI.JarvisShell shell;
+            try
+            {
+                shell = new S1Jarvis.UI.JarvisShell(xSupport);
+            }
+            catch (Exception ex)
+            {
+                DebugLog.Log("[BOOT] JarvisShell construction failed: " + ex);
+                return BuildSafeStartupError(
+                    "Ο Jarvis δεν μπόρεσε να αρχικοποιηθεί. Το Soft1 παραμένει ενεργό.",
+                    ex);
+            }
+
+            SafeEnable("provider health", shell.EnableProviderHealthCheck);
+            SafeEnable("AI usage UI", shell.EnableAiUsageUi);
+            SafeEnable("AI usage aggregation", shell.EnableAiUsageAggregation);
             return shell;
+        }
+
+        private static void SafeEnable(string featureName, Action action)
+        {
+            try
+            {
+                if (action != null) action();
+            }
+            catch (Exception ex)
+            {
+                DebugLog.Log("[BOOT] optional feature disabled: " + featureName + " - " + ex);
+            }
+        }
+
+        private static FrameworkElement BuildSafeStartupError(string message, Exception ex)
+        {
+            var panel = new System.Windows.Controls.Border
+            {
+                Padding = new Thickness(20),
+                Child = new System.Windows.Controls.TextBlock
+                {
+                    Text = message + Environment.NewLine + Environment.NewLine +
+                           "Λεπτομέρειες: " + (ex == null ? "unknown" : ex.Message),
+                    TextWrapping = TextWrapping.Wrap
+                }
+            };
+            return panel;
         }
 
         public static FrameworkElement CreateVerilicMaintenanceShell()
