@@ -3,6 +3,18 @@ using Softone;
 
 namespace S1Jarvis.Core
 {
+    internal sealed class JarvisAiUsageEvent
+    {
+        public string RequestId { get; set; }
+        public string Agent { get; set; }
+        public string Provider { get; set; }
+        public string Model { get; set; }
+        public int InputTokens { get; set; }
+        public int OutputTokens { get; set; }
+        public bool ResponseSuccess { get; set; }
+        public bool Logged { get; set; }
+    }
+
     /// <summary>
     /// Best-effort local AI usage telemetry for the current Soft1 serial.
     /// A telemetry failure must never affect the Jarvis conversation flow.
@@ -18,6 +30,11 @@ namespace S1Jarvis.Core
             "CCCREQID, CCCDATETIME, CCCSUCCESS, CCCERRCODE, CCCPROCESS) " +
             "VALUES (:1,:2,:3,:4,:5,:6,:7,:8,:9,:10,:11,:12,:13,:14,0)";
 
+        // UI-only, non-sensitive event. It lets the chat show the same usage
+        // evidence that was just persisted (or show that persistence failed).
+        // Prompt/response text and credentials are intentionally never exposed.
+        public static event Action<JarvisAiUsageEvent> UsageRecorded;
+
         public static void TryWrite(
             XSupport xSupport,
             string requestId,
@@ -29,6 +46,7 @@ namespace S1Jarvis.Core
             bool success,
             string errorCode)
         {
+            bool logged = false;
             try
             {
                 if (xSupport == null || xSupport.ConnectionInfo == null)
@@ -57,6 +75,8 @@ namespace S1Jarvis.Core
                     DateTime.Now,
                     success ? 1 : 0,
                     Truncate(errorCode, 50));
+
+                logged = true;
             }
             catch (Exception ex)
             {
@@ -83,6 +103,36 @@ namespace S1Jarvis.Core
                 {
                     // Never allow telemetry diagnostics to escape either.
                 }
+            }
+            finally
+            {
+                NotifyUsageRecorded(new JarvisAiUsageEvent
+                {
+                    RequestId = requestId,
+                    Agent = agent,
+                    Provider = provider,
+                    Model = model,
+                    InputTokens = Math.Max(0, inputTokens),
+                    OutputTokens = Math.Max(0, outputTokens),
+                    ResponseSuccess = success,
+                    Logged = logged
+                });
+            }
+        }
+
+        private static void NotifyUsageRecorded(JarvisAiUsageEvent usage)
+        {
+            try
+            {
+                var handler = UsageRecorded;
+                if (handler != null)
+                    handler(usage);
+            }
+            catch (Exception ex)
+            {
+                // UI telemetry must be just as non-blocking as DB telemetry.
+                try { DebugLog.Log("[AI-USAGE] UI notification failed: " + ex.Message); }
+                catch { }
             }
         }
 
