@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.Windows.Threading;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
@@ -26,6 +27,40 @@ namespace S1Jarvis.UI
             };
             _mainEmailUiBridgeTimer.Tick += MainEmailUiBridgeTimer_Tick;
             _mainEmailUiBridgeTimer.Start();
+        }
+
+        private static string NormalizeInboxSinceDate(string sinceDate)
+        {
+            if (string.IsNullOrWhiteSpace(sinceDate))
+                return sinceDate;
+
+            DateTime parsed;
+            if (!DateTime.TryParseExact(
+                    sinceDate.Trim(),
+                    "yyyy-MM-dd",
+                    CultureInfo.InvariantCulture,
+                    DateTimeStyles.None,
+                    out parsed) &&
+                !DateTime.TryParse(sinceDate, out parsed))
+                return sinceDate;
+
+            // Some model/provider paths historically used 2000-01-01 as an
+            // artificial "no date supplied" sentinel. Passing that value to
+            // the deterministic inbox UI is misleading and, because the Graph
+            // fetch is capped, can also hide a relevant sender among newer mail.
+            // Only normalize clearly synthetic/implausibly old dates. A real
+            // date supplied by the operator remains byte-for-byte authoritative.
+            DateTime oldestReasonableUserDate = DateTime.Today.AddYears(-5);
+            if (parsed.Date < oldestReasonableUserDate)
+            {
+                string normalized = DateTime.Today.AddYears(-1).ToString("yyyy-MM-dd");
+                DebugLog.Log(
+                    "[main-email-bridge] normalized synthetic inbox sinceDate=" +
+                    sinceDate + " -> " + normalized);
+                return normalized;
+            }
+
+            return parsed.ToString("yyyy-MM-dd");
         }
 
         private void MainEmailUiBridgeTimer_Tick(object sender, EventArgs e)
@@ -83,7 +118,8 @@ namespace S1Jarvis.UI
 
                         if (string.Equals(toolName, "filter_email_inbox", StringComparison.OrdinalIgnoreCase))
                         {
-                            string sinceDate = input["sinceDate"]?.ToString();
+                            string sinceDate = NormalizeInboxSinceDate(
+                                input["sinceDate"]?.ToString());
                             if (string.IsNullOrWhiteSpace(sinceDate))
                                 continue;
 
