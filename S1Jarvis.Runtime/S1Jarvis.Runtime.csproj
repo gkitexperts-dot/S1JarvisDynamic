@@ -66,6 +66,7 @@
   <ItemGroup>
     <EmbeddedResource Include="..\UI\web\index.html"><LogicalName>S1Jarvis.web.index.html</LogicalName></EmbeddedResource>
     <EmbeddedResource Include="..\UI\web\vendor\chart.umd.min.js"><LogicalName>S1Jarvis.web.vendor.chart.umd.min.js</LogicalName></EmbeddedResource>
+    <EmbeddedResource Include="..\UI\web\ai-usage-dashboard.js"><LogicalName>S1Jarvis.web.ai-usage-dashboard.js</LogicalName></EmbeddedResource>
     <EmbeddedResource Include="..\UI\web\dr-workflow-enhancements.js"><LogicalName>S1Jarvis.web.dr-workflow-enhancements.js</LogicalName></EmbeddedResource>
     <EmbeddedResource Include="..\UI\web\dr-session-loop.js"><LogicalName>S1Jarvis.web.dr-session-loop.js</LogicalName></EmbeddedResource>
     <EmbeddedResource Include="..\UI\web\dr-recognition-workspace.js"><LogicalName>S1Jarvis.web.dr-recognition-workspace.js</LogicalName></EmbeddedResource>
