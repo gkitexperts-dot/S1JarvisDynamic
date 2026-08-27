@@ -229,10 +229,8 @@ namespace S1Jarvis.Access.Verilic
 
                         CaptureRuntimeTarget(result);
 
-                        if (!result.Success && HasProviderDiagnostic(result.ReasonCode))
-                        {
-                            DebugLog.Log("[VERILIC] provider diagnostic=" + result.ReasonCode);
-                        }
+                        if (!result.Success)
+                            LogProviderFailure(result, agentName);
 
                         // One raw event per parsed Verilic/provider response.
                         // This is deliberately best-effort: the logger catches
@@ -406,10 +404,110 @@ namespace S1Jarvis.Access.Verilic
             return builder.ToString();
         }
 
-        private static bool HasProviderDiagnostic(string reasonCode)
+        private static void LogProviderFailure(MessagesResponse result, string fallbackAgent)
         {
-            return !string.IsNullOrWhiteSpace(reasonCode) &&
-                reasonCode.IndexOf('|') >= 0;
+            if (result == null || result.Success)
+                return;
+
+            string reason = GetBaseReasonCode(result.ReasonCode);
+            string diagnostic = GetProviderDiagnostic(result.ReasonCode);
+            string code;
+            string param;
+            string message;
+            ParseProviderDiagnostic(diagnostic, out code, out param, out message);
+
+            var log = new StringBuilder();
+            log.Append("[AI-PROVIDER-ERROR]");
+            log.Append(" agent=").Append(SafeLogValue(
+                string.IsNullOrWhiteSpace(result.Agent) ? fallbackAgent : result.Agent, 64));
+            log.Append(" provider=").Append(SafeLogValue(result.Provider, 64));
+            log.Append(" model=").Append(SafeLogValue(result.Model, 128));
+            log.Append(" reason=").Append(SafeLogValue(reason, 128));
+
+            if (!string.IsNullOrWhiteSpace(code))
+                log.Append(" code=").Append(SafeLogValue(code, 128));
+            if (!string.IsNullOrWhiteSpace(param))
+                log.Append(" param=").Append(SafeLogValue(param, 128));
+            if (!string.IsNullOrWhiteSpace(message))
+                log.Append(" message=").Append(SafeLogValue(message, 512));
+
+            DebugLog.Log(log.ToString());
+        }
+
+        private static string GetProviderDiagnostic(string reasonCode)
+        {
+            if (string.IsNullOrWhiteSpace(reasonCode))
+                return string.Empty;
+
+            int separator = reasonCode.IndexOf('|');
+            return separator < 0 || separator + 1 >= reasonCode.Length
+                ? string.Empty
+                : reasonCode.Substring(separator + 1).Trim();
+        }
+
+        private static void ParseProviderDiagnostic(
+            string diagnostic,
+            out string code,
+            out string param,
+            out string message)
+        {
+            code = string.Empty;
+            param = string.Empty;
+            message = string.Empty;
+
+            if (string.IsNullOrWhiteSpace(diagnostic))
+                return;
+
+            string remaining = diagnostic.Trim();
+            int dot = remaining.IndexOf('·');
+            if (dot >= 0)
+            {
+                code = remaining.Substring(0, dot).Trim();
+                remaining = dot + 1 < remaining.Length
+                    ? remaining.Substring(dot + 1).Trim()
+                    : string.Empty;
+            }
+
+            const string paramPrefix = "param=";
+            if (remaining.StartsWith(paramPrefix, StringComparison.OrdinalIgnoreCase))
+            {
+                int colon = remaining.IndexOf(':');
+                if (colon >= 0)
+                {
+                    param = remaining.Substring(paramPrefix.Length, colon - paramPrefix.Length).Trim();
+                    message = colon + 1 < remaining.Length
+                        ? remaining.Substring(colon + 1).Trim()
+                        : string.Empty;
+                }
+                else
+                {
+                    param = remaining.Substring(paramPrefix.Length).Trim();
+                }
+            }
+            else
+            {
+                message = remaining;
+            }
+
+            if (string.IsNullOrWhiteSpace(code) && string.IsNullOrWhiteSpace(message))
+                message = diagnostic.Trim();
+        }
+
+        private static string SafeLogValue(string value, int maxLength)
+        {
+            if (string.IsNullOrWhiteSpace(value))
+                return "-";
+
+            string safe = value
+                .Replace('\r', ' ')
+                .Replace('\n', ' ')
+                .Replace('\t', ' ')
+                .Trim();
+
+            if (safe.Length > maxLength)
+                safe = safe.Substring(0, maxLength);
+
+            return safe;
         }
 
         private static string GetBaseReasonCode(string reasonCode)
