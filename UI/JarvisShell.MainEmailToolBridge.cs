@@ -128,11 +128,20 @@ namespace S1Jarvis.UI
 
         private static string BuildInboxSenderSearchKey(string value)
         {
-            if (!ContainsGreekLetters(value))
+            if (string.IsNullOrWhiteSpace(value))
                 return value;
 
-            string latin = TransliterateGreekForInbox(value);
-            string[] tokens = latin.Split(
+            // Normalize the OPERATOR input regardless of script. Greek names
+            // are transliterated; Latin names are accent-folded/lower-cased.
+            // In both cases we search with a conservative surname stem. This
+            // deliberately avoids a one-way "Greek only" rule: Latin input
+            // follows the same path and can match the sender address/local-part
+            // even when Outlook's display name uses Greek characters.
+            string canonical = ContainsGreekLetters(value)
+                ? TransliterateGreekForInbox(value)
+                : RemoveDiacritics(value).ToLowerInvariant();
+
+            string[] tokens = canonical.Split(
                 new[] { ' ', '\t', ',', ';' },
                 StringSplitOptions.RemoveEmptyEntries);
             if (tokens.Length == 0)
@@ -149,13 +158,11 @@ namespace S1Jarvis.UI
                 }
             }
 
-            // Keep a useful stem; if stemming became too aggressive, use the
-            // transliterated surname instead of broadening the filter too much.
             if (surname.Length < 4)
                 surname = tokens[tokens.Length - 1].Trim();
 
             DebugLog.Log(
-                "[main-email-bridge] normalized Greek sender search='" + value +
+                "[main-email-bridge] canonical sender search='" + value +
                 "' -> '" + surname + "'");
             return surname;
         }
@@ -171,7 +178,7 @@ namespace S1Jarvis.UI
                 string value = filter["value"]?.ToString();
                 if (string.Equals(field, "from", StringComparison.OrdinalIgnoreCase) &&
                     string.Equals(op, "contains", StringComparison.OrdinalIgnoreCase) &&
-                    ContainsGreekLetters(value))
+                    !string.IsNullOrWhiteSpace(value))
                 {
                     filter["value"] = BuildInboxSenderSearchKey(value);
                 }
@@ -240,7 +247,7 @@ namespace S1Jarvis.UI
                                 continue;
 
                             string searchText = input["searchText"]?.ToString();
-                            if (ContainsGreekLetters(searchText))
+                            if (!string.IsNullOrWhiteSpace(searchText))
                                 searchText = BuildInboxSenderSearchKey(searchText);
 
                             webView.CoreWebView2.PostWebMessageAsString(
