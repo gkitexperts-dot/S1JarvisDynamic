@@ -99,7 +99,7 @@ namespace S1Jarvis.Access.Verilic
 
         private static readonly string[] ActionSignals =
         {
-            "στειλ", "στελν", "email", "mail", "απαντησ", "reply",
+            "στειλ", "στελν", "απαντησ", "reply",
             "δημιουργ", "καταχωρ", "περασε", "φτιαξε", "ακυρω", "voucher", "courier",
             "υπενθυμ", "ραντεβου", "εργασ", "task", "μετατρεψ", "μετατροπ",
             "νεο ειδος", "νεο πελατ", "νεο προμηθευτ", "εισαγωγ", "import"
@@ -346,7 +346,13 @@ namespace S1Jarvis.Access.Verilic
                 return;
             }
 
-            if (ContainsAnyNormalized(n, "εισερχομεν", "inbox", "μηνυμα", "emails", "email απο"))
+            bool explicitInboxRead = ContainsAnyNormalized(n,
+                "εισερχομεν", "εισερχομενα", "inbox", "email απο", "emails απο",
+                "πιο προσφατο email", "τελευταιο email", "διαβασε email",
+                "διαβασε το email", "δειξε email", "δειξε μου το email",
+                "μηνυμα απο", "μηνυματα απο");
+
+            if (explicitInboxRead)
             {
                 allowed = EchoInboxTools;
                 prompt = BuildEchoInboxPrompt(contextLine, durableContext);
@@ -364,19 +370,22 @@ namespace S1Jarvis.Access.Verilic
 
             bool asksExport = ContainsAnyNormalized(n,
                 "αρχει", "csv", "xlsx", "excel", "pdf", "export", "εξαγωγ");
-            bool asksEmail = ContainsAnyNormalized(n, "email", "mail", "στειλ", "στελν");
+            bool mentionsEmail = ContainsAnyNormalized(n, "email", "mail");
+            bool asksSend = ContainsAnyNormalized(n,
+                "στειλ", "στελν", "reply", "απαντησ", "αποστειλ",
+                "γραψε email", "ετοιμασε email", "συνταξε email");
             bool asksPreview = ContainsAnyNormalized(n,
                 "δειξε μου πρωτα", "δειξε πρωτα", "πρωτα τι", "draft", "προσχεδ");
 
             if (asksExport)
             {
                 allowed = EchoExportTools;
-                prompt = BuildEchoExportPrompt(contextLine, durableContext, asksEmail);
+                prompt = BuildEchoExportPrompt(contextLine, durableContext, mentionsEmail && asksSend);
                 mode = isEchoRole ? "echo-export" : "jarvis-echo-export";
                 return;
             }
 
-            if (asksEmail && asksPreview)
+            if (asksSend && asksPreview)
             {
                 allowed = EchoDraftTools;
                 prompt = BuildEchoDraftPrompt(contextLine, durableContext);
@@ -384,7 +393,7 @@ namespace S1Jarvis.Access.Verilic
                 return;
             }
 
-            if (asksEmail)
+            if (asksSend)
             {
                 allowed = EchoSendTools;
                 prompt = BuildEchoSendPrompt(contextLine, durableContext);
@@ -985,8 +994,8 @@ namespace S1Jarvis.Access.Verilic
                 "δεν βρηκα επαφη", "δεν βρεθηκε επαφη", "επαφη", "contact"))
                 return "contact";
             if (ContainsAnyNormalized(n,
-                "να το στειλω", "να το στειλω;", "draft", "προσχεδ", "προς:",
-                "θεμα:", "email", "mail", "συνημμενο"))
+                "να το στειλω", "να το στειλω;", "να στειλω", "να αποστειλω",
+                "επιβεβαιωνεις την αποστολη", "draft", "προσχεδ", "προς:", "θεμα:"))
                 return "email-send";
             if (ContainsAnyNormalized(n, "voucher", "courier", "να εκδωσω", "να ακυρωσω"))
                 return "courier";
@@ -1113,6 +1122,7 @@ namespace S1Jarvis.Access.Verilic
         {
             StringBuilder sb = PromptBase("Echo", "inbox agent", contextLine, durableContext);
             sb.AppendLine("Για αναζήτηση λίστας emails προτίμησε filter_email_inbox ώστε το αποτέλεσμα να εμφανιστεί στην Email κουρτίνα. read_email μόνο όταν ζητείται το πλήρες περιεχόμενο συγκεκριμένου μηνύματος. Μην επαναλάβεις το ίδιο φίλτρο αν επέστρεψε επιτυχώς.");
+            sb.AppendLine("Για sender/name matching κράτα ασφαλές πλήρες κριτήριο: χρησιμοποίησε το πλήρες επώνυμο ή το πλήρες ονοματεπώνυμο όπως δόθηκε. Αν χρειάζεται εναλλακτική γραφή/μεταγραφή μεταξύ ελληνικών και λατινικών, χρησιμοποίησε πλήρες λογικό variant (π.χ. Milonas/Μυλωνάς), ποτέ αυθαίρετο μικρό substring από το μέσο της λέξης όπως 'ilon'. Μην κόβεις ένα επώνυμο σε 3-4 γράμματα για να αυξήσεις τα matches, γιατί αυτό μπορεί να φέρει άσχετα email.");
             sb.AppendLine("Για σχετικές περιόδους (π.χ. τελευταία εβδομάδα/τελευταίος μήνας) υπολόγισε το sinceDate από τη σημερινή τοπική ημερομηνία που δίνεται στο system context. Μην ζητάς διευκρίνιση για το ποια ημερομηνία είναι σήμερα.");
             return sb.ToString().Trim();
         }
