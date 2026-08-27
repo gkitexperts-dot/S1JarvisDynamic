@@ -36,6 +36,10 @@ namespace S1Jarvis.Access.Verilic
         private static readonly AsyncLocal<string> ActiveAgentContext =
             new AsyncLocal<string>();
 
+        private static readonly object CompanyNameCacheLock = new object();
+        private static readonly Dictionary<string, string> CompanyNameCache =
+            new Dictionary<string, string>(StringComparer.Ordinal);
+
         internal static string LastRuntimeAgent { get; private set; }
         internal static string LastRuntimeProvider { get; private set; }
         internal static string LastRuntimeModel { get; private set; }
@@ -121,8 +125,17 @@ namespace S1Jarvis.Access.Verilic
             if (!AllowedAgents.Contains(agentName))
                 return Failure("routing_agent_invalid");
 
+            // Normalize company awareness at the final desktop -> Verilic boundary.
+            // XSupport.ConnectionInfo.CompanyId is authoritative for the active
+            // Soft1 company. The display name is resolved from COMPANY and the
+            // request is made company-neutral before any provider sees it.
+            providerRequestJson = ApplyCurrentCompanyContext(
+                xSupport,
+                providerRequestJson);
+
             // Conservative fast path for clearly read-only Atlas/reporting turns.
-            // Dedicated agents and action requests remain byte-for-byte unchanged.
+            // Dedicated agents and action requests remain byte-for-byte unchanged
+            // apart from the common company-context normalization above.
             providerRequestJson = VerilicProviderRequestOptimizer.TryOptimize(
                 agentName,
                 providerRequestJson);
@@ -275,6 +288,211 @@ namespace S1Jarvis.Access.Verilic
             catch
             {
                 return Failure("messages_transport_failed");
+            }
+        }
+
+        private static string ApplyCurrentCompanyContext(
+            XSupport xSupport,
+            string providerRequestJson)
+        {
+            try
+            {
+                var info = xSupport == null ? null : xSupport.ConnectionInfo;
+                if (info == null || string.IsNullOrWhiteSpace(providerRequestJson))
+                    return providerRequestJson;
+
+                string companyName = ResolveCurrentCompanyName(
+                    xSupport,
+                    info.SerialNum == null ? null : info.SerialNum.ToString(),
+                    info.CompanyId);
+                string safeCompanyName = SanitizeCompanyName(companyName);
+                string companyContextValue = string.IsNullOrWhiteSpace(safeCompanyName)
+                    ? "UNKNOWN (δεν ανακτήθηκε από COMPANY - μην υποθέσεις όνομα/κλάδο)"
+                    : safeCompanyName;
+
+                JObject request = JObject.Parse(providerRequestJson);
+                RewriteSystemCompanyContext(
+                    request,
+                    info.CompanyId,
+                    companyContextValue);
+                RewriteCompanySpecificToolDescriptions(request["tools"] as JArray);
+
+                return request.ToString(Formatting.None);
+            }
+            catch (Exception ex)
+            {
+                try
+                {
+                    DebugLog.Log("[COMPANY-CONTEXT] normalization skipped: " + ex.Message);
+                }
+                catch { }
+                return providerRequestJson;
+            }
+        }
+
+        private static string ResolveCurrentCompanyName(
+            XSupport xSupport,
+            string serial,
+            int companyId)
+        {
+            string cacheKey = (serial ?? string.Empty) + "|" + companyId.ToString();
+            lock (CompanyNameCacheLock)
+            {
+                string cached;
+                if (CompanyNameCache.TryGetValue(cacheKey, out cached))
+                    return cached;
+            }
+
+            try
+            {
+                // Runs synchronously before the first await in SendAsync, so the
+                // Soft1 SDK call stays on the caller/integration thread.
+                XTable table = xSupport.GetSQLDataSet(
+                    "SELECT TOP 1 NAME FROM COMPANY WHERE COMPANY=" + companyId.ToString());
+                if (table == null || table.Count == 0)
+                    return null;
+
+                object raw = table.Current["NAME"];
+                string name = raw == null ? null : raw.ToString();
+                if (string.IsNullOrWhiteSpace(name))
+                    return null;
+
+                name = name.Trim();
+                lock (CompanyNameCacheLock)
+                    CompanyNameCache[cacheKey] = name;
+                return name;
+            }
+            catch (Exception ex)
+            {
+                try
+                {
+                    DebugLog.Log(
+                        "[COMPANY-CONTEXT] COMPANY lookup failed for CompanyId=" +
+                        companyId.ToString() + ": " + ex.Message);
+                }
+                catch { }
+                return null;
+            }
+        }
+
+        private static string SanitizeCompanyName(string companyName)
+        {
+            if (string.IsNullOrWhiteSpace(companyName))
+                return null;
+
+            string value = companyName
+                .Replace('\r', ' ')
+                .Replace('\n', ' ')
+                .Replace('\t', ' ')
+                .Trim();
+            if (value.Length > 200)
+                value = value.Substring(0, 200);
+            return value;
+        }
+
+        private static void RewriteSystemCompanyContext(
+            JObject request,
+            int companyId,
+            string companyName)
+        {
+            if (request == null || request["system"] == null)
+                return;
+
+            JToken system = request["system"];
+            if (system.Type == JTokenType.String)
+            {
+                request["system"] = RewriteCompanySpecificText(
+                    system.ToString(),
+                    companyId,
+                    companyName);
+                return;
+            }
+
+            JArray blocks = system as JArray;
+            if (blocks == null)
+                return;
+
+            foreach (JObject block in blocks.OfType<JObject>())
+            {
+                JToken text = block["text"];
+                if (text == null || text.Type != JTokenType.String)
+                    continue;
+
+                block["text"] = RewriteCompanySpecificText(
+                    text.ToString(),
+                    companyId,
+                    companyName);
+            }
+        }
+
+        private static string RewriteCompanySpecificText(
+            string text,
+            int companyId,
+            string companyName)
+        {
+            if (string.IsNullOrEmpty(text))
+                return text;
+
+            text = text.Replace(
+                "Είσαι ο Jarvis, ο ψηφιακός βοηθός μέσα στο Soft1 της Jetoil (εταιρία διανομής καυσίμων/πετρελαιοειδών).",
+                "Είσαι ο Jarvis, ο ψηφιακός βοηθός μέσα στο Soft1 της ενεργής εταιρείας.");
+
+            // Remove the legacy company-specific fuel-loading schema from the
+            // common prompt. Such custom schema belongs to company-specific
+            // knowledge, not to the product-wide Jarvis contract.
+            text = RemoveLineContaining(text, "Φορτώσεις καυσίμων:");
+
+            string contextPrefix =
+                "Τρέχον context: Company=" + companyId.ToString() + ", Branch=";
+            string contextWithCompany =
+                "Τρέχον context: Company=" + companyId.ToString() +
+                ", CompanyName=" + companyName + ", Branch=";
+
+            if (text.IndexOf(contextPrefix, StringComparison.Ordinal) >= 0)
+            {
+                text = text.Replace(contextPrefix, contextWithCompany);
+            }
+            else
+            {
+                text = contextWithCompany + "UNKNOWN\n" + text;
+            }
+
+            return text;
+        }
+
+        private static string RemoveLineContaining(string text, string marker)
+        {
+            if (string.IsNullOrEmpty(text) || string.IsNullOrEmpty(marker))
+                return text;
+
+            string normalized = text.Replace("\r\n", "\n").Replace('\r', '\n');
+            string[] lines = normalized.Split('\n');
+            var kept = new List<string>(lines.Length);
+            foreach (string line in lines)
+            {
+                if ((line ?? string.Empty).IndexOf(marker, StringComparison.OrdinalIgnoreCase) >= 0)
+                    continue;
+                kept.Add(line);
+            }
+            return string.Join("\n", kept.ToArray());
+        }
+
+        private static void RewriteCompanySpecificToolDescriptions(JArray tools)
+        {
+            if (tools == null)
+                return;
+
+            foreach (JObject tool in tools.OfType<JObject>())
+            {
+                JToken description = tool["description"];
+                if (description == null || description.Type != JTokenType.String)
+                    continue;
+
+                string value = description.ToString();
+                value = value.Replace(
+                    "πελάτες, φορτώσεις, τιμές, δεξαμενές, παραστατικά",
+                    "πελάτες, προμηθευτές, είδη, παραστατικά, κινήσεις");
+                tool["description"] = value;
             }
         }
 
