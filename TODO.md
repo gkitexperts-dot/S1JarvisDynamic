@@ -13,6 +13,14 @@
   - Keep the lookup synchronous on the Soft1 UI/integration thread; no `Task.Run` around `XSupport`, `GetSQLDataSet`, `XModule`, or `XTable`.
   - Add debug evidence such as `[COMPANY-CONTEXT] companyId=... name=...` without logging sensitive fields.
 
+## AI usage aggregation stability
+
+- [ ] **Investigate startup warning `[AI-USAGE-AGG] failed; Variant or safe array index out of bounds`.**
+  - Reproduce from a clean Jarvis startup and identify which Soft1/XTable field/index access causes the out-of-bounds variant/safe-array error.
+  - Keep startup fail-open as it is today: usage aggregation failure must never block Jarvis startup or provider readiness.
+  - Add targeted debug checkpoints around the aggregation query/result shape before changing behavior.
+  - Verify the fix with OpenAI, Anthropic and Gemini usage rows so provider-specific usage payloads do not regress aggregation.
+
 ## Soft1 threading rule
 
 - [ ] Audit remaining Soft1 SDK calls and keep every `XSupport` / `XModule` / `XTable` call synchronous on the Soft1 integration/UI thread. Do not move Soft1 SDK work to `Task.Run` or thread-pool workers.
