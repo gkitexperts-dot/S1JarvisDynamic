@@ -13,9 +13,12 @@ namespace S1Jarvis.UI
             new HashSet<string>(StringComparer.Ordinal);
         private DispatcherTimer _mainEmailUiBridgeTimer;
 
-        protected override void OnInitialized(EventArgs e)
+        public override void OnApplyTemplate()
         {
-            base.OnInitialized(e);
+            base.OnApplyTemplate();
+
+            if (_mainEmailUiBridgeTimer != null)
+                return;
 
             _mainEmailUiBridgeTimer = new DispatcherTimer
             {
