@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Net;
 using System.Net.Http;
 using System.Net.Http.Headers;
@@ -624,8 +625,11 @@ namespace S1Jarvis.Access.Verilic
 
         private static void LogProviderFailure(MessagesResponse result, string fallbackAgent)
         {
-            if (result == null || result.Success)
-                return;
+            if (result == null || !result.Success)
+            {
+                if (result == null || result.Success)
+                    return;
+            }
 
             string reason = GetBaseReasonCode(result.ReasonCode);
             string diagnostic = GetProviderDiagnostic(result.ReasonCode);
