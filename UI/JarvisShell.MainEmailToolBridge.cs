@@ -190,103 +190,126 @@ namespace S1Jarvis.UI
         {
             try
             {
-                if (webView == null || webView.CoreWebView2 == null ||
-                    _conversation == null || _conversation.Count == 0)
+                if (webView == null || webView.CoreWebView2 == null)
                     return;
 
-                var completedToolIds = new HashSet<string>(StringComparer.Ordinal);
-                foreach (JObject message in _conversation)
-                {
-                    JArray blocks = message?["content"] as JArray;
-                    if (blocks == null) continue;
-
-                    foreach (JToken block in blocks)
-                    {
-                        if (!string.Equals(
-                            block?["type"]?.ToString(),
-                            "tool_result",
-                            StringComparison.OrdinalIgnoreCase))
-                            continue;
-
-                        string toolUseId = block?["tool_use_id"]?.ToString();
-                        if (!string.IsNullOrWhiteSpace(toolUseId))
-                            completedToolIds.Add(toolUseId);
-                    }
-                }
-
-                if (completedToolIds.Count == 0)
-                    return;
-
-                foreach (JObject message in _conversation)
-                {
-                    JArray blocks = message?["content"] as JArray;
-                    if (blocks == null) continue;
-
-                    foreach (JToken block in blocks)
-                    {
-                        if (!string.Equals(
-                            block?["type"]?.ToString(),
-                            "tool_use",
-                            StringComparison.OrdinalIgnoreCase))
-                            continue;
-
-                        string toolUseId = block?["id"]?.ToString();
-                        if (string.IsNullOrWhiteSpace(toolUseId) ||
-                            !completedToolIds.Contains(toolUseId) ||
-                            _mainEmailUiBridgedToolIds.Contains(toolUseId))
-                            continue;
-
-                        string toolName = block?["name"]?.ToString();
-                        JObject input = block?["input"] as JObject ?? new JObject();
-
-                        if (string.Equals(toolName, "filter_email_inbox", StringComparison.OrdinalIgnoreCase))
-                        {
-                            string sinceDate = NormalizeInboxSinceDate(
-                                input["sinceDate"]?.ToString());
-                            if (string.IsNullOrWhiteSpace(sinceDate))
-                                continue;
-
-                            string searchText = input["searchText"]?.ToString();
-                            if (!string.IsNullOrWhiteSpace(searchText))
-                                searchText = BuildInboxSenderSearchKey(searchText);
-
-                            webView.CoreWebView2.PostWebMessageAsString(
-                                new JObject
-                                {
-                                    ["type"] = "email_set_inbox_filter",
-                                    ["sinceDate"] = sinceDate,
-                                    ["searchText"] = searchText,
-                                    ["insight"] = input["insight"]?.DeepClone(),
-                                    ["filters"] = NormalizeInboxFilters(input["filters"] as JArray)
-                                }.ToString(Formatting.None));
-
-                            _mainEmailUiBridgedToolIds.Add(toolUseId);
-                            DebugLog.Log("[main-email-bridge] inbox filter posted toolUseId=" + toolUseId);
-                        }
-                        else if (string.Equals(toolName, "filter_calendar", StringComparison.OrdinalIgnoreCase))
-                        {
-                            string date = input["date"]?.ToString();
-                            if (string.IsNullOrWhiteSpace(date))
-                                continue;
-
-                            webView.CoreWebView2.PostWebMessageAsString(
-                                new JObject
-                                {
-                                    ["type"] = "email_set_calendar_filter",
-                                    ["date"] = date,
-                                    ["searchText"] = input["searchText"]?.DeepClone(),
-                                    ["insight"] = input["insight"]?.DeepClone()
-                                }.ToString(Formatting.None));
-
-                            _mainEmailUiBridgedToolIds.Add(toolUseId);
-                            DebugLog.Log("[main-email-bridge] calendar filter posted toolUseId=" + toolUseId);
-                        }
-                    }
-                }
+                // The main chat and the Email curtain intentionally keep
+                // separate conversation histories. Historically the direct
+                // Email-curtain callback could therefore bypass this bridge
+                // and leave a provider-generated sentinel date (1970/2000)
+                // visible in the UI. Process BOTH histories through the same
+                // final UI boundary. _mainEmailUiBridgedToolIds de-duplicates
+                // tool ids, so a tool can never be posted twice by this guard.
+                BridgeCompletedEmailUiTools(_conversation, "main");
+                BridgeCompletedEmailUiTools(_emailConversation, "email");
             }
             catch (Exception ex)
             {
                 DebugLog.Log("[main-email-bridge] EXCEPTION: " + ex.Message);
+            }
+        }
+
+        private void BridgeCompletedEmailUiTools(IEnumerable<JObject> conversation, string source)
+        {
+            if (conversation == null)
+                return;
+
+            var messages = conversation as IList<JObject> ?? conversation.ToList();
+            if (messages.Count == 0)
+                return;
+
+            var completedToolIds = new HashSet<string>(StringComparer.Ordinal);
+            foreach (JObject message in messages)
+            {
+                JArray blocks = message?["content"] as JArray;
+                if (blocks == null) continue;
+
+                foreach (JToken block in blocks)
+                {
+                    if (!string.Equals(
+                        block?["type"]?.ToString(),
+                        "tool_result",
+                        StringComparison.OrdinalIgnoreCase))
+                        continue;
+
+                    string toolUseId = block?["tool_use_id"]?.ToString();
+                    if (!string.IsNullOrWhiteSpace(toolUseId))
+                        completedToolIds.Add(toolUseId);
+                }
+            }
+
+            if (completedToolIds.Count == 0)
+                return;
+
+            foreach (JObject message in messages)
+            {
+                JArray blocks = message?["content"] as JArray;
+                if (blocks == null) continue;
+
+                foreach (JToken block in blocks)
+                {
+                    if (!string.Equals(
+                        block?["type"]?.ToString(),
+                        "tool_use",
+                        StringComparison.OrdinalIgnoreCase))
+                        continue;
+
+                    string toolUseId = block?["id"]?.ToString();
+                    if (string.IsNullOrWhiteSpace(toolUseId) ||
+                        !completedToolIds.Contains(toolUseId) ||
+                        _mainEmailUiBridgedToolIds.Contains(toolUseId))
+                        continue;
+
+                    string toolName = block?["name"]?.ToString();
+                    JObject input = block?["input"] as JObject ?? new JObject();
+
+                    if (string.Equals(toolName, "filter_email_inbox", StringComparison.OrdinalIgnoreCase))
+                    {
+                        string sinceDate = NormalizeInboxSinceDate(
+                            input["sinceDate"]?.ToString());
+                        if (string.IsNullOrWhiteSpace(sinceDate))
+                            continue;
+
+                        string searchText = input["searchText"]?.ToString();
+                        if (!string.IsNullOrWhiteSpace(searchText))
+                            searchText = BuildInboxSenderSearchKey(searchText);
+
+                        webView.CoreWebView2.PostWebMessageAsString(
+                            new JObject
+                            {
+                                ["type"] = "email_set_inbox_filter",
+                                ["sinceDate"] = sinceDate,
+                                ["searchText"] = searchText,
+                                ["insight"] = input["insight"]?.DeepClone(),
+                                ["filters"] = NormalizeInboxFilters(input["filters"] as JArray)
+                            }.ToString(Formatting.None));
+
+                        _mainEmailUiBridgedToolIds.Add(toolUseId);
+                        DebugLog.Log(
+                            "[main-email-bridge] inbox filter posted source=" + source +
+                            " toolUseId=" + toolUseId);
+                    }
+                    else if (string.Equals(toolName, "filter_calendar", StringComparison.OrdinalIgnoreCase))
+                    {
+                        string date = input["date"]?.ToString();
+                        if (string.IsNullOrWhiteSpace(date))
+                            continue;
+
+                        webView.CoreWebView2.PostWebMessageAsString(
+                            new JObject
+                            {
+                                ["type"] = "email_set_calendar_filter",
+                                ["date"] = date,
+                                ["searchText"] = input["searchText"]?.DeepClone(),
+                                ["insight"] = input["insight"]?.DeepClone()
+                            }.ToString(Formatting.None));
+
+                        _mainEmailUiBridgedToolIds.Add(toolUseId);
+                        DebugLog.Log(
+                            "[main-email-bridge] calendar filter posted source=" + source +
+                            " toolUseId=" + toolUseId);
+                    }
+                }
             }
         }
     }
