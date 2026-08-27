@@ -15,11 +15,51 @@
 
 ## AI usage aggregation stability
 
-- [ ] **Investigate startup warning `[AI-USAGE-AGG] failed; Variant or safe array index out of bounds`.**
-  - Reproduce from a clean Jarvis startup and identify which Soft1/XTable field/index access causes the out-of-bounds variant/safe-array error.
-  - Keep startup fail-open as it is today: usage aggregation failure must never block Jarvis startup or provider readiness.
-  - Add targeted debug checkpoints around the aggregation query/result shape before changing behavior.
-  - Verify the fix with OpenAI, Anthropic and Gemini usage rows so provider-specific usage payloads do not regress aggregation.
+- [x] **Fix startup warning `[AI-USAGE-AGG] failed; Variant or safe array index out of bounds`.**
+  - Root cause: repeated Soft1 positional placeholders `:1/:2/:3` inside one multi-statement SQL batch while only three arguments were supplied. The Soft1 binder treated occurrences positionally and read past the argument array.
+  - Fixed by binding each Soft1 parameter exactly once into SQL variables (`@Serial`, `@UserId`, `@Before`) and using the SQL variables throughout the transaction.
+  - Runtime verified 27/08/2026: `[AI-USAGE-AGG] previous-day aggregation completed` and subsequent raw `CCCJAILOG` usage insert succeeded.
+  - Startup remains fail-open: reporting failure can never block Jarvis startup/provider readiness.
+
+## Dashboard AI usage analytics
+
+- [ ] **Runtime/UAT verify the new deterministic AI Usage Dashboard pages.**
+  - `AI Usage · Σήμερα`: summary cards plus detailed breakdown by User / Agent / Provider / Model from `CCCJAILOG`.
+  - `AI Usage · 30 ημέρες`: daily summary/trend using closed days from `CCCJAIDAY` plus today's raw `CCCJAILOG` rows (and any older unprocessed rows as fallback).
+  - Access is enforced in the SQL/data layer:
+    - Soft1 users `1` and `262` -> usage for all users of the current Soft1 serial.
+    - every other Soft1 user -> only their own `CCCUSERID` rows.
+  - Both views are deterministic and make no AI/provider call.
+  - Verify on one admin user (`1` or `262`) and one normal user before closing this item.
+
+## Provider-neutral UI behavior audit
+
+- [ ] **Audit UI behavior across OpenAI / Anthropic / Google without reopening provider optimization.**
+  - Same clickable file-link behavior and styling.
+  - Same clarification quick-reply buttons / canonical output grammar.
+  - Same tables, document links, export cards, success/error/loading states and markdown/fallback rendering.
+  - Prefer canonical output normalization before rendering; do not add provider-specific UI branches unless a protocol-specific difference genuinely requires it.
+
+## Common behavior / Soft1 knowledge / agent restructuring
+
+- [ ] **Next optimization phase: restructure common behavior and knowledge before doing any further optimizer tuning.**
+  - Layer 1: Common Jarvis Behavior.
+  - Layer 2: Common Soft1 Knowledge / Training (also reusable by DR where applicable).
+  - Layer 3: Agent-specific responsibilities / tool translation.
+  - Layer 4: Provider adapters containing only provider/protocol-specific behavior.
+  - Do not restart provider-by-provider prompt optimization before this restructuring.
+
+## Tools Inventory
+
+- [ ] **Create an explicit tools inventory as part of the restructuring.**
+  - Tool name and owner domain/agent.
+  - Read vs write/action.
+  - Required parameters and confirmation requirements.
+  - Result shape and UI side effects.
+  - Durable-context requirements and compact modes that need the tool.
+  - Common vs agent-specific classification.
+  - Provider/protocol considerations.
+  - Failure/fallback behavior.
 
 ## Soft1 threading rule
 
