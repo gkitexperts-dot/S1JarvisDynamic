@@ -17,6 +17,7 @@ namespace S1Jarvis.Access.Verilic
     /// - Completed OLD tool traces are removed, but durable facts such as exported
     ///   file paths and successful tool executions are retained in compact system context.
     /// - Tool schemas are selected per intent, not merely per broad agent domain.
+    /// - Cross-turn clarification answers inherit the active protocol intent when safe.
     /// - Ambiguous business requests fail open to the mature/full request.
     /// - Obvious greetings use a no-tools fast path.
     /// </summary>
@@ -29,6 +30,9 @@ namespace S1Jarvis.Access.Verilic
         private static readonly object ToolBudgetLock = new object();
         private static readonly HashSet<string> LoggedToolBudgetSignatures =
             new HashSet<string>(StringComparer.Ordinal);
+
+        private static readonly HashSet<string> DirectExportTools = Set(
+            "query_data", "export_query_to_file", "export_shown_table");
 
         private static readonly HashSet<string> ReadTools = Set(
             "query_data", "export_query_to_file", "open_document",
@@ -146,6 +150,7 @@ namespace S1Jarvis.Access.Verilic
                 string userText = FindLatestHumanText(messages);
                 int latestHumanIndex = FindLatestHumanTextMessageIndex(messages);
                 string previousAssistantText = FindPreviousAssistantText(messages, latestHumanIndex);
+                string previousHumanText = FindPreviousHumanText(messages, latestHumanIndex);
                 string role = (agentName ?? string.Empty).Trim().ToLowerInvariant();
                 string contextLine = ExtractContextLine(ReadSystemText(request["system"]));
                 string durableContext = BuildDurableContext(history.DurableFilePaths, history.SuccessfulTools);
@@ -184,7 +189,24 @@ namespace S1Jarvis.Access.Verilic
                     return providerRequestJson;
                 }
 
-                if (role == "jarvis" || role == "echo")
+                bool explicitDirectExport = IsExplicitDirectExportRequest(userText);
+                bool inheritedDirectExport = !explicitDirectExport &&
+                    IsExportClarificationContinuation(previousHumanText, previousAssistantText);
+
+                // Protocol-level intent: explicit file exports are identical for every
+                // agent/provider. A clarification answer must inherit the original export
+                // intent instead of falling back to the broad role prompt.
+                if (explicitDirectExport || inheritedDirectExport)
+                {
+                    allowed = DirectExportTools;
+                    compactPrompt = BuildDirectExportPrompt(
+                        string.IsNullOrWhiteSpace(agentName) ? "Jarvis" : agentName.Trim(),
+                        contextLine, durableContext,
+                        inheritedDirectExport ? previousHumanText : null);
+                    mode = inheritedDirectExport ? "direct-export-followup" : "direct-export";
+                }
+
+                if (allowed == null && (role == "jarvis" || role == "echo"))
                 {
                     ResolveEchoOrMainIntent(role, userText, previousAssistantText, tools,
                         contextLine, durableContext, out allowed, out compactPrompt, out mode);
@@ -252,6 +274,9 @@ namespace S1Jarvis.Access.Verilic
                     }
                     return providerRequestJson;
                 }
+
+                if (mode == "direct-export" || mode == "direct-export-followup")
+                    HardenDirectExportTools(filtered);
 
                 if (filtered[filtered.Count - 1] is JObject lastTool)
                     lastTool["cache_control"] = new JObject { ["type"] = "ephemeral" };
@@ -699,6 +724,29 @@ namespace S1Jarvis.Access.Verilic
             return filtered;
         }
 
+        private static void HardenDirectExportTools(JArray tools)
+        {
+            if (tools == null) return;
+            foreach (JToken token in tools)
+            {
+                JObject tool = token as JObject;
+                if (tool == null) continue;
+                string name = tool["name"]?.ToString();
+                if (string.Equals(name, "query_data", StringComparison.OrdinalIgnoreCase))
+                {
+                    tool["description"] = "Για direct-export flow: χρησιμοποίησέ το ΜΟΝΟ για μικρό/narrow lookup ταυτότητας, COUNT ή απολύτως αναγκαίο schema check. ΠΟΤΕ μην τραβήξεις τις γραμμές του export ως preview (ούτε TOP 100/200) και ΠΟΤΕ μεγάλο dataset. Τα πραγματικά export rows πρέπει να πάνε απευθείας SQL -> export_query_to_file, όχι μέσω LLM context.";
+                }
+                else if (string.Equals(name, "export_query_to_file", StringComparison.OrdinalIgnoreCase))
+                {
+                    tool["description"] = "Ο χειριστής έχει ήδη ζητήσει ρητά αρχείο. Εκτέλεσε το τελικό SELECT ΑΠΕΥΘΕΙΑΣ στη βάση και γράψε Excel/CSV χωρίς preview και χωρίς να περάσουν οι γραμμές από το LLM context. Κάλεσέ το μία φορά μόλις λυθούν τα απαραίτητα φίλτρα/οντότητες. Επιστρέφει path, rowsWritten και totalFound.";
+                }
+                else if (string.Equals(name, "export_shown_table", StringComparison.OrdinalIgnoreCase))
+                {
+                    tool["description"] = "Αν ο χρήστης αναφέρεται ρητά στον πίνακα που μόλις εμφανίστηκε (π.χ. «κάν' το Excel/PDF»), εξήγαγε εκείνον τον ήδη ορατό πίνακα μία φορά. Μην ξανατρέξεις query_data για να ξαναφέρεις τις ίδιες γραμμές.";
+                }
+            }
+        }
+
         private static JArray CompactSystem(string prompt)
         {
             return new JArray
@@ -767,6 +815,22 @@ namespace S1Jarvis.Access.Verilic
         {
             int index = FindLatestHumanTextMessageIndex(messages);
             return index < 0 ? null : ReadMessageText(messages[index] as JObject);
+        }
+
+        private static string FindPreviousHumanText(JArray messages, int beforeIndex)
+        {
+            if (messages == null) return null;
+            int start = beforeIndex < 0 ? messages.Count - 1 : beforeIndex - 1;
+            for (int i = start; i >= 0; i--)
+            {
+                JObject message = messages[i] as JObject;
+                if (message == null ||
+                    !string.Equals(message["role"]?.ToString(), "user", StringComparison.OrdinalIgnoreCase))
+                    continue;
+                string text = ReadMessageText(message);
+                if (!string.IsNullOrWhiteSpace(text)) return text;
+            }
+            return null;
         }
 
         private static string FindPreviousAssistantText(JArray messages, int beforeIndex)
@@ -845,6 +909,35 @@ namespace S1Jarvis.Access.Verilic
                    n == "ναι προχωρα" || n == "yes" || n == "send it";
         }
 
+        private static bool IsExplicitDirectExportRequest(string text)
+        {
+            string n = NormalizeGreek(text);
+            if (string.IsNullOrWhiteSpace(n)) return false;
+
+            // Combined export+email belongs to the richer email flow; this lane is for
+            // the deterministic act of creating/opening a local file only.
+            if (ContainsAnyNormalized(n, "στειλ", "στελν", "email", "mail", "συνημ"))
+                return false;
+
+            bool formatOrFile = ContainsAnyNormalized(n,
+                "excel", "xlsx", "csv", "pdf", "αρχει", "export", "εξαγωγ");
+            bool action = ContainsAnyNormalized(n,
+                "φτιαξε", "κανε", "δημιουργ", "εξαγ", "export", "αποθηκευ", "βγαλε");
+            return formatOrFile && action;
+        }
+
+        private static bool IsExportClarificationContinuation(string previousHumanText, string previousAssistantText)
+        {
+            if (!IsExplicitDirectExportRequest(previousHumanText) ||
+                string.IsNullOrWhiteSpace(previousAssistantText))
+                return false;
+
+            string a = NormalizeGreek(previousAssistantText);
+            return previousAssistantText.Contains("❓") ||
+                a.Contains("ποιον") || a.Contains("ποια") || a.Contains("ποιο ") ||
+                a.Contains("εννοεις") || a.Contains("διαλεξε") || a.Contains("επιλεξε");
+        }
+
         private static string InferPendingDomain(string assistantText)
         {
             string n = NormalizeGreek(assistantText);
@@ -921,7 +1014,7 @@ namespace S1Jarvis.Access.Verilic
         {
             var sb = new StringBuilder();
             sb.AppendLine("Είσαι ο " + agent + ", " + role + " του Jarvis μέσα στο Soft1. Απαντάς στα ελληνικά, σύντομα και συγκεκριμένα.");
-            sb.AppendLine("Σημερινή τοπική ημερομηνία: " + DateTime.Now.ToString("yyyy-MM-dd") + ". Για λέξεις όπως σήμερα/χθες/αύριο/τελευταία εβδομάδα/τελευταίος μήνας, υπολόγισε το εύρος από αυτή την ημερομηνία και μην ζητάς από τον χειριστή να σου πει ποια είναι η σημερινή ημερομηνία.");
+            sb.AppendLine("Σημερινή τοπική ημερομηνία: " + DateTime.Now.ToString("yyyy-MM-dd") + ". Για λέξεις όπως σήμερα/χθες/αύριο/τελευταία εβδομάδα/τελευταίος μήνας/προηγούμενο έτος, υπολόγισε το εύρος από αυτή την ημερομηνία και μην κάνεις query στη βάση μόνο για να μάθεις την τρέχουσα ημερομηνία.");
             sb.AppendLine("Χρησιμοποίησε μόνο τα tools που δίνονται. Μην ισχυρίζεσαι ότι εκτέλεσες ενέργεια χωρίς επιτυχημένο tool result. Οι φράσεις «το ξανάτρεξα», «το επιβεβαίωσα από τη βάση» ή ισοδύναμες είναι ισχυρισμός ΝΕΑΣ εκτέλεσης και επιτρέπονται μόνο αν υπάρχει αντίστοιχο επιτυχημένο tool_result στο ΤΡΕΧΟΝ turn· παλιό durable success δεν σημαίνει ότι το ξανάτρεξες τώρα. Μόλις έχεις αρκετά δεδομένα, σταμάτα τα περιττά tool calls και απάντησε.");
             if (!string.IsNullOrWhiteSpace(contextLine)) sb.AppendLine(contextLine);
             if (!string.IsNullOrWhiteSpace(durableContext)) sb.AppendLine(durableContext);
@@ -937,6 +1030,23 @@ namespace S1Jarvis.Access.Verilic
             sb.AppendLine("Αυτό το turn είναι απλή συνομιλία: δεν έχεις tools και δεν πρέπει να ισχυριστείς ότι διάβασες ή άλλαξες δεδομένα Soft1.");
             if (!string.IsNullOrWhiteSpace(contextLine)) sb.AppendLine(contextLine);
             if (!string.IsNullOrWhiteSpace(durableContext)) sb.AppendLine(durableContext);
+            return sb.ToString().Trim();
+        }
+
+        private static string BuildDirectExportPrompt(
+            string agent, string contextLine, string durableContext, string inheritedRequest)
+        {
+            StringBuilder sb = PromptBase(agent, "direct export agent", contextLine, durableContext);
+            if (!string.IsNullOrWhiteSpace(inheritedRequest))
+            {
+                sb.AppendLine("Το τρέχον μήνυμα είναι απάντηση σε διευκρίνιση. Συνέχισε το προηγούμενο export αίτημα, μην το αντιμετωπίσεις ως νέο ανεξάρτητο read request:");
+                sb.AppendLine("Προηγούμενο export αίτημα: " + inheritedRequest.Trim());
+            }
+            sb.AppendLine("Ο χειριστής έχει ήδη ζητήσει ΡΗΤΑ αρχείο. Αυτό είναι direct-export flow: ΜΗΝ εμφανίσεις preview 100/200 γραμμών και ΜΗΝ κάνεις query_data που επιστρέφει το dataset του export. Οι γραμμές πρέπει να ταξιδέψουν SQL -> export tool -> αρχείο, ποτέ SQL -> LLM -> export.");
+            sb.AppendLine("query_data επιτρέπεται μόνο για μικρό lookup/validation που χρειάζεται για να χτιστεί το τελικό SELECT (π.χ. TOP 5 για TRDR, COUNT, ή ένα στοχευμένο INFORMATION_SCHEMA). Μόλις λυθούν τα φίλτρα, κάλεσε export_query_to_file ΜΙΑ φορά με το τελικό SELECT. Αν ο χρήστης αναφέρεται σε πίνακα που ήδη φαίνεται, χρησιμοποίησε export_shown_table αντί να ξανατρέξεις query.");
+            sb.AppendLine("Μην κάνεις SELECT GETDATE()/YEAR(GETDATE()) για σχετικές ημερομηνίες: χρησιμοποίησε τη σημερινή ημερομηνία του system context. Για «προηγούμενο έτος» σήμερα σημαίνει " + (DateTime.Now.Year - 1) + ".");
+            sb.AppendLine("Γνωστό schema: TRDR(TRDR,CODE,NAME,AFM,SODTYPE,COMPANY), FINDOC(FINDOC,TRDR,TRNDATE,FINCODE,SUMAMNT,SERIES,SOSOURCE,COMPANY), SERIES join ΜΟΝΟ με COMPANY+SERIES+SOSOURCE. ΜΗΝ μαντέψεις CUSTOMER, FINDOCID, FULLFINCODE, TRDTYPE ή SERIES.SODTYPE. Αν χρειάζεται άγνωστο πεδίο, κάνε ΕΝΑ στοχευμένο INFORMATION_SCHEMA lookup, όχι διαδοχικές εικασίες.");
+            sb.AppendLine("Μετά από successful export, σταμάτα αμέσως και απάντησε σύντομα με πλήθος γραμμών και clickable Markdown link [όνομα_αρχείου.ext](πλήρες_path). ΜΗΝ ξανακάνεις query/export μόνο για επιβεβαίωση.");
             return sb.ToString().Trim();
         }
 
