@@ -34,6 +34,9 @@ namespace S1Jarvis.Access.Verilic
         private static readonly HashSet<string> DirectExportTools = Set(
             "query_data", "export_query_to_file", "export_shown_table");
 
+        private static readonly HashSet<string> LatestDocumentTools = Set(
+            "query_data");
+
         private static readonly HashSet<string> ReadTools = Set(
             "query_data", "export_query_to_file", "open_document",
             "get_conversion_targets", "export_shown_table");
@@ -155,6 +158,18 @@ namespace S1Jarvis.Access.Verilic
                 string contextLine = ExtractContextLine(ReadSystemText(request["system"]));
                 string durableContext = BuildDurableContext(history.DurableFilePaths, history.SuccessfulTools);
 
+                if (IsQueryProvenanceQuestion(userText) &&
+                    !string.IsNullOrWhiteSpace(history.LastSuccessfulQuerySql))
+                {
+                    request["tools"] = new JArray();
+                    request["system"] = CompactSystem(
+                        BuildQueryProvenancePrompt(agentName, contextLine,
+                            history.LastSuccessfulQuerySql));
+                    CompactPlainTextHistory(request, 4);
+                    return Finish(request, agentName, "query-provenance", originalChars,
+                        originalSystemChars, originalToolCount, originalMessageCount, history);
+                }
+
                 if (IsClearlyConversational(userText) && !HasStructuredCurrentUserContent(messages))
                 {
                     request["tools"] = new JArray();
@@ -204,6 +219,15 @@ namespace S1Jarvis.Access.Verilic
                         contextLine, durableContext,
                         inheritedDirectExport ? activeExportRequest : null);
                     mode = inheritedDirectExport ? "direct-export-followup" : "direct-export";
+                }
+
+                if (allowed == null && IsLatestDocumentByCurrentUserRequest(userText))
+                {
+                    allowed = LatestDocumentTools;
+                    compactPrompt = BuildLatestDocumentPrompt(
+                        string.IsNullOrWhiteSpace(agentName) ? "Jarvis" : agentName.Trim(),
+                        contextLine, durableContext);
+                    mode = "latest-user-document";
                 }
 
                 if (allowed == null && (role == "jarvis" || role == "echo"))
@@ -432,6 +456,7 @@ namespace S1Jarvis.Access.Verilic
             var durablePaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             var successfulTools = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             var toolNamesById = new Dictionary<string, string>(StringComparer.Ordinal);
+            var querySqlById = new Dictionary<string, string>(StringComparer.Ordinal);
 
             for (int i = 0; i < messages.Count; i++)
             {
@@ -471,7 +496,15 @@ namespace S1Jarvis.Access.Verilic
                         string id = block?["id"]?.ToString();
                         string name = block?["name"]?.ToString();
                         if (!string.IsNullOrWhiteSpace(id) && !string.IsNullOrWhiteSpace(name))
+                        {
                             toolNamesById[id] = name;
+                            if (string.Equals(name, "query_data", StringComparison.OrdinalIgnoreCase))
+                            {
+                                string sql = block?["input"]?["sql"]?.ToString();
+                                if (!string.IsNullOrWhiteSpace(sql))
+                                    querySqlById[id] = sql;
+                            }
+                        }
                     }
 
                     if (string.Equals(type, "tool_result", StringComparison.OrdinalIgnoreCase))
@@ -486,6 +519,13 @@ namespace S1Jarvis.Access.Verilic
                             IsSuccessfulToolResult(block))
                         {
                             successfulTools.Add(toolName);
+                            if (string.Equals(toolName, "query_data", StringComparison.OrdinalIgnoreCase))
+                            {
+                                string sql;
+                                if (querySqlById.TryGetValue(toolUseId, out sql) &&
+                                    !string.IsNullOrWhiteSpace(sql))
+                                    stats.LastSuccessfulQuerySql = sql;
+                            }
                         }
                     }
 
@@ -635,7 +675,7 @@ namespace S1Jarvis.Access.Verilic
                 foreach (string path in paths)
                     sb.AppendLine("- Διαθέσιμο αρχείο: " + path);
                 sb.AppendLine("Αν ο χρήστης αναφέρεται σε «το αρχείο που μόλις έφτιαξες», χρησιμοποίησε ακριβώς αυτό το path. Μην ξανακάνεις export αν το path υπάρχει ήδη.");
-                sb.AppendLine("Όταν ΕΜΦΑΝΙΖΕΙΣ αρχείο στον χειριστή, ΠΟΤΕ raw path ή code block: γράψε Markdown link [όνομα_αρχείου](πλήρες_path). Το Jarvis UI μετατρέπει αυτή τη μορφή σε clickable link που ανοίγει το αρχείο.");
+                sb.AppendLine("Όταν ΕΜΦΑΝΙΖΕΙΣ αρχείο στον χειριστή, γράψε Markdown link [όνομα_αρχείου](ΑΚΡΙΒΩΣ_το_path_του_tool_result). ΜΗΝ προσθέσεις file:// ή file:/// και ΜΗΝ κάνεις URL-encoding του local path. Το Jarvis UI χειρίζεται το raw Windows path μέσα στο Markdown link.");
             }
 
             return sb.ToString().Trim();
@@ -956,8 +996,6 @@ namespace S1Jarvis.Access.Verilic
                 if (IsExplicitDirectExportRequest(text))
                     return text;
 
-                // Clarification chains are intentionally short. Do not resurrect an old
-                // export intent from an unrelated conversation far back in history.
                 if (humanTurnsSeen >= 4)
                     break;
             }
@@ -1013,6 +1051,28 @@ namespace S1Jarvis.Access.Verilic
             return false;
         }
 
+        private static bool IsLatestDocumentByCurrentUserRequest(string text)
+        {
+            if (string.IsNullOrWhiteSpace(text)) return false;
+            string n = NormalizeGreek(text);
+            bool document = ContainsAnyNormalized(n, "παραστατικ", "findoc");
+            bool latest = ContainsAnyNormalized(n, "τελευται", "πιο προσφατ", "προσφατο");
+            bool byMe = ContainsAnyNormalized(n,
+                "καταχωρησα", "καταχωρισα", "περασα", "εβαλα εγω", "εχω καταχωρησει",
+                "που εβαλα", "που περασα", "απο εμενα", "δικο μου");
+            return document && latest && byMe;
+        }
+
+        private static bool IsQueryProvenanceQuestion(string text)
+        {
+            if (string.IsNullOrWhiteSpace(text)) return false;
+            string n = NormalizeGreek(text);
+            bool asksQuery = ContainsAnyNormalized(n, "query", "sql", "ερωτημα");
+            bool asksUsed = ContainsAnyNormalized(n,
+                "χρησιμοποιησ", "εκτελεσ", "ετρεξ", "βρηκες", "βρηκαμε", "με ποιο");
+            return asksQuery && asksUsed;
+        }
+
         private static bool ContainsAny(string text, string[] signals)
         {
             return ContainsAnyNormalized(NormalizeGreek(text), signals);
@@ -1065,7 +1125,7 @@ namespace S1Jarvis.Access.Verilic
             sb.AppendLine("Είσαι ο " + agent + ", " + role + " του Jarvis μέσα στο Soft1. Απαντάς στα ελληνικά, σύντομα και συγκεκριμένα.");
             sb.AppendLine("Σημερινή τοπική ημερομηνία: " + DateTime.Now.ToString("yyyy-MM-dd") + ". Για λέξεις όπως σήμερα/χθες/αύριο/τελευταία εβδομάδα/τελευταίος μήνας/προηγούμενο έτος, υπολόγισε το εύρος από αυτή την ημερομηνία και μην κάνεις query στη βάση μόνο για να μάθεις την τρέχουσα ημερομηνία.");
             sb.AppendLine("Semantic κατηγορίες παραστατικών: ερμήνευε τον όρο του χειριστή με βάση τη φύση/περιγραφή των document types και ΟΧΙ με hardcoded αριθμούς SERIES, επειδή οι σειρές διαφέρουν ανά εταιρία/installation. «Τιμολόγια» σημαίνει invoice-like αξιακά παραστατικά και ΔΕΝ περιλαμβάνει παραγγελίες/orders, προσφορές ή συμψηφισμούς εκτός αν ζητηθούν ρητά. «Παραγγελίες» σημαίνει order-like παραστατικά. «Παραστατικά» ή «κινήσεις» είναι ευρύτερο scope. Τα πιστωτικά είναι ξεχωριστή semantic κατηγορία: αν ο χειριστής δεν τα προσδιορίζει και η ένταξή τους αλλάζει ουσιωδώς το αποτέλεσμα, ζήτησε σύντομη clarification. Αν δεν μπορείς να ταξινομήσεις με ασφάλεια από τα διαθέσιμα metadata/description, κάνε μικρό lookup των σχετικών τύπων και ρώτα αντί να μαντέψεις.");
-            sb.AppendLine("Χρησιμοποίησε μόνο τα tools που δίνονται. Μην ισχυρίζεσαι ότι εκτέλεσες ενέργεια χωρίς επιτυχημένο tool result. Οι φράσεις «το ξανάτρεξα», «το επιβεβαίωσα από τη βάση» ή ισοδύναμες είναι ισχυρισμός ΝΕΑΣ εκτέλεσης και επιτρέπονται μόνο αν υπάρχει αντίστοιχο επιτυχημένο tool_result στο ΤΡΕΧΟΝ turn· παλιό durable success δεν σημαίνει ότι το ξανάτρεξες τώρα. Μόλις έχεις αρκετά δεδομένα, σταμάτα τα περιττά tool calls και απάντησε.");
+            sb.AppendLine("Χρησιμοποίησε μόνο τα tools που δίνονται. Μην ισχυρίζεσαι ότι εκτέλεσες ενέργεια χωρίς επιτυχημένο tool result. Οι φράσεις «το ξανάτρεξα», «το επιβεβαίωσα από τη βάση» ή ισοδύναμες είναι ισχυρισμός ΝΕΑΣ εκτέλεσης και επιτρέπονται μόνο αν υπάρχει αντίστοιχο επιτυχημένο tool_result στο ΤΡΕΧΟΝ turn· παλιό durable success δεν σημαίνει ότι το ξανάτρεξες τώρα. Αν ο χειριστής ρωτήσει ποιο SQL/query χρησιμοποιήθηκε, μην ανακατασκευάσεις ή βελτιώσεις το query εκ των υστέρων: πρέπει να αναφέρεις μόνο το πραγματικό query από το tool trace, αλλιώς να πεις ότι δεν είναι διαθέσιμο. Μόλις έχεις αρκετά δεδομένα, σταμάτα τα περιττά tool calls και απάντησε.");
             if (!string.IsNullOrWhiteSpace(contextLine)) sb.AppendLine(contextLine);
             if (!string.IsNullOrWhiteSpace(durableContext)) sb.AppendLine(durableContext);
             return sb;
@@ -1080,6 +1140,26 @@ namespace S1Jarvis.Access.Verilic
             sb.AppendLine("Αυτό το turn είναι απλή συνομιλία: δεν έχεις tools και δεν πρέπει να ισχυριστείς ότι διάβασες ή άλλαξες δεδομένα Soft1.");
             if (!string.IsNullOrWhiteSpace(contextLine)) sb.AppendLine(contextLine);
             if (!string.IsNullOrWhiteSpace(durableContext)) sb.AppendLine(durableContext);
+            return sb.ToString().Trim();
+        }
+
+        private static string BuildQueryProvenancePrompt(string agentName, string contextLine, string sql)
+        {
+            string name = string.IsNullOrWhiteSpace(agentName) ? "Jarvis" : agentName.Trim();
+            var sb = new StringBuilder();
+            sb.AppendLine("Είσαι ο " + name + " του Jarvis μέσα στο Soft1. Ο χειριστής ζητά το πραγματικό SQL/query που χρησιμοποιήθηκε προηγουμένως.");
+            sb.AppendLine("ΜΗΝ συνθέσεις νέο query, ΜΗΝ το διορθώσεις και ΜΗΝ το παρουσιάσεις ως καλύτερη εκδοχή. Εμφάνισε ακριβώς το παρακάτω SQL ως code block και εξήγησε σύντομα ότι αυτό είναι το πραγματικό προηγούμενο query_data call:");
+            sb.AppendLine(sql ?? string.Empty);
+            if (!string.IsNullOrWhiteSpace(contextLine)) sb.AppendLine(contextLine);
+            return sb.ToString().Trim();
+        }
+
+        private static string BuildLatestDocumentPrompt(string agent, string contextLine, string durableContext)
+        {
+            StringBuilder sb = PromptBase(agent, "Soft1 deterministic read agent", contextLine, durableContext);
+            sb.AppendLine("Το αίτημα σημαίνει «ποιο είναι το τελευταίο παραστατικό που καταχώρησε ο ΤΡΕΧΩΝ Soft1 χρήστης», όχι το τελευταίο παραστατικό γενικά στην εταιρία.");
+            sb.AppendLine("Υποχρεωτική semantics: FINDOC.COMPANY=currentCompany ΚΑΙ FINDOC.INSUSER=currentUserId από το Τρέχον context. Ταξινόμηση ORDER BY FINDOC.INSDATE DESC, FINDOC.FINDOC DESC. ΜΗΝ χρησιμοποιήσεις ORDER BY FINDOC DESC μόνο του και ΜΗΝ χρησιμοποιήσεις TRNDATE ως χρόνο καταχώρησης.");
+            sb.AppendLine("Γνωστό schema για αυτό το intent: FINDOC(FINDOC,TRDR,TRNDATE,FINCODE,SUMAMNT,SERIES,SOSOURCE,COMPANY,INSUSER,INSDATE), USERS(USERS,NAME), TRDR(TRDR,CODE,NAME,COMPANY), SERIES(COMPANY,SERIES,SOSOURCE,NAME). Αν κάνεις joins: SERIES μόνο με COMPANY+SERIES+SOSOURCE και TRDR με COMPANY+TRDR. Ένα query_data αρκεί.");
             return sb.ToString().Trim();
         }
 
@@ -1098,7 +1178,7 @@ namespace S1Jarvis.Access.Verilic
             sb.AppendLine("query_data επιτρέπεται μόνο για μικρό lookup/validation που χρειάζεται για να χτιστεί το τελικό SELECT (π.χ. TOP 5 για TRDR, COUNT, ή ένα στοχευμένο INFORMATION_SCHEMA). Μόλις λυθούν τα φίλτρα, κάλεσε export_query_to_file ΜΙΑ φορά με το τελικό SELECT. Αν ο χρήστης αναφέρεται σε πίνακα που ήδη φαίνεται, χρησιμοποίησε export_shown_table αντί να ξανατρέξεις query.");
             sb.AppendLine("Μην κάνεις SELECT GETDATE()/YEAR(GETDATE()) για σχετικές ημερομηνίες: χρησιμοποίησε τη σημερινή ημερομηνία του system context. Για «προηγούμενο έτος» σήμερα σημαίνει " + (DateTime.Now.Year - 1) + ".");
             sb.AppendLine("Γνωστό schema: TRDR(TRDR,CODE,NAME,AFM,SODTYPE,COMPANY), FINDOC(FINDOC,TRDR,TRNDATE,FINCODE,SUMAMNT,SERIES,SOSOURCE,COMPANY), SERIES join ΜΟΝΟ με COMPANY+SERIES+SOSOURCE. ΜΗΝ μαντέψεις CUSTOMER, FINDOCID, FULLFINCODE, TRDTYPE ή SERIES.SODTYPE. Αν χρειάζεται άγνωστο πεδίο, κάνε ΕΝΑ στοχευμένο INFORMATION_SCHEMA lookup, όχι διαδοχικές εικασίες.");
-            sb.AppendLine("Μετά από successful export, σταμάτα αμέσως και απάντησε σύντομα με πλήθος γραμμών και clickable Markdown link [όνομα_αρχείου.ext](πλήρες_path). ΜΗΝ ξανακάνεις query/export μόνο για επιβεβαίωση.");
+            sb.AppendLine("Μετά από successful export, σταμάτα αμέσως και απάντησε σύντομα με πλήθος γραμμών και clickable Markdown link [όνομα_αρχείου.ext](ΑΚΡΙΒΩΣ_το_path_που_επέστρεψε_το_tool). ΜΗΝ προσθέσεις file:// ή file:/// και ΜΗΝ κάνεις URL-encoding του local path. ΜΗΝ ξανακάνεις query/export μόνο για επιβεβαίωση.");
             return sb.ToString().Trim();
         }
 
@@ -1106,7 +1186,8 @@ namespace S1Jarvis.Access.Verilic
         {
             StringBuilder sb = PromptBase(agent, "read/reporting agent", contextLine, durableContext);
             sb.AppendLine("Για Soft1 χρησιμοποίησε query_data μόνο για SELECT. Μην μαντεύεις schema: INFORMATION_SCHEMA μόνο όταν λείπει πραγματικά πληροφορία.");
-            sb.AppendLine("Γνωστό schema: TRDR(TRDR,CODE,NAME,AFM,SODTYPE), FINDOC(FINDOC,TRDR,TRNDATE,FINCODE,SUMAMNT,SERIES,SOSOURCE,COMPANY), SERIES join σε COMPANY+SERIES+SOSOURCE, TRDBALSHEET(TRDR,FISCPRD,LDEBIT,LCREDIT). Δεν υπάρχει FINTRD.");
+            sb.AppendLine("Γνωστό schema: TRDR(TRDR,CODE,NAME,AFM,SODTYPE), FINDOC(FINDOC,TRDR,TRNDATE,FINCODE,SUMAMNT,SERIES,SOSOURCE,COMPANY,INSUSER,INSDATE), SERIES join σε COMPANY+SERIES+SOSOURCE, TRDBALSHEET(TRDR,FISCPRD,LDEBIT,LCREDIT), USERS(USERS,NAME). Δεν υπάρχει FINTRD.");
+            sb.AppendLine("Αν ο χειριστής πει «τελευταίο παραστατικό που καταχώρησα/πέρασα/έβαλα εγώ», το «εγώ» σημαίνει current Soft1 UserId: φίλτραρε FINDOC.INSUSER=currentUserId και ταξινόμησε INSDATE DESC, FINDOC DESC. Μην το συγχέεις με το τελευταίο FINDOC γενικά.");
             sb.AppendLine("Πίνακες σε Markdown. Αν totalRowCount>100, preview και πρότεινε export.");
             return sb.ToString().Trim();
         }
@@ -1154,7 +1235,7 @@ namespace S1Jarvis.Access.Verilic
             StringBuilder sb = PromptBase("Echo", "report/export agent", contextLine, durableContext);
             sb.AppendLine("Για δεδομένα Soft1 χρησιμοποίησε query_data και μετά ΕΝΑ export tool. Μόλις export tool επιστρέψει μη κενό path, θεώρησε το αρχείο έτοιμο και ΜΗΝ ξανακάνεις export στο ίδιο user request.");
             sb.AppendLine("Export schema guardrail: χρησιμοποίησε ως γνωστά TRDR(TRDR,CODE,NAME,AFM,SODTYPE,COMPANY), FINDOC(FINDOC,TRDR,TRNDATE,FINCODE,SUMAMNT,SERIES,SOSOURCE,COMPANY) και SERIES join ΜΟΝΟ με COMPANY+SERIES+SOSOURCE. ΜΗΝ χρησιμοποιήσεις/μαντέψεις CUSTOMER, FINDOCID, FULLFINCODE, TRDTYPE ή SERIES.SODTYPE. Αν χρειάζεσαι πεδίο πέρα από τα γνωστά, κάνε ΕΝΑ στοχευμένο INFORMATION_SCHEMA lookup και μετά χρησιμοποίησέ το· όχι διαδοχικές εικασίες schema. Αν ο συναλλασσόμενος έχει ήδη λυθεί στο κοντινό context, επαναχρησιμοποίησε το γνωστό TRDR/CODE αντί να τον ξαναανακαλύψεις.");
-            sb.AppendLine("Μετά από επιτυχημένο export, η τελική απάντηση ΠΡΕΠΕΙ να εμφανίζει το αρχείο ως clickable Markdown link: [όνομα_αρχείου.xlsx](C:\\πλήρες\\path\\όνομα_αρχείου.xlsx). ΜΗΝ εμφανίζεις το path μόνο του και ΜΗΝ το βάζεις σε code block. Το Jarvis UI έχει ήδη file-link handler για αυτή τη μορφή.");
+            sb.AppendLine("Μετά από επιτυχημένο export, η τελική απάντηση ΠΡΕΠΕΙ να εμφανίζει το αρχείο ως clickable Markdown link: [όνομα_αρχείου.xlsx](C:\\πλήρες\\path\\όνομα_αρχείου.xlsx), χρησιμοποιώντας ΑΚΡΙΒΩΣ το path από το tool_result. ΜΗΝ προσθέσεις file:// ή file:/// και ΜΗΝ κάνεις URL-encoding. ΜΗΝ εμφανίζεις το path μόνο του και ΜΗΝ το βάζεις σε code block.");
             if (emailMentioned)
                 sb.AppendLine("Αν ο χρήστης είπε ότι θα σταλεί αργότερα με email αλλά δεν ζήτησε ρητά άμεση αποστολή, ετοίμασε μόνο το αρχείο και δώσε το clickable link. Η αποστολή θα γίνει σε επόμενο επιβεβαιωμένο turn.");
             return sb.ToString().Trim();
@@ -1249,6 +1330,7 @@ namespace S1Jarvis.Access.Verilic
             internal bool Changed;
             internal int RemovedBlocks;
             internal int RemovedChars;
+            internal string LastSuccessfulQuerySql;
             internal readonly List<string> DurableFilePaths = new List<string>();
             internal readonly List<string> SuccessfulTools = new List<string>();
         }
