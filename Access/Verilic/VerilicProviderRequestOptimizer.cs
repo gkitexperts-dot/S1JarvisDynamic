@@ -390,10 +390,6 @@ namespace S1Jarvis.Access.Verilic
             if (messages == null || messages.Count < 2)
                 return stats;
 
-            // Tool results are represented as synthetic role=user messages. They are
-            // NOT human turns and must never become the compaction boundary: doing so
-            // can remove the matching assistant tool_use and leave an orphan result.
-            // Anchor the active turn at the most recent real user-text message instead.
             int latestHuman = FindLatestHumanTextMessageIndex(messages);
             if (latestHuman <= 0)
                 return stats;
@@ -517,7 +513,6 @@ namespace S1Jarvis.Access.Verilic
             }
             catch
             {
-                // Non-JSON successful tool payloads are valid in the mature engine.
             }
 
             return true;
@@ -606,6 +601,7 @@ namespace S1Jarvis.Access.Verilic
                 foreach (string path in paths)
                     sb.AppendLine("- Διαθέσιμο αρχείο: " + path);
                 sb.AppendLine("Αν ο χρήστης αναφέρεται σε «το αρχείο που μόλις έφτιαξες», χρησιμοποίησε ακριβώς αυτό το path. Μην ξανακάνεις export αν το path υπάρχει ήδη.");
+                sb.AppendLine("Όταν ΕΜΦΑΝΙΖΕΙΣ αρχείο στον χειριστή, ΠΟΤΕ raw path ή code block: γράψε Markdown link [όνομα_αρχείου](πλήρες_path). Το Jarvis UI μετατρέπει αυτή τη μορφή σε clickable link που ανοίγει το αρχείο.");
             }
 
             return sb.ToString().Trim();
@@ -926,7 +922,7 @@ namespace S1Jarvis.Access.Verilic
             var sb = new StringBuilder();
             sb.AppendLine("Είσαι ο " + agent + ", " + role + " του Jarvis μέσα στο Soft1. Απαντάς στα ελληνικά, σύντομα και συγκεκριμένα.");
             sb.AppendLine("Σημερινή τοπική ημερομηνία: " + DateTime.Now.ToString("yyyy-MM-dd") + ". Για λέξεις όπως σήμερα/χθες/αύριο/τελευταία εβδομάδα/τελευταίος μήνας, υπολόγισε το εύρος από αυτή την ημερομηνία και μην ζητάς από τον χειριστή να σου πει ποια είναι η σημερινή ημερομηνία.");
-            sb.AppendLine("Χρησιμοποίησε μόνο τα tools που δίνονται. Μην ισχυρίζεσαι ότι εκτέλεσες ενέργεια χωρίς επιτυχημένο tool result. Μόλις έχεις αρκετά δεδομένα, σταμάτα τα περιττά tool calls και απάντησε.");
+            sb.AppendLine("Χρησιμοποίησε μόνο τα tools που δίνονται. Μην ισχυρίζεσαι ότι εκτέλεσες ενέργεια χωρίς επιτυχημένο tool result. Οι φράσεις «το ξανάτρεξα», «το επιβεβαίωσα από τη βάση» ή ισοδύναμες είναι ισχυρισμός ΝΕΑΣ εκτέλεσης και επιτρέπονται μόνο αν υπάρχει αντίστοιχο επιτυχημένο tool_result στο ΤΡΕΧΟΝ turn· παλιό durable success δεν σημαίνει ότι το ξανάτρεξες τώρα. Μόλις έχεις αρκετά δεδομένα, σταμάτα τα περιττά tool calls και απάντησε.");
             if (!string.IsNullOrWhiteSpace(contextLine)) sb.AppendLine(contextLine);
             if (!string.IsNullOrWhiteSpace(durableContext)) sb.AppendLine(durableContext);
             return sb;
@@ -994,8 +990,10 @@ namespace S1Jarvis.Access.Verilic
         {
             StringBuilder sb = PromptBase("Echo", "report/export agent", contextLine, durableContext);
             sb.AppendLine("Για δεδομένα Soft1 χρησιμοποίησε query_data και μετά ΕΝΑ export tool. Μόλις export tool επιστρέψει μη κενό path, θεώρησε το αρχείο έτοιμο και ΜΗΝ ξανακάνεις export στο ίδιο user request.");
+            sb.AppendLine("Export schema guardrail: χρησιμοποίησε ως γνωστά TRDR(TRDR,CODE,NAME,AFM,SODTYPE,COMPANY), FINDOC(FINDOC,TRDR,TRNDATE,FINCODE,SUMAMNT,SERIES,SOSOURCE,COMPANY) και SERIES join ΜΟΝΟ με COMPANY+SERIES+SOSOURCE. ΜΗΝ χρησιμοποιήσεις/μαντέψεις CUSTOMER, FINDOCID, FULLFINCODE, TRDTYPE ή SERIES.SODTYPE. Αν χρειάζεσαι πεδίο πέρα από τα γνωστά, κάνε ΕΝΑ στοχευμένο INFORMATION_SCHEMA lookup και μετά χρησιμοποίησέ το· όχι διαδοχικές εικασίες schema. Αν ο συναλλασσόμενος έχει ήδη λυθεί στο κοντινό context, επαναχρησιμοποίησε το γνωστό TRDR/CODE αντί να τον ξαναανακαλύψεις.");
+            sb.AppendLine("Μετά από επιτυχημένο export, η τελική απάντηση ΠΡΕΠΕΙ να εμφανίζει το αρχείο ως clickable Markdown link: [όνομα_αρχείου.xlsx](C:\\πλήρες\\path\\όνομα_αρχείου.xlsx). ΜΗΝ εμφανίζεις το path μόνο του και ΜΗΝ το βάζεις σε code block. Το Jarvis UI έχει ήδη file-link handler για αυτή τη μορφή.");
             if (emailMentioned)
-                sb.AppendLine("Αν ο χρήστης είπε ότι θα σταλεί αργότερα με email αλλά δεν ζήτησε ρητά άμεση αποστολή, ετοίμασε μόνο το αρχείο και δώσε το path/όνομα. Η αποστολή θα γίνει σε επόμενο επιβεβαιωμένο turn.");
+                sb.AppendLine("Αν ο χρήστης είπε ότι θα σταλεί αργότερα με email αλλά δεν ζήτησε ρητά άμεση αποστολή, ετοίμασε μόνο το αρχείο και δώσε το clickable link. Η αποστολή θα γίνει σε επόμενο επιβεβαιωμένο turn.");
             return sb.ToString().Trim();
         }
 
