@@ -190,8 +190,11 @@ namespace S1Jarvis.Access.Verilic
                 }
 
                 bool explicitDirectExport = IsExplicitDirectExportRequest(userText);
+                string activeExportRequest = explicitDirectExport
+                    ? userText
+                    : FindActiveExportRequest(messages, latestHumanIndex, previousAssistantText);
                 bool inheritedDirectExport = !explicitDirectExport &&
-                    IsExportClarificationContinuation(previousHumanText, previousAssistantText);
+                    !string.IsNullOrWhiteSpace(activeExportRequest);
 
                 if (explicitDirectExport || inheritedDirectExport)
                 {
@@ -199,7 +202,7 @@ namespace S1Jarvis.Access.Verilic
                     compactPrompt = BuildDirectExportPrompt(
                         string.IsNullOrWhiteSpace(agentName) ? "Jarvis" : agentName.Trim(),
                         contextLine, durableContext,
-                        inheritedDirectExport ? previousHumanText : null);
+                        inheritedDirectExport ? activeExportRequest : null);
                     mode = inheritedDirectExport ? "direct-export-followup" : "direct-export";
                 }
 
@@ -921,16 +924,58 @@ namespace S1Jarvis.Access.Verilic
             return formatOrFile && action;
         }
 
+        private static string FindActiveExportRequest(
+            JArray messages, int latestHumanIndex, string previousAssistantText)
+        {
+            if (messages == null || latestHumanIndex <= 0 ||
+                !LooksLikeClarificationPrompt(previousAssistantText))
+                return null;
+
+            int humanTurnsSeen = 0;
+            for (int i = latestHumanIndex - 1; i >= 0; i--)
+            {
+                JObject message = messages[i] as JObject;
+                if (message == null ||
+                    !string.Equals(message["role"]?.ToString(), "user", StringComparison.OrdinalIgnoreCase))
+                    continue;
+
+                string text = ReadMessageText(message);
+                if (string.IsNullOrWhiteSpace(text))
+                    continue;
+
+                humanTurnsSeen++;
+                if (IsExplicitDirectExportRequest(text))
+                    return text;
+
+                // Clarification chains are intentionally short. Do not resurrect an old
+                // export intent from an unrelated conversation far back in history.
+                if (humanTurnsSeen >= 4)
+                    break;
+            }
+
+            return null;
+        }
+
+        private static bool LooksLikeClarificationPrompt(string assistantText)
+        {
+            if (string.IsNullOrWhiteSpace(assistantText))
+                return false;
+
+            string a = NormalizeGreek(assistantText);
+            return assistantText.Contains("❓") ||
+                a.Contains("ποιον") || a.Contains("ποια") || a.Contains("ποιο ") ||
+                a.Contains("εννοεις") || a.Contains("διαλεξε") || a.Contains("επιλεξε") ||
+                a.Contains("συμπεριληφ") || a.Contains("πιστωτικ") ||
+                a.Contains("τι να κρατησω");
+        }
+
         private static bool IsExportClarificationContinuation(string previousHumanText, string previousAssistantText)
         {
             if (!IsExplicitDirectExportRequest(previousHumanText) ||
                 string.IsNullOrWhiteSpace(previousAssistantText))
                 return false;
 
-            string a = NormalizeGreek(previousAssistantText);
-            return previousAssistantText.Contains("❓") ||
-                a.Contains("ποιον") || a.Contains("ποια") || a.Contains("ποιο ") ||
-                a.Contains("εννοεις") || a.Contains("διαλεξε") || a.Contains("επιλεξε");
+            return LooksLikeClarificationPrompt(previousAssistantText);
         }
 
         private static string InferPendingDomain(string assistantText)
