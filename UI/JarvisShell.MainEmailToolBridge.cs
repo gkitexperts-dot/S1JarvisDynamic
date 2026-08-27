@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Windows.Threading;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
+using S1Jarvis.Core;
 
 namespace S1Jarvis.UI
 {
