@@ -118,9 +118,10 @@ namespace S1Jarvis.Core
         {
             UsageIdentity identity = GetUsageIdentity(xSupport);
 
-            // Keep result metadata inside the classic SQL INT types understood by
-            // Soft1 XTable.CreateDataTable(). COUNT_BIG/SUM(bigint) is returned by
-            // the Soft1 provider as field type 0 and throws "Unknown type '0'".
+            // Soft1 XTable metadata does not reliably expose SQL aggregate
+            // expressions (COUNT/SUM) unless the final projected expression has
+            // an explicit classic type. Without these CASTs CreateDataTable()
+            // reports field type 0 (for example "Calls") and throws.
             const string sql = @"
 SET NOCOUNT ON;
 DECLARE @Serial varchar(30) = :1;
@@ -134,12 +135,12 @@ SELECT
     ISNULL(L.CCCAGENT, '') AS Agent,
     ISNULL(L.CCCPROVIDER, '') AS Provider,
     ISNULL(L.CCCMODEL, '') AS Model,
-    COUNT(*) AS Calls,
-    SUM(ISNULL(L.CCCINTOK, 0)) AS InTokens,
-    SUM(ISNULL(L.CCCOUTTOK, 0)) AS OutTokens,
-    SUM(ISNULL(L.CCCTOTOK, 0)) AS TotalTokens,
-    SUM(CASE WHEN L.CCCSUCCESS = 1 THEN 1 ELSE 0 END) AS OkCalls,
-    SUM(CASE WHEN L.CCCSUCCESS = 1 THEN 0 ELSE 1 END) AS ErrorCalls
+    CAST(COUNT(*) AS int) AS Calls,
+    CAST(SUM(ISNULL(L.CCCINTOK, 0)) AS int) AS InTokens,
+    CAST(SUM(ISNULL(L.CCCOUTTOK, 0)) AS int) AS OutTokens,
+    CAST(SUM(ISNULL(L.CCCTOTOK, 0)) AS int) AS TotalTokens,
+    CAST(SUM(CASE WHEN L.CCCSUCCESS = 1 THEN 1 ELSE 0 END) AS int) AS OkCalls,
+    CAST(SUM(CASE WHEN L.CCCSUCCESS = 1 THEN 0 ELSE 1 END) AS int) AS ErrorCalls
 FROM CCCJAILOG L
 LEFT JOIN USERS U ON U.USERS = L.CCCUSERID
 WHERE L.CCCSERIAL = @Serial
@@ -220,12 +221,12 @@ DECLARE @FromDate date = DATEADD(day, -29, @Today);
 (
     SELECT
         D.CCCDATE AS UsageDate,
-        SUM(ISNULL(D.CCCCALLS, 0)) AS Calls,
-        SUM(ISNULL(D.CCCINTOK, 0)) AS InTokens,
-        SUM(ISNULL(D.CCCOUTTOK, 0)) AS OutTokens,
-        SUM(ISNULL(D.CCCTOTOK, 0)) AS TotalTokens,
-        SUM(ISNULL(D.CCCOKCALLS, 0)) AS OkCalls,
-        SUM(ISNULL(D.CCCERRCALLS, 0)) AS ErrorCalls
+        CAST(SUM(ISNULL(D.CCCCALLS, 0)) AS int) AS Calls,
+        CAST(SUM(ISNULL(D.CCCINTOK, 0)) AS int) AS InTokens,
+        CAST(SUM(ISNULL(D.CCCOUTTOK, 0)) AS int) AS OutTokens,
+        CAST(SUM(ISNULL(D.CCCTOTOK, 0)) AS int) AS TotalTokens,
+        CAST(SUM(ISNULL(D.CCCOKCALLS, 0)) AS int) AS OkCalls,
+        CAST(SUM(ISNULL(D.CCCERRCALLS, 0)) AS int) AS ErrorCalls
     FROM CCCJAIDAY D
     WHERE D.CCCSERIAL = @Serial
       AND D.CCCDATE >= @FromDate
@@ -237,12 +238,12 @@ DECLARE @FromDate date = DATEADD(day, -29, @Today);
 
     SELECT
         CONVERT(date, L.CCCDATETIME) AS UsageDate,
-        COUNT(*) AS Calls,
-        SUM(ISNULL(L.CCCINTOK, 0)) AS InTokens,
-        SUM(ISNULL(L.CCCOUTTOK, 0)) AS OutTokens,
-        SUM(ISNULL(L.CCCTOTOK, 0)) AS TotalTokens,
-        SUM(CASE WHEN L.CCCSUCCESS = 1 THEN 1 ELSE 0 END) AS OkCalls,
-        SUM(CASE WHEN L.CCCSUCCESS = 1 THEN 0 ELSE 1 END) AS ErrorCalls
+        CAST(COUNT(*) AS int) AS Calls,
+        CAST(SUM(ISNULL(L.CCCINTOK, 0)) AS int) AS InTokens,
+        CAST(SUM(ISNULL(L.CCCOUTTOK, 0)) AS int) AS OutTokens,
+        CAST(SUM(ISNULL(L.CCCTOTOK, 0)) AS int) AS TotalTokens,
+        CAST(SUM(CASE WHEN L.CCCSUCCESS = 1 THEN 1 ELSE 0 END) AS int) AS OkCalls,
+        CAST(SUM(CASE WHEN L.CCCSUCCESS = 1 THEN 0 ELSE 1 END) AS int) AS ErrorCalls
     FROM CCCJAILOG L
     WHERE L.CCCSERIAL = @Serial
       AND L.CCCDATETIME >= @FromDate
@@ -253,12 +254,12 @@ DECLARE @FromDate date = DATEADD(day, -29, @Today);
 )
 SELECT
     UsageDate,
-    SUM(Calls) AS Calls,
-    SUM(InTokens) AS InTokens,
-    SUM(OutTokens) AS OutTokens,
-    SUM(TotalTokens) AS TotalTokens,
-    SUM(OkCalls) AS OkCalls,
-    SUM(ErrorCalls) AS ErrorCalls
+    CAST(SUM(Calls) AS int) AS Calls,
+    CAST(SUM(InTokens) AS int) AS InTokens,
+    CAST(SUM(OutTokens) AS int) AS OutTokens,
+    CAST(SUM(TotalTokens) AS int) AS TotalTokens,
+    CAST(SUM(OkCalls) AS int) AS OkCalls,
+    CAST(SUM(ErrorCalls) AS int) AS ErrorCalls
 FROM UsageRows
 GROUP BY UsageDate
 ORDER BY UsageDate;";
