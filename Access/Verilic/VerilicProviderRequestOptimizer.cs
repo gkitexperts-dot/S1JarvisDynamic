@@ -42,8 +42,6 @@ namespace S1Jarvis.Access.Verilic
             "query_data", "open_document", "find_trader_by_afm", "get_aade_data",
             "create_trader_from_aade", "export_query_to_file", "export_shown_table");
 
-        // Echo is intentionally split into intent-sized budgets. The old broad Echo
-        // catalog was one of the main causes of 30k-40k input turns for simple work.
         private static readonly HashSet<string> EchoContactTools = Set(
             "search_outlook_contacts", "show_contact_results");
 
@@ -113,8 +111,6 @@ namespace S1Jarvis.Access.Verilic
             "αποθηκ", "εισερχομεν", "inbox", "outlook", "email", "mail"
         };
 
-        // Deliberately excludes short acknowledgements such as "ναι", "οκ",
-        // "ωραία", "τέλεια" because they may confirm a pending external action.
         private static readonly string[] ConversationalExact =
         {
             "γεια", "γεια σου", "καλημερα", "καλησπερα", "καληνυχτα",
@@ -292,7 +288,6 @@ namespace S1Jarvis.Access.Verilic
             string n = NormalizeGreek(userText);
             bool isEchoRole = string.Equals(role, "echo", StringComparison.Ordinal);
 
-            // Confirmation must be resolved BEFORE generic conversation/read rules.
             if (IsShortConfirmation(userText))
             {
                 string pending = InferPendingDomain(previousAssistantText);
@@ -312,7 +307,6 @@ namespace S1Jarvis.Access.Verilic
                 }
             }
 
-            // Contact-only lookup: do not pay for inbox/calendar/send schemas.
             if (ContainsAnyNormalized(n, "επαφη", "contact") &&
                 ContainsAnyNormalized(n, "βρες", "αναζητ", "email", "mail", "τηλεφων"))
             {
@@ -322,8 +316,6 @@ namespace S1Jarvis.Access.Verilic
                 return;
             }
 
-            // Inbox/filter request: the UI side-channel is expected to open the Email
-            // curtain and render deterministic inbox results.
             if (ContainsAnyNormalized(n, "εισερχομεν", "inbox", "μηνυμα", "emails", "email απο"))
             {
                 allowed = EchoInboxTools;
@@ -356,8 +348,6 @@ namespace S1Jarvis.Access.Verilic
 
             if (asksEmail && asksPreview)
             {
-                // A preview/draft turn does not need the send_email schema at all.
-                // This prevents premature sending and cuts a large schema from input.
                 allowed = EchoDraftTools;
                 prompt = BuildEchoDraftPrompt(contextLine, durableContext);
                 mode = isEchoRole ? "echo-draft" : "jarvis-echo-draft";
@@ -395,7 +385,11 @@ namespace S1Jarvis.Access.Verilic
             if (messages == null || messages.Count < 2)
                 return stats;
 
-            int latestHuman = FindLatestHumanMessageIndex(messages);
+            // Tool results are represented as synthetic role=user messages. They are
+            // NOT human turns and must never become the compaction boundary: doing so
+            // can remove the matching assistant tool_use and leave an orphan result.
+            // Anchor the active turn at the most recent real user-text message instead.
+            int latestHuman = FindLatestHumanTextMessageIndex(messages);
             if (latestHuman <= 0)
                 return stats;
 
@@ -411,7 +405,6 @@ namespace S1Jarvis.Access.Verilic
                     continue;
                 }
 
-                // Current user turn and everything after it is active provider state.
                 if (i >= latestHuman)
                 {
                     compacted.Add(message.DeepClone());
@@ -452,7 +445,6 @@ namespace S1Jarvis.Access.Verilic
                         continue;
                     }
 
-                    // Unknown structured blocks (images/documents/etc.) are retained.
                     kept.Add(block.DeepClone());
                 }
 
@@ -499,7 +491,6 @@ namespace S1Jarvis.Access.Verilic
                 if (candidate.Length < 5 || candidate.Length > 1000)
                     continue;
 
-                // Extract the likely path even if the result contains a short prefix.
                 int drive = FindDrivePathStart(candidate);
                 if (drive >= 0)
                     candidate = candidate.Substring(drive).Trim();
@@ -686,9 +677,26 @@ namespace S1Jarvis.Access.Verilic
             return -1;
         }
 
+        private static int FindLatestHumanTextMessageIndex(JArray messages)
+        {
+            if (messages == null) return -1;
+            for (int i = messages.Count - 1; i >= 0; i--)
+            {
+                JObject message = messages[i] as JObject;
+                if (message == null ||
+                    !string.Equals(message["role"]?.ToString(), "user", StringComparison.OrdinalIgnoreCase))
+                    continue;
+
+                string text = ReadMessageText(message);
+                if (!string.IsNullOrWhiteSpace(text))
+                    return i;
+            }
+            return -1;
+        }
+
         private static string FindLatestHumanText(JArray messages)
         {
-            int index = FindLatestHumanMessageIndex(messages);
+            int index = FindLatestHumanTextMessageIndex(messages);
             return index < 0 ? null : ReadMessageText(messages[index] as JObject);
         }
 
