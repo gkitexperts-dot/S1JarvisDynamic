@@ -43,7 +43,7 @@ namespace S1Jarvis.Access.Verilic
             "create_trader_from_aade", "export_query_to_file", "export_shown_table");
 
         private static readonly HashSet<string> EchoContactTools = Set(
-            "search_outlook_contacts", "show_contact_results");
+            "query_data", "search_outlook_contacts", "show_contact_results");
 
         private static readonly HashSet<string> EchoInboxTools = Set(
             "filter_email_inbox", "read_email", "download_email_attachment");
@@ -53,10 +53,10 @@ namespace S1Jarvis.Access.Verilic
             "create_outlook_event", "create_crm_task");
 
         private static readonly HashSet<string> EchoDraftTools = Set(
-            "search_outlook_contacts", "show_contact_results");
+            "query_data", "search_outlook_contacts", "show_contact_results");
 
         private static readonly HashSet<string> EchoSendTools = Set(
-            "send_email", "reply_email", "search_outlook_contacts");
+            "query_data", "send_email", "reply_email", "search_outlook_contacts");
 
         private static readonly HashSet<string> EchoExportTools = Set(
             "query_data", "export_query_to_file", "export_shown_table",
@@ -144,7 +144,7 @@ namespace S1Jarvis.Access.Verilic
                 messages = request["messages"] as JArray;
 
                 string userText = FindLatestHumanText(messages);
-                int latestHumanIndex = FindLatestHumanMessageIndex(messages);
+                int latestHumanIndex = FindLatestHumanTextMessageIndex(messages);
                 string previousAssistantText = FindPreviousAssistantText(messages, latestHumanIndex);
                 string role = (agentName ?? string.Empty).Trim().ToLowerInvariant();
                 string contextLine = ExtractContextLine(ReadSystemText(request["system"]));
@@ -287,18 +287,18 @@ namespace S1Jarvis.Access.Verilic
 
             string n = NormalizeGreek(userText);
             bool isEchoRole = string.Equals(role, "echo", StringComparison.Ordinal);
+            string pendingDomain = InferPendingDomain(previousAssistantText);
 
             if (IsShortConfirmation(userText))
             {
-                string pending = InferPendingDomain(previousAssistantText);
-                if (pending == "email-send")
+                if (pendingDomain == "email-send")
                 {
                     allowed = EchoSendTools;
                     prompt = BuildEchoSendPrompt(contextLine, durableContext);
                     mode = isEchoRole ? "echo-send-followup" : "jarvis-echo-send-followup";
                     return;
                 }
-                if (pending == "courier")
+                if (pendingDomain == "courier")
                 {
                     allowed = SprintTools;
                     prompt = BuildSprintPrompt(contextLine, durableContext);
@@ -307,8 +307,13 @@ namespace S1Jarvis.Access.Verilic
                 }
             }
 
-            if (ContainsAnyNormalized(n, "επαφη", "contact") &&
-                ContainsAnyNormalized(n, "βρες", "αναζητ", "email", "mail", "τηλεφων"))
+            bool explicitContact =
+                ContainsAnyNormalized(n, "επαφη", "contact") &&
+                ContainsAnyNormalized(n, "βρες", "αναζητ", "email", "mail", "τηλεφων");
+            bool contactFollowup = isEchoRole && pendingDomain == "contact" &&
+                !ContainsAnyNormalized(n, "στειλ", "στελν", "reply", "απαντησ", "inbox", "εισερχομεν", "calendar", "ημερολογ");
+
+            if (explicitContact || contactFollowup)
             {
                 allowed = EchoContactTools;
                 prompt = BuildEchoContactPrompt(contextLine, durableContext);
@@ -780,6 +785,9 @@ namespace S1Jarvis.Access.Verilic
         {
             string n = NormalizeGreek(assistantText);
             if (ContainsAnyNormalized(n,
+                "δεν βρηκα επαφη", "δεν βρεθηκε επαφη", "επαφη", "contact"))
+                return "contact";
+            if (ContainsAnyNormalized(n,
                 "να το στειλω", "να το στειλω;", "draft", "προσχεδ", "προς:",
                 "θεμα:", "email", "mail", "συνημμενο"))
                 return "email-send";
@@ -877,7 +885,7 @@ namespace S1Jarvis.Access.Verilic
         private static string BuildEchoContactPrompt(string contextLine, string durableContext)
         {
             StringBuilder sb = PromptBase("Echo", "contact lookup agent", contextLine, durableContext);
-            sb.AppendLine("Στόχος αυτού του turn είναι μόνο εύρεση επαφής. Χρησιμοποίησε search_outlook_contacts και show_contact_results όταν χρειάζεται UI αποτέλεσμα. Μην φορτώνεις inbox/calendar/send εργαλεία.");
+            sb.AppendLine("Στόχος αυτού του turn είναι μόνο εύρεση επαφής. Πρώτα αναζήτησε στο Soft1 με query_data στον PRSN και μετά συμπληρωματικά στο Outlook με search_outlook_contacts. Για PRSN χρησιμοποίησε μόνο γνωστά πεδία NAME, NAME2, EMAIL, EMAIL1 εκτός αν πρώτα επιβεβαιώσεις άλλο πεδίο από INFORMATION_SCHEMA. Αν ο χρήστης έδωσε ακριβές email, χρησιμοποίησέ το ΑΥΤΟΥΣΙΟ στο PRSN (EMAIL/EMAIL1) και στο Outlook: ΜΗΝ το μετατρέψεις σε επώνυμο, ΜΗΝ κάνεις transliteration και ΜΗΝ δοκιμάζεις εναλλακτικές γραφές. Για όνομα, χρησιμοποίησε το ίδιο κριτήριο που έδωσε ο χρήστης. Μετά κάλεσε show_contact_results με τα αποτελέσματα και των δύο πηγών. Αν δεν βρεθεί τίποτα, σταμάτα μετά από αυτά τα δύο lookups αντί να επαναλαμβάνεις παραλλαγές.");
             return sb.ToString().Trim();
         }
 
@@ -898,14 +906,14 @@ namespace S1Jarvis.Access.Verilic
         private static string BuildEchoDraftPrompt(string contextLine, string durableContext)
         {
             StringBuilder sb = PromptBase("Echo", "email drafting agent", contextLine, durableContext);
-            sb.AppendLine("Αυτό είναι draft/preview turn. ΜΗΝ στείλεις email. Αν λείπει διεύθυνση, βρες την επαφή. Παρουσίασε σύντομα Προς/Κοιν/Θέμα/Κείμενο και ζήτησε επιβεβαίωση.");
+            sb.AppendLine("Αυτό είναι draft/preview turn. ΜΗΝ στείλεις email. Αν λείπει διεύθυνση, αναζήτησε πρώτα query_data στον PRSN (NAME/NAME2, με EMAIL συμπληρωμένο) και μετά συμπληρωματικά search_outlook_contacts. Παρουσίασε σύντομα Προς/Κοιν/Θέμα/Κείμενο και ζήτησε επιβεβαίωση.");
             return sb.ToString().Trim();
         }
 
         private static string BuildEchoSendPrompt(string contextLine, string durableContext)
         {
             StringBuilder sb = PromptBase("Echo", "email sending agent", contextLine, durableContext);
-            sb.AppendLine("Αν υπάρχει ήδη επιβεβαιωμένο draft στο αμέσως προηγούμενο context, μην το ξαναγράψεις και μην ξανακάνεις lookup χωρίς λόγο: κάλεσε send_email/reply_email μία φορά με τα ήδη γνωστά στοιχεία.");
+            sb.AppendLine("Αν υπάρχει ήδη επιβεβαιωμένο draft στο αμέσως προηγούμενο context, μην το ξαναγράψεις και μην ξανακάνεις lookup χωρίς λόγο: κάλεσε send_email/reply_email μία φορά με τα ήδη γνωστά στοιχεία. Αν πρόκειται για νέο αίτημα αποστολής που δίνει μόνο όνομα παραλήπτη, χρησιμοποίησε query_data στον PRSN πριν από Outlook lookup και μη μαντέψεις email.");
             sb.AppendLine("Αν υπάρχει durable file path, χρησιμοποίησέ το αυτούσιο ως attachmentFilePath. Μην δημιουργήσεις ή εξάγεις ξανά το ίδιο αρχείο.");
             return sb.ToString().Trim();
         }
