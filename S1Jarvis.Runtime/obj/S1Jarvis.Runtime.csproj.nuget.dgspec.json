@@ -1,0 +1,65 @@
+{
+  "format": 1,
+  "restore": {
+    "C:\\Users\\GeorgeKirkmalis\\Documents\\GitHub\\S1JarvisDynamic\\S1Jarvis.Runtime\\S1Jarvis.Runtime.csproj": {}
+  },
+  "projects": {
+    "C:\\Users\\GeorgeKirkmalis\\Documents\\GitHub\\S1JarvisDynamic\\S1Jarvis.Runtime\\S1Jarvis.Runtime.csproj": {
+      "version": "1.0.0",
+      "restore": {
+        "projectUniqueName": "C:\\Users\\GeorgeKirkmalis\\Documents\\GitHub\\S1JarvisDynamic\\S1Jarvis.Runtime\\S1Jarvis.Runtime.csproj",
+        "projectName": "S1Jarvis.Runtime",
+        "projectPath": "C:\\Users\\GeorgeKirkmalis\\Documents\\GitHub\\S1JarvisDynamic\\S1Jarvis.Runtime\\S1Jarvis.Runtime.csproj",
+        "packagesPath": "C:\\Users\\GeorgeKirkmalis\\.nuget\\packages\\",
+        "outputPath": "C:\\Users\\GeorgeKirkmalis\\Documents\\GitHub\\S1JarvisDynamic\\S1Jarvis.Runtime\\obj\\",
+        "projectStyle": "PackageReference",
+        "skipContentFileWrite": true,
+        "fallbackFolders": [
+          "C:\\Program Files (x86)\\Microsoft Visual Studio\\Shared\\NuGetPackages"
+        ],
+        "configFilePaths": [
+          "C:\\Users\\GeorgeKirkmalis\\AppData\\Roaming\\NuGet\\NuGet.Config",
+          "C:\\Program Files (x86)\\NuGet\\Config\\Microsoft.VisualStudio.FallbackLocation.config",
+          "C:\\Program Files (x86)\\NuGet\\Config\\Microsoft.VisualStudio.Offline.config"
+        ],
+        "originalTargetFrameworks": [
+          "net48"
+        ],
+        "sources": {
+          "C:\\Program Files (x86)\\Microsoft SDKs\\NuGetPackages\\": {},
+          "https://api.nuget.org/v3/index.json": {}
+        },
+        "frameworks": {
+          "net48": {
+            "projectReferences": {}
+          }
+        }
+      },
+      "frameworks": {
+        "net48": {
+          "dependencies": {
+            "Microsoft.Identity.Client": {
+              "target": "Package",
+              "version": "[4.66.2, )"
+            },
+            "PDFsharp": {
+              "target": "Package",
+              "version": "[1.50.5147, )"
+            }
+          }
+        }
+      },
+      "runtimes": {
+        "win": {
+          "#import": []
+        },
+        "win-x64": {
+          "#import": []
+        },
+        "win-x86": {
+          "#import": []
+        }
+      }
+    }
+  }
+}
