@@ -193,9 +193,6 @@ namespace S1Jarvis.Access.Verilic
                 bool inheritedDirectExport = !explicitDirectExport &&
                     IsExportClarificationContinuation(previousHumanText, previousAssistantText);
 
-                // Protocol-level intent: explicit file exports are identical for every
-                // agent/provider. A clarification answer must inherit the original export
-                // intent instead of falling back to the broad role prompt.
                 if (explicitDirectExport || inheritedDirectExport)
                 {
                     allowed = DirectExportTools;
@@ -734,11 +731,11 @@ namespace S1Jarvis.Access.Verilic
                 string name = tool["name"]?.ToString();
                 if (string.Equals(name, "query_data", StringComparison.OrdinalIgnoreCase))
                 {
-                    tool["description"] = "Για direct-export flow: χρησιμοποίησέ το ΜΟΝΟ για μικρό/narrow lookup ταυτότητας, COUNT ή απολύτως αναγκαίο schema check. ΠΟΤΕ μην τραβήξεις τις γραμμές του export ως preview (ούτε TOP 100/200) και ΠΟΤΕ μεγάλο dataset. Τα πραγματικά export rows πρέπει να πάνε απευθείας SQL -> export_query_to_file, όχι μέσω LLM context.";
+                    tool["description"] = "Για direct-export flow: χρησιμοποίησέ το ΜΟΝΟ για μικρό/narrow lookup ταυτότητας, COUNT ή απολύτως αναγκαίο schema check. Αν lookup ταυτότητας επιστρέψει 2 ή περισσότερα λογικά matches και ο χειριστής δεν έχει ήδη δώσει μοναδικό CODE/id/κριτήριο, ΣΤΑΜΑΤΑ: ζήτησε clarification με τις επιλογές και ΜΗΝ καλέσεις export tool στο ίδιο turn. ΠΟΤΕ μην ενώσεις σιωπηλά πολλαπλές καρτέλες/οντότητες. ΠΟΤΕ μην τραβήξεις τις γραμμές του export ως preview (ούτε TOP 100/200) και ΠΟΤΕ μεγάλο dataset. Τα πραγματικά export rows πρέπει να πάνε απευθείας SQL -> export_query_to_file, όχι μέσω LLM context.";
                 }
                 else if (string.Equals(name, "export_query_to_file", StringComparison.OrdinalIgnoreCase))
                 {
-                    tool["description"] = "Ο χειριστής έχει ήδη ζητήσει ρητά αρχείο. Εκτέλεσε το τελικό SELECT ΑΠΕΥΘΕΙΑΣ στη βάση και γράψε Excel/CSV χωρίς preview και χωρίς να περάσουν οι γραμμές από το LLM context. Κάλεσέ το μία φορά μόλις λυθούν τα απαραίτητα φίλτρα/οντότητες. Επιστρέφει path, rowsWritten και totalFound.";
+                    tool["description"] = "Ο χειριστής έχει ήδη ζητήσει ρητά αρχείο. Εκτέλεσε το τελικό SELECT ΑΠΕΥΘΕΙΑΣ στη βάση και γράψε Excel/CSV χωρίς preview και χωρίς να περάσουν οι γραμμές από το LLM context. Κάλεσέ το μία φορά ΜΟΝΟ αφού έχουν λυθεί μονοσήμαντα τα απαραίτητα φίλτρα/οντότητες. Αν υπάρχουν 2+ λογικά matches για πελάτη/προμηθευτή/άλλη οντότητα, απαγορεύεται export πριν από clarification. Επιστρέφει path, rowsWritten και totalFound.";
                 }
                 else if (string.Equals(name, "export_shown_table", StringComparison.OrdinalIgnoreCase))
                 {
@@ -914,8 +911,6 @@ namespace S1Jarvis.Access.Verilic
             string n = NormalizeGreek(text);
             if (string.IsNullOrWhiteSpace(n)) return false;
 
-            // Combined export+email belongs to the richer email flow; this lane is for
-            // the deterministic act of creating/opening a local file only.
             if (ContainsAnyNormalized(n, "στειλ", "στελν", "email", "mail", "συνημ"))
                 return false;
 
@@ -1043,6 +1038,7 @@ namespace S1Jarvis.Access.Verilic
                 sb.AppendLine("Προηγούμενο export αίτημα: " + inheritedRequest.Trim());
             }
             sb.AppendLine("Ο χειριστής έχει ήδη ζητήσει ΡΗΤΑ αρχείο. Αυτό είναι direct-export flow: ΜΗΝ εμφανίσεις preview 100/200 γραμμών και ΜΗΝ κάνεις query_data που επιστρέφει το dataset του export. Οι γραμμές πρέπει να ταξιδέψουν SQL -> export tool -> αρχείο, ποτέ SQL -> LLM -> export.");
+            sb.AppendLine("ΠΡΙΝ από export, λύσε μονοσήμαντα κάθε οντότητα που επηρεάζει το φίλτρο. Αν ένα narrow identity lookup επιστρέψει 2 ή περισσότερα λογικά matches (π.χ. ίδιο όνομα/ΑΦΜ σε πελάτη και προμηθευτή) και ο χειριστής δεν έχει ήδη δώσει μοναδικό CODE/id/κριτήριο, ΣΤΑΜΑΤΑ και ρώτα με ❓/> επιλογές. ΜΗΝ ενώσεις πολλαπλές καρτέλες, ΜΗΝ διαλέξεις μόνος σου και ΜΗΝ καλέσεις export_query_to_file στο ίδιο turn. Μετά την επιλογή του χειριστή, συνέχισε το ίδιο export intent στο επόμενο turn.");
             sb.AppendLine("query_data επιτρέπεται μόνο για μικρό lookup/validation που χρειάζεται για να χτιστεί το τελικό SELECT (π.χ. TOP 5 για TRDR, COUNT, ή ένα στοχευμένο INFORMATION_SCHEMA). Μόλις λυθούν τα φίλτρα, κάλεσε export_query_to_file ΜΙΑ φορά με το τελικό SELECT. Αν ο χρήστης αναφέρεται σε πίνακα που ήδη φαίνεται, χρησιμοποίησε export_shown_table αντί να ξανατρέξεις query.");
             sb.AppendLine("Μην κάνεις SELECT GETDATE()/YEAR(GETDATE()) για σχετικές ημερομηνίες: χρησιμοποίησε τη σημερινή ημερομηνία του system context. Για «προηγούμενο έτος» σήμερα σημαίνει " + (DateTime.Now.Year - 1) + ".");
             sb.AppendLine("Γνωστό schema: TRDR(TRDR,CODE,NAME,AFM,SODTYPE,COMPANY), FINDOC(FINDOC,TRDR,TRNDATE,FINCODE,SUMAMNT,SERIES,SOSOURCE,COMPANY), SERIES join ΜΟΝΟ με COMPANY+SERIES+SOSOURCE. ΜΗΝ μαντέψεις CUSTOMER, FINDOCID, FULLFINCODE, TRDTYPE ή SERIES.SODTYPE. Αν χρειάζεται άγνωστο πεδίο, κάνε ΕΝΑ στοχευμένο INFORMATION_SCHEMA lookup, όχι διαδοχικές εικασίες.");
