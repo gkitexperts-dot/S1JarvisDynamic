@@ -8,26 +8,11 @@ using Softone;
 
 namespace S1Jarvis.Core
 {
-    // ══════════════════════════════════════════════════════════════════════
-    // DashboardPanels
-    //
-    // Commercial dashboard: deterministic SQL from cccParams 500040-500059.
-    // AI usage dashboard: two deterministic internal modes, TODAY and 30D.
-    // No AI/provider call is involved in either path.
-    //
-    // SECURITY: usage visibility is enforced in the SQL/data layer:
-    //   Soft1 User 1 / 262 -> all users of the current Soft1 serial
-    //   every other user   -> only rows for their own CCCUSERID
-    // The frontend never receives hidden all-user rows for a normal user.
-    // ══════════════════════════════════════════════════════════════════════
     public static class DashboardPanels
     {
         public const int FirstParamCode = 500040;
-        public const int LastParamCode = 500059; // 20 slots
+        public const int LastParamCode = 500059;
 
-        // Internal dashboard_query date sent only by the embedded usage UI.
-        // They deliberately do not look like dates, so they cannot collide
-        // with the Commercial date picker contract.
         public const string AiUsageTodayMode = "__AI_USAGE_TODAY__";
         public const string AiUsage30DaysMode = "__AI_USAGE_30D__";
         public const string AiUsagePayloadPrefix = "@@JARVIS_AI_USAGE@@";
@@ -133,9 +118,9 @@ namespace S1Jarvis.Core
         {
             UsageIdentity identity = GetUsageIdentity(xSupport);
 
-            // Every Soft1 positional placeholder occurs exactly once. This is
-            // intentional: ExecuteSQL/GetSQLDataSet can bind :N per occurrence
-            // in a batch (same class of issue fixed in AI-USAGE-AGG).
+            // Keep result metadata inside the classic SQL INT types understood by
+            // Soft1 XTable.CreateDataTable(). COUNT_BIG/SUM(bigint) is returned by
+            // the Soft1 provider as field type 0 and throws "Unknown type '0'".
             const string sql = @"
 SET NOCOUNT ON;
 DECLARE @Serial varchar(30) = :1;
@@ -149,12 +134,12 @@ SELECT
     ISNULL(L.CCCAGENT, '') AS Agent,
     ISNULL(L.CCCPROVIDER, '') AS Provider,
     ISNULL(L.CCCMODEL, '') AS Model,
-    COUNT_BIG(*) AS Calls,
-    SUM(CONVERT(bigint, ISNULL(L.CCCINTOK, 0))) AS InTokens,
-    SUM(CONVERT(bigint, ISNULL(L.CCCOUTTOK, 0))) AS OutTokens,
-    SUM(CONVERT(bigint, ISNULL(L.CCCTOTOK, 0))) AS TotalTokens,
-    SUM(CONVERT(bigint, CASE WHEN L.CCCSUCCESS = 1 THEN 1 ELSE 0 END)) AS OkCalls,
-    SUM(CONVERT(bigint, CASE WHEN L.CCCSUCCESS = 1 THEN 0 ELSE 1 END)) AS ErrorCalls
+    COUNT(*) AS Calls,
+    SUM(ISNULL(L.CCCINTOK, 0)) AS InTokens,
+    SUM(ISNULL(L.CCCOUTTOK, 0)) AS OutTokens,
+    SUM(ISNULL(L.CCCTOTOK, 0)) AS TotalTokens,
+    SUM(CASE WHEN L.CCCSUCCESS = 1 THEN 1 ELSE 0 END) AS OkCalls,
+    SUM(CASE WHEN L.CCCSUCCESS = 1 THEN 0 ELSE 1 END) AS ErrorCalls
 FROM CCCJAILOG L
 LEFT JOIN USERS U ON U.USERS = L.CCCUSERID
 WHERE L.CCCSERIAL = @Serial
@@ -233,15 +218,14 @@ DECLARE @FromDate date = DATEADD(day, -29, @Today);
 
 ;WITH UsageRows AS
 (
-    -- Closed previous days: authoritative cumulative table.
     SELECT
         D.CCCDATE AS UsageDate,
-        SUM(CONVERT(bigint, ISNULL(D.CCCCALLS, 0))) AS Calls,
-        SUM(CONVERT(bigint, ISNULL(D.CCCINTOK, 0))) AS InTokens,
-        SUM(CONVERT(bigint, ISNULL(D.CCCOUTTOK, 0))) AS OutTokens,
-        SUM(CONVERT(bigint, ISNULL(D.CCCTOTOK, 0))) AS TotalTokens,
-        SUM(CONVERT(bigint, ISNULL(D.CCCOKCALLS, 0))) AS OkCalls,
-        SUM(CONVERT(bigint, ISNULL(D.CCCERRCALLS, 0))) AS ErrorCalls
+        SUM(ISNULL(D.CCCCALLS, 0)) AS Calls,
+        SUM(ISNULL(D.CCCINTOK, 0)) AS InTokens,
+        SUM(ISNULL(D.CCCOUTTOK, 0)) AS OutTokens,
+        SUM(ISNULL(D.CCCTOTOK, 0)) AS TotalTokens,
+        SUM(ISNULL(D.CCCOKCALLS, 0)) AS OkCalls,
+        SUM(ISNULL(D.CCCERRCALLS, 0)) AS ErrorCalls
     FROM CCCJAIDAY D
     WHERE D.CCCSERIAL = @Serial
       AND D.CCCDATE >= @FromDate
@@ -251,17 +235,14 @@ DECLARE @FromDate date = DATEADD(day, -29, @Today);
 
     UNION ALL
 
-    -- Today's raw events plus any old rows still pending aggregation. This
-    -- makes the dashboard resilient even if a previous boot aggregation was
-    -- temporarily unavailable; processed historical rows are not duplicated.
     SELECT
         CONVERT(date, L.CCCDATETIME) AS UsageDate,
-        COUNT_BIG(*) AS Calls,
-        SUM(CONVERT(bigint, ISNULL(L.CCCINTOK, 0))) AS InTokens,
-        SUM(CONVERT(bigint, ISNULL(L.CCCOUTTOK, 0))) AS OutTokens,
-        SUM(CONVERT(bigint, ISNULL(L.CCCTOTOK, 0))) AS TotalTokens,
-        SUM(CONVERT(bigint, CASE WHEN L.CCCSUCCESS = 1 THEN 1 ELSE 0 END)) AS OkCalls,
-        SUM(CONVERT(bigint, CASE WHEN L.CCCSUCCESS = 1 THEN 0 ELSE 1 END)) AS ErrorCalls
+        COUNT(*) AS Calls,
+        SUM(ISNULL(L.CCCINTOK, 0)) AS InTokens,
+        SUM(ISNULL(L.CCCOUTTOK, 0)) AS OutTokens,
+        SUM(ISNULL(L.CCCTOTOK, 0)) AS TotalTokens,
+        SUM(CASE WHEN L.CCCSUCCESS = 1 THEN 1 ELSE 0 END) AS OkCalls,
+        SUM(CASE WHEN L.CCCSUCCESS = 1 THEN 0 ELSE 1 END) AS ErrorCalls
     FROM CCCJAILOG L
     WHERE L.CCCSERIAL = @Serial
       AND L.CCCDATETIME >= @FromDate
