@@ -15,7 +15,7 @@ namespace S1Jarvis.Access.Verilic
     /// - Never changes provider/model/agent routing authority.
     /// - Current-turn tool_use/tool_result state is preserved exactly.
     /// - Completed OLD tool traces are removed, but durable facts such as exported
-    ///   file paths are retained in compact system context.
+    ///   file paths and successful tool executions are retained in compact system context.
     /// - Tool schemas are selected per intent, not merely per broad agent domain.
     /// - Ambiguous business requests fail open to the mature/full request.
     /// - Obvious greetings use a no-tools fast path.
@@ -148,7 +148,7 @@ namespace S1Jarvis.Access.Verilic
                 string previousAssistantText = FindPreviousAssistantText(messages, latestHumanIndex);
                 string role = (agentName ?? string.Empty).Trim().ToLowerInvariant();
                 string contextLine = ExtractContextLine(ReadSystemText(request["system"]));
-                string durableContext = BuildDurableContext(history.DurableFilePaths);
+                string durableContext = BuildDurableContext(history.DurableFilePaths, history.SuccessfulTools);
 
                 if (IsClearlyConversational(userText) && !HasStructuredCurrentUserContent(messages))
                 {
@@ -400,6 +400,8 @@ namespace S1Jarvis.Access.Verilic
 
             var compacted = new JArray();
             var durablePaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            var successfulTools = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            var toolNamesById = new Dictionary<string, string>(StringComparer.Ordinal);
 
             for (int i = 0; i < messages.Count; i++)
             {
@@ -434,10 +436,27 @@ namespace S1Jarvis.Access.Verilic
                         continue;
                     }
 
+                    if (string.Equals(type, "tool_use", StringComparison.OrdinalIgnoreCase))
+                    {
+                        string id = block?["id"]?.ToString();
+                        string name = block?["name"]?.ToString();
+                        if (!string.IsNullOrWhiteSpace(id) && !string.IsNullOrWhiteSpace(name))
+                            toolNamesById[id] = name;
+                    }
+
                     if (string.Equals(type, "tool_result", StringComparison.OrdinalIgnoreCase))
                     {
                         string raw = block?["content"]?.ToString();
                         CollectDurableFilePaths(raw, durablePaths);
+
+                        string toolUseId = block?["tool_use_id"]?.ToString();
+                        string toolName;
+                        if (!string.IsNullOrWhiteSpace(toolUseId) &&
+                            toolNamesById.TryGetValue(toolUseId, out toolName) &&
+                            IsSuccessfulToolResult(block))
+                        {
+                            successfulTools.Add(toolName);
+                        }
                     }
 
                     if (string.Equals(type, "tool_use", StringComparison.OrdinalIgnoreCase) ||
@@ -462,6 +481,7 @@ namespace S1Jarvis.Access.Verilic
             }
 
             stats.DurableFilePaths.AddRange(durablePaths.Take(4));
+            stats.SuccessfulTools.AddRange(successfulTools.Take(12));
             if (stats.RemovedBlocks > 0)
             {
                 request["messages"] = compacted;
@@ -469,6 +489,38 @@ namespace S1Jarvis.Access.Verilic
             }
 
             return stats;
+        }
+
+        private static bool IsSuccessfulToolResult(JToken block)
+        {
+            if (block == null || (bool?)block["is_error"] == true)
+                return false;
+
+            string raw = block["content"]?.ToString();
+            if (string.IsNullOrWhiteSpace(raw))
+                return true;
+
+            try
+            {
+                JToken token = JToken.Parse(raw);
+                JObject obj = token as JObject;
+                if (obj == null) return true;
+
+                JToken success = obj["success"];
+                if (success != null && success.Type == JTokenType.Boolean)
+                    return (bool)success;
+
+                JToken error = obj["error"];
+                if (error != null && error.Type == JTokenType.String &&
+                    !string.IsNullOrWhiteSpace(error.ToString()))
+                    return false;
+            }
+            catch
+            {
+                // Non-JSON successful tool payloads are valid in the mature engine.
+            }
+
+            return true;
         }
 
         private static void CollectDurableFilePaths(string raw, HashSet<string> output)
@@ -533,14 +585,29 @@ namespace S1Jarvis.Access.Verilic
             return FindDrivePathStart(value) >= 0 || value.StartsWith("\\\\", StringComparison.Ordinal);
         }
 
-        private static string BuildDurableContext(List<string> paths)
+        private static string BuildDurableContext(List<string> paths, List<string> successfulTools)
         {
-            if (paths == null || paths.Count == 0) return string.Empty;
+            bool hasPaths = paths != null && paths.Count > 0;
+            bool hasSuccessfulTools = successfulTools != null && successfulTools.Count > 0;
+            if (!hasPaths && !hasSuccessfulTools) return string.Empty;
+
             var sb = new StringBuilder();
             sb.AppendLine("Durable context από ολοκληρωμένα tools:");
-            foreach (string path in paths)
-                sb.AppendLine("- Διαθέσιμο αρχείο: " + path);
-            sb.AppendLine("Αν ο χρήστης αναφέρεται σε «το αρχείο που μόλις έφτιαξες», χρησιμοποίησε ακριβώς αυτό το path. Μην ξανακάνεις export αν το path υπάρχει ήδη.");
+
+            if (hasSuccessfulTools)
+            {
+                foreach (string tool in successfulTools)
+                    sb.AppendLine("- Επιβεβαιωμένη επιτυχής εκτέλεση tool: " + tool + ".");
+                sb.AppendLine("Οι παραπάνω εκτελέσεις είναι πραγματικά επιβεβαιωμένες από tool_result. Μην ισχυριστείς ότι δεν εκτελέστηκαν μόνο επειδή τα παλιά raw tool traces συμπτύχθηκαν από το context.");
+            }
+
+            if (hasPaths)
+            {
+                foreach (string path in paths)
+                    sb.AppendLine("- Διαθέσιμο αρχείο: " + path);
+                sb.AppendLine("Αν ο χρήστης αναφέρεται σε «το αρχείο που μόλις έφτιαξες», χρησιμοποίησε ακριβώς αυτό το path. Μην ξανακάνεις export αν το path υπάρχει ήδη.");
+            }
+
             return sb.ToString().Trim();
         }
 
@@ -616,7 +683,8 @@ namespace S1Jarvis.Access.Verilic
                     " messages=" + originalMessageCount + "->" + (newMessages == null ? 0 : newMessages.Count) +
                     " oldTraceBlocksRemoved=" + history.RemovedBlocks +
                     " oldTraceCharsRemoved=" + history.RemovedChars +
-                    " durablePaths=" + history.DurableFilePaths.Count);
+                    " durablePaths=" + history.DurableFilePaths.Count +
+                    " durableToolSuccess=" + history.SuccessfulTools.Count);
             }
             catch { }
             return optimized;
@@ -857,6 +925,7 @@ namespace S1Jarvis.Access.Verilic
         {
             var sb = new StringBuilder();
             sb.AppendLine("Είσαι ο " + agent + ", " + role + " του Jarvis μέσα στο Soft1. Απαντάς στα ελληνικά, σύντομα και συγκεκριμένα.");
+            sb.AppendLine("Σημερινή τοπική ημερομηνία: " + DateTime.Now.ToString("yyyy-MM-dd") + ". Για λέξεις όπως σήμερα/χθες/αύριο/τελευταία εβδομάδα/τελευταίος μήνας, υπολόγισε το εύρος από αυτή την ημερομηνία και μην ζητάς από τον χειριστή να σου πει ποια είναι η σημερινή ημερομηνία.");
             sb.AppendLine("Χρησιμοποίησε μόνο τα tools που δίνονται. Μην ισχυρίζεσαι ότι εκτέλεσες ενέργεια χωρίς επιτυχημένο tool result. Μόλις έχεις αρκετά δεδομένα, σταμάτα τα περιττά tool calls και απάντησε.");
             if (!string.IsNullOrWhiteSpace(contextLine)) sb.AppendLine(contextLine);
             if (!string.IsNullOrWhiteSpace(durableContext)) sb.AppendLine(durableContext);
@@ -868,8 +937,10 @@ namespace S1Jarvis.Access.Verilic
             string name = string.IsNullOrWhiteSpace(agentName) ? "Jarvis" : agentName.Trim();
             var sb = new StringBuilder();
             sb.AppendLine("Είσαι ο " + name + " του Jarvis μέσα στο Soft1. Απάντησε φυσικά στα ελληνικά, σύντομα και φιλικά.");
+            sb.AppendLine("Σημερινή τοπική ημερομηνία: " + DateTime.Now.ToString("yyyy-MM-dd") + ".");
             sb.AppendLine("Αυτό το turn είναι απλή συνομιλία: δεν έχεις tools και δεν πρέπει να ισχυριστείς ότι διάβασες ή άλλαξες δεδομένα Soft1.");
             if (!string.IsNullOrWhiteSpace(contextLine)) sb.AppendLine(contextLine);
+            if (!string.IsNullOrWhiteSpace(durableContext)) sb.AppendLine(durableContext);
             return sb.ToString().Trim();
         }
 
@@ -893,6 +964,7 @@ namespace S1Jarvis.Access.Verilic
         {
             StringBuilder sb = PromptBase("Echo", "inbox agent", contextLine, durableContext);
             sb.AppendLine("Για αναζήτηση λίστας emails προτίμησε filter_email_inbox ώστε το αποτέλεσμα να εμφανιστεί στην Email κουρτίνα. read_email μόνο όταν ζητείται το πλήρες περιεχόμενο συγκεκριμένου μηνύματος. Μην επαναλάβεις το ίδιο φίλτρο αν επέστρεψε επιτυχώς.");
+            sb.AppendLine("Για σχετικές περιόδους (π.χ. τελευταία εβδομάδα/τελευταίος μήνας) υπολόγισε το sinceDate από τη σημερινή τοπική ημερομηνία που δίνεται στο system context. Μην ζητάς διευκρίνιση για το ποια ημερομηνία είναι σήμερα.");
             return sb.ToString().Trim();
         }
 
@@ -1017,6 +1089,7 @@ namespace S1Jarvis.Access.Verilic
             internal int RemovedBlocks;
             internal int RemovedChars;
             internal readonly List<string> DurableFilePaths = new List<string>();
+            internal readonly List<string> SuccessfulTools = new List<string>();
         }
     }
 }
