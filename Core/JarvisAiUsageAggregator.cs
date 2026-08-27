@@ -15,8 +15,21 @@ namespace S1Jarvis.Core
         // buckets, then mark exactly the eligible raw rows as processed.
         // If any statement fails, the transaction rolls back and the raw rows
         // remain CCCPROCESS=0 for the next Jarvis boot.
+        //
+        // IMPORTANT: Soft1 ExecuteSQL binds :1/:2/... positionally PER
+        // OCCURRENCE inside the SQL batch. Reusing :1/:2/:3 several times in
+        // one multi-statement batch made the host parameter binder read beyond
+        // the supplied argument array and raised:
+        // "Variant or safe array index out of bounds".
+        // Bind every Soft1 parameter exactly once, copy it to SQL variables,
+        // and use those variables throughout the transaction.
         private const string AggregateSql = @"
 SET XACT_ABORT ON;
+
+DECLARE @Serial varchar(30) = :1;
+DECLARE @UserId int = :2;
+DECLARE @Before datetime = :3;
+
 BEGIN TRANSACTION;
 
 ;WITH U AS
@@ -37,10 +50,10 @@ BEGIN TRANSACTION;
         SUM(CASE WHEN CCCSUCCESS = 1 THEN 1 ELSE 0 END) AS CCCOKCALLS,
         SUM(CASE WHEN CCCSUCCESS = 1 THEN 0 ELSE 1 END) AS CCCERRCALLS
     FROM CCCJAILOG
-    WHERE CCCSERIAL = :1
-      AND CCCUSERID = :2
+    WHERE CCCSERIAL = @Serial
+      AND CCCUSERID = @UserId
       AND CCCPROCESS = 0
-      AND CCCDATETIME < :3
+      AND CCCDATETIME < @Before
     GROUP BY
         CCCSERIAL, CONVERT(date, CCCDATETIME), CCCCOMPANY, CCCBRANCH,
         CCCUSERID, CCCAGENT, CCCPROVIDER, CCCMODEL
@@ -81,10 +94,10 @@ INNER JOIN U
         SUM(CASE WHEN CCCSUCCESS = 1 THEN 1 ELSE 0 END) AS CCCOKCALLS,
         SUM(CASE WHEN CCCSUCCESS = 1 THEN 0 ELSE 1 END) AS CCCERRCALLS
     FROM CCCJAILOG
-    WHERE CCCSERIAL = :1
-      AND CCCUSERID = :2
+    WHERE CCCSERIAL = @Serial
+      AND CCCUSERID = @UserId
       AND CCCPROCESS = 0
-      AND CCCDATETIME < :3
+      AND CCCDATETIME < @Before
     GROUP BY
         CCCSERIAL, CONVERT(date, CCCDATETIME), CCCCOMPANY, CCCBRANCH,
         CCCUSERID, CCCAGENT, CCCPROVIDER, CCCMODEL
@@ -116,10 +129,10 @@ WHERE NOT EXISTS
 
 UPDATE CCCJAILOG
 SET CCCPROCESS = 1
-WHERE CCCSERIAL = :1
-  AND CCCUSERID = :2
+WHERE CCCSERIAL = @Serial
+  AND CCCUSERID = @UserId
   AND CCCPROCESS = 0
-  AND CCCDATETIME < :3;
+  AND CCCDATETIME < @Before;
 
 COMMIT TRANSACTION;";
 
@@ -167,7 +180,10 @@ COMMIT TRANSACTION;";
             {
                 try
                 {
-                    DebugLog.Log("[AI-USAGE-AGG] failed; Jarvis startup continues. error=" + ex.Message);
+                    DebugLog.Log(
+                        "[AI-USAGE-AGG] failed; Jarvis startup continues. exception=" +
+                        ex.GetType().FullName + " hresult=0x" + ex.HResult.ToString("X8") +
+                        " error=" + ex.Message);
                 }
                 catch { }
                 return false;
