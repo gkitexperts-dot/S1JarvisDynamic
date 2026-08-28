@@ -14,7 +14,11 @@ namespace S1Jarvis.Core
     {
         internal static JarvisPlan BuildCandidatePlan(string userPrompt)
         {
-            var plan = new JarvisPlan(Guid.NewGuid().ToString("N"), userPrompt ?? string.Empty);
+            var plan = new JarvisPlan
+            {
+                OriginalPrompt = userPrompt ?? string.Empty
+            };
+
             if (string.IsNullOrWhiteSpace(userPrompt))
                 return plan;
 
@@ -24,7 +28,13 @@ namespace S1Jarvis.Core
                 .ToList();
 
             foreach (JarvisTaskDescriptor descriptor in matches)
-                plan.AddTask(JarvisPlannedTask.FromDescriptor(descriptor));
+            {
+                JarvisPlannedTask task = JarvisPlanFactory.CreateTask(
+                    descriptor.TaskType,
+                    normalized);
+                if (task != null)
+                    plan.Tasks.Add(task);
+            }
 
             BindDependencies(plan);
             return plan;
@@ -57,8 +67,11 @@ namespace S1Jarvis.Core
                         !string.Equals(x.TaskId, consumer.TaskId, StringComparison.OrdinalIgnoreCase) &&
                         string.Equals(x.Capability, capability, StringComparison.OrdinalIgnoreCase));
 
-                    if (producer != null)
-                        consumer.AddDependency(producer.TaskId);
+                    if (producer != null &&
+                        !consumer.DependsOnTaskIds.Contains(producer.TaskId, StringComparer.OrdinalIgnoreCase))
+                    {
+                        consumer.DependsOnTaskIds.Add(producer.TaskId);
+                    }
                 }
             }
         }
