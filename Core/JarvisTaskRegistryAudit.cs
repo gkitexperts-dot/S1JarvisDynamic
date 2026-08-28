@@ -21,7 +21,7 @@ namespace S1Jarvis.Core
                 ValidateCapabilityRoute(task, issues);
                 ValidateToolOwnership(task, issues);
                 ValidateToolCapabilities(task, issues);
-                ValidateConfirmationBoundary(task, issues);
+                ValidateAtomicBoundary(task, issues);
                 ValidateDependencies(task, issues);
             }
 
@@ -33,10 +33,14 @@ namespace S1Jarvis.Core
 
         private static void ValidateCapabilityRoute(JarvisTaskDescriptor task, List<string> issues)
         {
-            string routedOwner = JarvisToolRegistry.ResolveOwnerForCapability(task.Capability);
+            string routedOwner = JarvisCapabilityResolver.ResolveOwner(task.Capability);
             if (string.IsNullOrWhiteSpace(routedOwner))
             {
-                issues.Add("Task capability has no canonical route: " + task.TaskType + " -> " + task.Capability);
+                string reason = JarvisCapabilityResolver.IsAmbiguous(task.Capability)
+                    ? "ambiguous owner"
+                    : "no owner";
+                issues.Add("Task capability cannot resolve a canonical owner: " + task.TaskType +
+                    " -> " + task.Capability + " (" + reason + ")");
                 return;
             }
 
@@ -87,7 +91,7 @@ namespace S1Jarvis.Core
             }
         }
 
-        private static void ValidateConfirmationBoundary(JarvisTaskDescriptor task, List<string> issues)
+        private static void ValidateAtomicBoundary(JarvisTaskDescriptor task, List<string> issues)
         {
             JarvisToolDescriptor[] tools = task.Tools
                 .Select(JarvisToolRegistry.Find)
@@ -95,16 +99,25 @@ namespace S1Jarvis.Core
                 .ToArray();
 
             bool hasConfirmingTool = tools.Any(x => x.RequiresConfirmation);
-            bool hasNonConfirmingTool = tools.Any(x => !x.RequiresConfirmation);
-
-            if (hasConfirmingTool && hasNonConfirmingTool)
-            {
-                issues.Add("Task mixes confirming and non-confirming tools; split atomic boundary: " + task.TaskType);
-            }
 
             if (hasConfirmingTool && !task.RequiresConfirmation)
             {
                 issues.Add("Task exposes a confirming tool without task confirmation: " + task.TaskType);
+            }
+
+            if (task.Operation == JarvisTaskOperation.Read && hasConfirmingTool)
+            {
+                issues.Add("Read task contains a state-changing tool: " + task.TaskType);
+            }
+
+            // A write task may legitimately use non-confirming helper reads before
+            // its single state-changing action (e.g. template/lookup + create).
+            // What is not safe for semantic planning is one task whose user intent
+            // can independently mean either read or write; that makes confirmation
+            // semantics depend on which branch the model happened to choose.
+            if (task.Operation == JarvisTaskOperation.Mixed)
+            {
+                issues.Add("Mixed-operation task must be split into atomic read/write tasks: " + task.TaskType);
             }
         }
 
@@ -117,11 +130,11 @@ namespace S1Jarvis.Core
 
                 bool taskProducerExists = JarvisTaskRegistry.AllTasks.Any(x =>
                     string.Equals(x.Capability, capability, StringComparison.OrdinalIgnoreCase));
-                bool routeExists = !string.IsNullOrWhiteSpace(
-                    JarvisToolRegistry.ResolveOwnerForCapability(capability));
+                bool ownerResolves = !string.IsNullOrWhiteSpace(
+                    JarvisCapabilityResolver.ResolveOwner(capability));
                 bool toolCapabilityExists = JarvisToolRegistry.ForCapability(capability).Any();
 
-                if (!taskProducerExists && !routeExists && !toolCapabilityExists)
+                if (!taskProducerExists && !ownerResolves && !toolCapabilityExists)
                 {
                     issues.Add("Task dependency capability is unknown to both registries: " +
                         task.TaskType + " -> " + capability);
