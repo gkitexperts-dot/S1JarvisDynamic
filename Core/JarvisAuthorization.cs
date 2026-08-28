@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Data;
 using Softone;
 
 namespace S1Jarvis.Core
@@ -14,7 +15,13 @@ namespace S1Jarvis.Core
                 return false;
 
             int userId = xSupport.ConnectionInfo.UserId;
-            return GetAdminUserIds(xSupport).Contains(userId);
+            HashSet<int> admins = GetAdminUserIds(xSupport);
+            bool isAdmin = admins.Contains(userId);
+            DebugLog.Log("[JARVIS-AUTH] resolved userId=" + userId +
+                " admin=" + (isAdmin ? "true" : "false") +
+                " adminCount=" + admins.Count +
+                " ParamCode=" + AdminsParamCode);
+            return isAdmin;
         }
 
         public static HashSet<int> GetAdminUserIds(XSupport xSupport)
@@ -34,10 +41,19 @@ namespace S1Jarvis.Core
                     return result;
                 }
 
-                object rawValue = t.Current["ParamValueString"];
+                DataTable dt = t.CreateDataTable(true);
+                if (dt == null || dt.Rows.Count == 0 || !dt.Columns.Contains("ParamValueString"))
+                {
+                    DebugLog.Log("[JARVIS-AUTH] admins parameter returned no readable ParamValueString; ParamCode=" + AdminsParamCode);
+                    return result;
+                }
+
+                object rawValue = dt.Rows[0]["ParamValueString"];
                 string raw = rawValue == null || rawValue == DBNull.Value
                     ? string.Empty
                     : Convert.ToString(rawValue);
+
+                DebugLog.Log("[JARVIS-AUTH] admins raw='" + (raw ?? string.Empty) + "' ParamCode=" + AdminsParamCode);
 
                 foreach (string part in (raw ?? string.Empty).Split(','))
                 {
