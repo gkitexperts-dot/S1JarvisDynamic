@@ -116,7 +116,7 @@ namespace S1Jarvis.Core
             if (!string.IsNullOrWhiteSpace(company.CompanyName))
                 sb.Append(", CompanyName=").Append(company.CompanyName);
             sb.AppendLine(".");
-            sb.AppendLine("Αν οποιαδήποτε παλιότερη γενική οδηγία υποθέτει ότι η εταιρία είναι Jetoil, θεώρησέ την legacy υπόθεση. Χρησιμοποίησε την ενεργή εταιρία παραπάνω ως πραγματικό context.");
+            sb.AppendLine("Αν οποιαδήποτε παλιότερη γενική οδηγία περιέχει στατική εταιρική ταυτότητα, θεώρησέ την legacy υπόθεση. Χρησιμοποίησε την ενεργή εταιρία παραπάνω ως πραγματικό context.");
 
             if (!string.IsNullOrWhiteSpace(company.WiseContext))
             {
@@ -253,8 +253,6 @@ namespace S1Jarvis.Core
                 soaction.Current["COMMENTS"] = "Jarvis Wise";
                 soaction.Current["REMARKS"] = CleanText(candidate.Keywords, 2000);
 
-                // Backward-compatible fields remain populated so the existing
-                // Help/Q&A history stays useful during the migration.
                 TrySet(soaction, "cccInitRequest", candidate.Request);
                 TrySet(soaction, "cccFinalResp", candidate.Response);
 
@@ -289,10 +287,6 @@ namespace S1Jarvis.Core
             }
         }
 
-        /// <summary>
-        /// The existing Help mode already creates one SOACTION and owns its star UI.
-        /// Promote that same record into Jarvis Wise instead of creating a duplicate.
-        /// </summary>
         public static void PromoteHelpRecord(
             XSupport xSupport,
             int soactionId,
@@ -350,10 +344,7 @@ namespace S1Jarvis.Core
 
                 string currentStatus = SafeCurrentString(soaction, "cccJWStatus");
                 if (string.IsNullOrWhiteSpace(currentStatus))
-                {
-                    // Not a Jarvis Wise record (e.g. an older order prompt).
                     return;
-                }
 
                 string status = rating >= 4 ? "VERIFIED" : rating == 3 ? "WEAK" : "REJECTED";
                 soaction.Current["cccJWRating"] = rating;
@@ -433,18 +424,12 @@ namespace S1Jarvis.Core
             }
             catch (Exception ex)
             {
-                // Rollout is fail-open. Until Designer fields exist in an installation,
-                // Jarvis must continue answering normally without learned retrieval.
                 DebugLog.Log("[JARVIS-WISE] retrieval unavailable; " + ex.Message);
                 return null;
             }
         }
 
-        private static int Score(
-            HashSet<string> queryTokens,
-            string keywords,
-            string request,
-            string response)
+        private static int Score(HashSet<string> queryTokens, string keywords, string request, string response)
         {
             if (queryTokens.Count == 0) return 0;
             int score = 0;
@@ -530,7 +515,7 @@ namespace S1Jarvis.Core
         private static void TrySet(XTable table, string field, object value)
         {
             try { table.Current[field] = value; }
-            catch { /* backward compatibility only */ }
+            catch { }
         }
     }
 }
