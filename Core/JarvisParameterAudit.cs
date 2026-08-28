@@ -36,6 +36,13 @@ namespace S1Jarvis.Core
                     return result;
                 }
 
+                // Architecture diagnostics are deliberately non-blocking and
+                // run once on the same startup path as the parameter audit.
+                // They do not change routing/tool exposure; they only prove
+                // that runtime tool definitions and the central registry stay
+                // synchronized as the product evolves.
+                JarvisToolInventoryReconciler.RunAndLog();
+
                 XTable table;
                 try
                 {
