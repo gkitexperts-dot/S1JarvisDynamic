@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.IO;
 using System.Reflection;
 using System.Threading.Tasks;
@@ -14,6 +15,13 @@ namespace S1Jarvis.UI
     {
         private bool _welcomeStoresStockHooked;
         private bool _welcomeStoresStockInjected;
+
+        // Short-lived server-side AADE payloads for the explicit
+        // "Άνοιγμα προμηθευτή" confirmation flow. The browser receives only
+        // a token and display data; the authoritative create payload remains
+        // in the host and is not trusted back from JavaScript.
+        private readonly Dictionary<string, JObject> _welcomeStoresPendingSuppliers =
+            new Dictionary<string, JObject>(StringComparer.OrdinalIgnoreCase);
 
         private void WelcomeStoresStock_Loaded(object sender, RoutedEventArgs e)
         {
@@ -112,6 +120,107 @@ namespace S1Jarvis.UI
                         currentCompany = _xSupport.ConnectionInfo.CompanyId,
                         itemCode,
                         rows
+                    });
+                    return;
+                }
+
+                if (string.Equals(type, "ws_stock_supplier_prepare", StringComparison.OrdinalIgnoreCase))
+                {
+                    string afm = ((string)cmd["afm"] ?? string.Empty).Trim();
+                    if (string.IsNullOrWhiteSpace(afm))
+                        throw new Exception("Λείπει το ΑΦΜ του καταστήματος.");
+
+                    JObject existing = JObject.Parse(
+                        JarvisTools.ExecuteFindTraderByAfmAndSodType(_xSupport, afm, 12));
+                    if ((bool?)existing["found"] == true)
+                    {
+                        await SendWelcomeStoresStockResultAsync("supplier_already_exists", new
+                        {
+                            success = true,
+                            afm,
+                            trdrId = (int?)existing["trdrId"]
+                        });
+                        return;
+                    }
+
+                    JObject aade = JObject.Parse(JarvisTools.ExecuteGetAadeData(_xSupport, afm, 12));
+                    if ((bool?)aade["success"] != true)
+                        throw new Exception((string)aade["message"] ?? "Η ΑΑΔΕ δεν επέστρεψε στοιχεία.");
+
+                    string suggestedCode = ((string)aade["suggestedCode"] ?? string.Empty).Trim();
+                    if (string.IsNullOrWhiteSpace(suggestedCode))
+                        throw new Exception("Δεν ήταν δυνατό να προταθεί κωδικός προμηθευτή.");
+
+                    var createPayload = new JObject
+                    {
+                        ["afm"] = afm,
+                        ["name"] = (string)aade["name"],
+                        ["code"] = suggestedCode,
+                        ["sodType"] = 12,
+                        ["address"] = (string)aade["address"],
+                        ["city"] = (string)aade["city"],
+                        ["doy"] = (string)aade["doy"],
+                        ["zip"] = (string)aade["zip"],
+                        ["jobType"] = (string)aade["jobType"]
+                    };
+
+                    string token = Guid.NewGuid().ToString("N");
+                    _welcomeStoresPendingSuppliers[token] = createPayload;
+
+                    await SendWelcomeStoresStockResultAsync("supplier_preview", new
+                    {
+                        success = true,
+                        token,
+                        afm,
+                        name = (string)aade["name"],
+                        code = suggestedCode,
+                        address = (string)aade["address"],
+                        city = (string)aade["city"],
+                        doy = (string)aade["doy"],
+                        zip = (string)aade["zip"]
+                    });
+                    return;
+                }
+
+                if (string.Equals(type, "ws_stock_supplier_create", StringComparison.OrdinalIgnoreCase))
+                {
+                    string token = ((string)cmd["token"] ?? string.Empty).Trim();
+                    JObject createPayload;
+                    if (string.IsNullOrWhiteSpace(token) ||
+                        !_welcomeStoresPendingSuppliers.TryGetValue(token, out createPayload))
+                        throw new Exception("Η επιβεβαίωση ανοίγματος προμηθευτή έληξε. Ξεκίνησε ξανά από το κουμπί Άνοιγμα.");
+
+                    string afm = ((string)createPayload["afm"] ?? string.Empty).Trim();
+
+                    // Re-check immediately before the write to avoid a duplicate
+                    // if another user opened the supplier after the preview.
+                    JObject existing = JObject.Parse(
+                        JarvisTools.ExecuteFindTraderByAfmAndSodType(_xSupport, afm, 12));
+                    if ((bool?)existing["found"] == true)
+                    {
+                        _welcomeStoresPendingSuppliers.Remove(token);
+                        await SendWelcomeStoresStockResultAsync("supplier_created", new
+                        {
+                            success = true,
+                            alreadyExisted = true,
+                            afm,
+                            trdrId = (int?)existing["trdrId"]
+                        });
+                        return;
+                    }
+
+                    JObject created = JObject.Parse(
+                        JarvisTools.ExecuteCreateTraderFromAade(_xSupport, createPayload));
+                    if ((bool?)created["success"] != true)
+                        throw new Exception((string)created["message"] ?? "Απέτυχε η δημιουργία προμηθευτή.");
+
+                    _welcomeStoresPendingSuppliers.Remove(token);
+                    await SendWelcomeStoresStockResultAsync("supplier_created", new
+                    {
+                        success = true,
+                        alreadyExisted = false,
+                        afm,
+                        trdrId = (int?)created["trdrId"]
                     });
                     return;
                 }
