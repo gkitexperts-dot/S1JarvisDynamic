@@ -1,0 +1,85 @@
+name: Remove Jetoil hardcodes
+
+on:
+  push:
+    branches:
+      - feature/multi-ai-provider
+    paths:
+      - '.github/workflows/remove-jetoil-hardcodes.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  neutralize:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feature/multi-ai-provider
+      - name: Remove runtime Jetoil assumptions
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          replacements = {
+              Path('Core/JarvisAgentClient.cs'): [
+                  (
+                      '"Είσαι ο Jarvis, ο ψηφιακός βοηθός μέσα στο Soft1 της Jetoil " +\n                "(εταιρία διανομής καυσίμων/πετρελαιοειδών). Απαντάς στα " +',
+                      '"Είσαι ο Jarvis, ο ψηφιακός βοηθός μέσα στο Soft1 της ενεργής εταιρίας. Απαντάς στα " +'
+                  )
+              ],
+              Path('Core/JarvisWise.cs'): [
+                  (
+                      'sb.AppendLine("Αν οποιαδήποτε παλιότερη γενική οδηγία υποθέτει ότι η εταιρία είναι Jetoil, θεώρησέ την legacy υπόθεση. Χρησιμοποίησε την ενεργή εταιρία παραπάνω ως πραγματικό context.");',
+                      'sb.AppendLine("Αν οποιαδήποτε παλιότερη γενική οδηγία περιέχει στατική εταιρική ταυτότητα, θεώρησέ την legacy υπόθεση. Χρησιμοποίησε την ενεργή εταιρία παραπάνω ως πραγματικό context.");'
+                  )
+              ],
+          }
+
+          changed = []
+          for path, pairs in replacements.items():
+              text = path.read_text(encoding='utf-8')
+              original = text
+              for old, new in pairs:
+                  if old not in text:
+                      raise SystemExit(f'Expected legacy text not found in {path}: {old[:80]}')
+                  text = text.replace(old, new)
+              if text != original:
+                  path.write_text(text, encoding='utf-8')
+                  changed.append(str(path))
+
+          # Audit executable/runtime sources. Historical README/docs are intentionally excluded.
+          runtime_suffixes = {'.cs', '.xaml', '.html', '.js', '.json', '.config'}
+          hits = []
+          for p in Path('.').rglob('*'):
+              if not p.is_file() or '.git' in p.parts or '.github' in p.parts:
+                  continue
+              if p.suffix.lower() not in runtime_suffixes:
+                  continue
+              try:
+                  text = p.read_text(encoding='utf-8', errors='ignore')
+              except Exception:
+                  continue
+              if 'jetoil' in text.lower():
+                  for i, line in enumerate(text.splitlines(), 1):
+                      if 'jetoil' in line.lower():
+                          hits.append(f'{p}:{i}:{line.strip()}')
+          if hits:
+              raise SystemExit('Remaining runtime Jetoil references:\n' + '\n'.join(hits))
+
+          print('Changed:', ', '.join(changed))
+          PY
+      - name: Commit cleanup
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add Core/JarvisAgentClient.cs Core/JarvisWise.cs
+          if git diff --cached --quiet; then
+            echo "No changes"
+            exit 0
+          fi
+          git commit -m "fix: remove hardcoded Jetoil runtime assumptions"
+          git push origin HEAD:feature/multi-ai-provider
