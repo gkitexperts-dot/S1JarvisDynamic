@@ -84,7 +84,15 @@ namespace S1Jarvis.Core
                     task.Capability,
                     StringComparison.OrdinalIgnoreCase)));
 
-            if (!anyToolMatchesPrimaryCapability)
+            if (anyToolMatchesPrimaryCapability)
+                return;
+
+            // Some capabilities are intentionally routing-only umbrellas. Help is
+            // the current example: it owns a read workflow but reuses Atlas tools.
+            // An explicit canonical route makes that exception deliberate rather
+            // than an accidental capability typo.
+            string explicitOwner = JarvisToolRegistry.ResolveOwnerForCapability(task.Capability);
+            if (string.IsNullOrWhiteSpace(explicitOwner))
             {
                 issues.Add("No task tool advertises the task primary capability: " +
                     task.TaskType + " -> " + task.Capability);
