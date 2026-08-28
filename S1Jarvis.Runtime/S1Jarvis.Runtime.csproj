@@ -143,6 +143,9 @@
     <EmbeddedResource Include="..\UI\web\dr-batch-mode.js">
       <LogicalName>S1Jarvis.web.dr-batch-mode.js</LogicalName>
     </EmbeddedResource>
+    <EmbeddedResource Include="..\UI\web\welcomestores-stock.js">
+      <LogicalName>S1Jarvis.web.welcomestores-stock.js</LogicalName>
+    </EmbeddedResource>
   </ItemGroup>
 
   <Target Name="GenerateVerilicRecognitionMetadata" BeforeTargets="CoreCompile">
