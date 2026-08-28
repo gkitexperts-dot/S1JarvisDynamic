@@ -21,6 +21,18 @@
   - Runtime verified 27/08/2026: `[AI-USAGE-AGG] previous-day aggregation completed` and subsequent raw `CCCJAILOG` usage insert succeeded.
   - Startup remains fail-open: reporting failure can never block Jarvis startup/provider readiness.
 
+## Jarvis Activity Layer
+
+- [x] **Generic transient activity/status indicator across Jarvis chat surfaces.**
+  - Runtime/UAT completed 28/08/2026.
+  - Main Chat background Internet research: PASS, including hidden-browser research, evolving activity captions, suppression of premature primary-chat/cancellation replies and final-answer completion.
+  - Browser curtain: PASS.
+  - Help curtain: PASS.
+  - Email curtain: PASS; activity captions plus real inbox read/classification flow verified. Inbox-analysis results are reflected in the Email list instead of dumping the detailed classification into chat.
+  - Courier curtain: PASS.
+  - Document Reader intentionally excluded because its interaction model is object/workflow based and does not expose an equivalent curtain chat box.
+  - Activity state is transient UI state and is not persisted as normal assistant transcript/history or Jarvis Wise knowledge.
+
 ## Dashboard AI usage analytics
 
 - [ ] **Runtime/UAT verify the new deterministic AI Usage Dashboard pages.**
