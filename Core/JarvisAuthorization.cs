@@ -6,7 +6,7 @@ namespace S1Jarvis.Core
 {
     internal static class JarvisAuthorization
     {
-        public const int AdminsParamCode = 500034;
+        public const int AdminsParamCode = 500036;
 
         public static bool IsCurrentUserAdmin(XSupport xSupport)
         {
