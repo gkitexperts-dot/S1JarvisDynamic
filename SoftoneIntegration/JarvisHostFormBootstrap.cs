@@ -4,6 +4,7 @@ using System.Reflection;
 using System.Text;
 using System.Windows.Forms;
 using System.Windows.Forms.Integration;
+using Softone;
 using S1Jarvis.SoftoneIntegration;
 
 namespace S1Jarvis.UI
@@ -23,10 +24,11 @@ namespace S1Jarvis.UI
 
             try
             {
-                if (JarvisCore.XSupport == null)
+                XSupport xSupport = JarvisCore.GetXSupport();
+                if (xSupport == null)
                     throw new InvalidOperationException("Jarvis XSupport is not initialized.");
 
-                var shell = JarvisRuntimeLoader.CreateShell(JarvisCore.XSupport);
+                var shell = JarvisRuntimeLoader.CreateShell(xSupport);
                 var host = new ElementHost
                 {
                     Dock = DockStyle.Fill,
