@@ -1,0 +1,369 @@
+using System;
+using System.Collections.Generic;
+using System.Linq;
+
+namespace S1Jarvis.Core
+{
+    internal enum JarvisTaskOperation
+    {
+        Read,
+        Write,
+        ExternalAction,
+        Mixed
+    }
+
+    internal enum JarvisTaskExecutionPolicy
+    {
+        Sequential,
+        ParallelSafe,
+        DependsOnInputs
+    }
+
+    internal sealed class JarvisTaskDescriptor
+    {
+        public JarvisTaskDescriptor(
+            string taskType,
+            string capability,
+            string ownerAgent,
+            JarvisTaskOperation operation,
+            bool requiresConfirmation,
+            JarvisTaskExecutionPolicy executionPolicy,
+            string description,
+            string[] tools,
+            string[] requiredInputs,
+            string[] optionalInputs,
+            string[] produces,
+            string[] dependencyCapabilities,
+            string[] intentHints)
+        {
+            TaskType = taskType ?? string.Empty;
+            Capability = capability ?? string.Empty;
+            OwnerAgent = ownerAgent ?? string.Empty;
+            Operation = operation;
+            RequiresConfirmation = requiresConfirmation;
+            ExecutionPolicy = executionPolicy;
+            Description = description ?? string.Empty;
+            Tools = tools ?? new string[0];
+            RequiredInputs = requiredInputs ?? new string[0];
+            OptionalInputs = optionalInputs ?? new string[0];
+            Produces = produces ?? new string[0];
+            DependencyCapabilities = dependencyCapabilities ?? new string[0];
+            IntentHints = intentHints ?? new string[0];
+        }
+
+        public string TaskType { get; private set; }
+        public string Capability { get; private set; }
+        public string OwnerAgent { get; private set; }
+        public JarvisTaskOperation Operation { get; private set; }
+        public bool RequiresConfirmation { get; private set; }
+        public JarvisTaskExecutionPolicy ExecutionPolicy { get; private set; }
+        public string Description { get; private set; }
+        public string[] Tools { get; private set; }
+        public string[] RequiredInputs { get; private set; }
+        public string[] OptionalInputs { get; private set; }
+        public string[] Produces { get; private set; }
+        public string[] DependencyCapabilities { get; private set; }
+        public string[] IntentHints { get; private set; }
+    }
+
+    /// <summary>
+    /// Phase 1 orchestration contract.
+    ///
+    /// This registry describes atomic business tasks that Jarvis can plan.
+    /// It does NOT change the mature runtime routing/tool loop yet.
+    /// Jarvis remains the user-facing orchestrator; OwnerAgent values are
+    /// internal execution roles resolved after a task/capability is selected.
+    /// </summary>
+    internal static class JarvisTaskRegistry
+    {
+        private static readonly JarvisTaskDescriptor[] Tasks =
+        {
+            T(
+                "ReportData", "Reporting", "Atlas", JarvisTaskOperation.Read, false,
+                JarvisTaskExecutionPolicy.ParallelSafe,
+                "Read, aggregate or analyze Soft1 business data and return a structured result.",
+                A("query_data"),
+                A("business_question"),
+                A("filters", "date_range", "entity_reference"),
+                A("dataset", "summary"),
+                A(),
+                A("report", "analysis", "sales", "turnover", "balance", "movement", "list")),
+
+            T(
+                "ExportData", "Export", "Atlas", JarvisTaskOperation.Read, false,
+                JarvisTaskExecutionPolicy.DependsOnInputs,
+                "Export query results or an already visible result table to a file.",
+                A("export_query_to_file", "export_shown_table"),
+                A("source_result"),
+                A("format", "columns"),
+                A("file_artifact"),
+                A("Reporting"),
+                A("export", "excel", "xlsx", "csv", "pdf", "file")),
+
+            T(
+                "OpenDocument", "DocumentRead", "Atlas", JarvisTaskOperation.Read, false,
+                JarvisTaskExecutionPolicy.DependsOnInputs,
+                "Resolve and open an existing Soft1 document/object.",
+                A("open_document"),
+                A("document_reference"),
+                A("series", "number", "findoc"),
+                A("opened_document"),
+                A(),
+                A("open document", "show invoice", "open invoice", "παραστατικό")),
+
+            T(
+                "ResolveDocumentConversion", "DocumentConversion", "Atlas", JarvisTaskOperation.Read, false,
+                JarvisTaskExecutionPolicy.DependsOnInputs,
+                "Find valid conversion targets for a resolved Soft1 document.",
+                A("get_conversion_targets"),
+                A("findoc"),
+                A(),
+                A("conversion_targets"),
+                A("DocumentRead"),
+                A("conversion", "transform", "μετασχηματισ")),
+
+            T(
+                "CreateItem", "ItemWrite", "Forge", JarvisTaskOperation.Write, true,
+                JarvisTaskExecutionPolicy.DependsOnInputs,
+                "Create a Soft1 item using the approved item-template/write flow.",
+                A("get_item_template", "create_item"),
+                A("item_identity"),
+                A("template_reference", "description", "code", "commercial_fields"),
+                A("item_reference"),
+                A("ItemRead", "InternetResearch"),
+                A("create item", "new item", "είδος", "δημιουργία είδους")),
+
+            T(
+                "FindTrader", "TraderLookup", "Compass", JarvisTaskOperation.Read, false,
+                JarvisTaskExecutionPolicy.ParallelSafe,
+                "Resolve an existing trader/customer/supplier by AFM or business identity.",
+                A("find_trader_by_afm", "get_aade_data"),
+                A("trader_identity"),
+                A("afm", "name", "role"),
+                A("trader_data"),
+                A(),
+                A("customer", "supplier", "trader", "afm", "πελάτη", "προμηθευτή", "αφμ")),
+
+            T(
+                "CreateTrader", "TraderWrite", "Compass", JarvisTaskOperation.Write, true,
+                JarvisTaskExecutionPolicy.DependsOnInputs,
+                "Create a Soft1 trader from resolved AADE/business data.",
+                A("find_trader_by_afm", "get_aade_data", "create_trader_from_aade"),
+                A("afm"),
+                A("role", "resolved_aade_data"),
+                A("trader_reference"),
+                A("TraderLookup"),
+                A("create customer", "create supplier", "new trader", "νέος πελάτης", "νέος προμηθευτής")),
+
+            T(
+                "ReadInbox", "Email", "Echo", JarvisTaskOperation.Read, false,
+                JarvisTaskExecutionPolicy.ParallelSafe,
+                "Read or filter Outlook inbox messages and surface matching messages in the Email UI.",
+                A("filter_email_inbox", "read_email", "download_email_attachment"),
+                A("email_request"),
+                A("sender", "date_range", "read_state", "keywords", "attachment"),
+                A("email_messages", "email_artifacts"),
+                A(),
+                A("email", "inbox", "message", "εισερχόμενα", "μήνυμα")),
+
+            T(
+                "ManageCalendar", "Calendar", "Echo", JarvisTaskOperation.Mixed, true,
+                JarvisTaskExecutionPolicy.DependsOnInputs,
+                "Read/filter calendar entries or create a confirmed Outlook event.",
+                A("filter_calendar", "show_calendar_entries", "read_calendar", "create_outlook_event"),
+                A("calendar_request"),
+                A("date_range", "subject", "start", "end", "attendees"),
+                A("calendar_entries", "calendar_event"),
+                A(),
+                A("calendar", "meeting", "appointment", "ραντεβού", "ημερολόγιο", "υπενθύμιση")),
+
+            T(
+                "CreateCrmTask", "CRM", "Echo", JarvisTaskOperation.Write, true,
+                JarvisTaskExecutionPolicy.DependsOnInputs,
+                "Create a CRM task/action in Soft1.",
+                A("create_crm_task"),
+                A("task_subject"),
+                A("trader_reference", "due_date", "notes", "assignee"),
+                A("crm_task_reference"),
+                A("TraderLookup", "Email", "Calendar"),
+                A("crm task", "follow up", "εργασία crm", "ενέργεια crm")),
+
+            T(
+                "SendEmail", "EmailWrite", "Echo", JarvisTaskOperation.ExternalAction, true,
+                JarvisTaskExecutionPolicy.DependsOnInputs,
+                "Send or reply to an Outlook email using resolved recipients/content/artifacts.",
+                A("search_outlook_contacts", "show_contact_results", "send_email", "reply_email"),
+                A("recipient", "message_content"),
+                A("subject", "reply_source", "attachments", "artifact_reference"),
+                A("email_send_result"),
+                A("Contacts", "Export", "OrderWrite", "DocumentRead"),
+                A("send email", "reply", "στείλε email", "απάντησε", "στείλε μήνυμα")),
+
+            T(
+                "CourierDocuments", "CourierRead", "Sprint", JarvisTaskOperation.Read, false,
+                JarvisTaskExecutionPolicy.ParallelSafe,
+                "Find and surface Soft1 documents eligible for courier handling.",
+                A("show_courier_documents", "get_courier_voucher_data"),
+                A("courier_request"),
+                A("document_filters", "provider"),
+                A("courier_documents", "voucher_data"),
+                A(),
+                A("courier", "voucher", "shipment", "αποστολή", "voucher data")),
+
+            T(
+                "CreateCourierVoucher", "CourierWrite", "Sprint", JarvisTaskOperation.ExternalAction, true,
+                JarvisTaskExecutionPolicy.DependsOnInputs,
+                "Create a courier voucher for a resolved eligible document.",
+                A("get_courier_voucher_data", "create_courier_voucher"),
+                A("document_reference", "courier_provider"),
+                A("shipment_options"),
+                A("voucher_reference", "courier_artifact"),
+                A("CourierRead", "DocumentRead"),
+                A("create voucher", "ship", "send courier", "έκδοση voucher")),
+
+            T(
+                "CancelCourierVoucher", "CourierWrite", "Sprint", JarvisTaskOperation.ExternalAction, true,
+                JarvisTaskExecutionPolicy.DependsOnInputs,
+                "Cancel an existing resolved courier voucher.",
+                A("get_courier_voucher_data", "cancel_courier_voucher"),
+                A("voucher_reference"),
+                A("document_reference", "provider"),
+                A("courier_cancel_result"),
+                A("CourierRead"),
+                A("cancel voucher", "cancel shipment", "ακύρωση voucher")),
+
+            T(
+                "InternetResearch", "InternetResearch", "Scout", JarvisTaskOperation.Read, false,
+                JarvisTaskExecutionPolicy.ParallelSafe,
+                "Research public Internet sources using browser navigation, page reading and table extraction.",
+                A("open_url", "read_page_content", "extract_page_tables"),
+                A("research_question"),
+                A("url", "source_constraints"),
+                A("research_result", "web_tables", "sources"),
+                A(),
+                A("internet", "web", "site", "research", "τεχνικά χαρακτηριστικά", "ιστοσελίδα")),
+
+            T(
+                "CreateOrder", "OrderWrite", "Scout", JarvisTaskOperation.Write, true,
+                JarvisTaskExecutionPolicy.DependsOnInputs,
+                "Create a Soft1 order using resolved customer and order-line data.",
+                A("create_order"),
+                A("customer_reference", "order_lines"),
+                A("series", "delivery_data", "comments"),
+                A("order_reference", "document_reference"),
+                A("TraderLookup", "ItemRead", "InternetResearch"),
+                A("create order", "new order", "παραγγελία", "καταχώρηση παραγγελίας")),
+
+            T(
+                "HelpLookup", "Help", "Sage", JarvisTaskOperation.Read, false,
+                JarvisTaskExecutionPolicy.ParallelSafe,
+                "Answer Soft1 help/knowledge questions using shared read/reporting/document tools.",
+                A("query_data", "open_document", "export_query_to_file"),
+                A("help_question"),
+                A("entity_reference", "report_request"),
+                A("help_answer", "supporting_data"),
+                A("Reporting", "DocumentRead"),
+                A("help", "how do I", "soft1", "βοήθεια", "πως κάνω"))
+        };
+
+        internal static IReadOnlyList<JarvisTaskDescriptor> AllTasks
+        {
+            get { return Tasks; }
+        }
+
+        internal static JarvisTaskDescriptor Find(string taskType)
+        {
+            if (string.IsNullOrWhiteSpace(taskType)) return null;
+            return Tasks.FirstOrDefault(x => string.Equals(
+                x.TaskType, taskType.Trim(), StringComparison.OrdinalIgnoreCase));
+        }
+
+        internal static IEnumerable<JarvisTaskDescriptor> ForCapability(string capability)
+        {
+            if (string.IsNullOrWhiteSpace(capability))
+                return Enumerable.Empty<JarvisTaskDescriptor>();
+
+            return Tasks.Where(x => string.Equals(
+                x.Capability, capability.Trim(), StringComparison.OrdinalIgnoreCase));
+        }
+
+        internal static IEnumerable<JarvisTaskDescriptor> ForAgent(string agentName)
+        {
+            if (string.IsNullOrWhiteSpace(agentName))
+                return Enumerable.Empty<JarvisTaskDescriptor>();
+
+            return Tasks.Where(x => string.Equals(
+                x.OwnerAgent, agentName.Trim(), StringComparison.OrdinalIgnoreCase));
+        }
+
+        internal static string[] ValidateAgainstToolRegistry()
+        {
+            var issues = new List<string>();
+
+            foreach (IGrouping<string, JarvisTaskDescriptor> group in Tasks.GroupBy(
+                x => x.TaskType, StringComparer.OrdinalIgnoreCase))
+            {
+                if (group.Count() > 1)
+                    issues.Add("Duplicate task registration: " + group.Key);
+            }
+
+            foreach (JarvisTaskDescriptor task in Tasks)
+            {
+                if (string.IsNullOrWhiteSpace(task.Capability))
+                    issues.Add("Task without capability: " + task.TaskType);
+                if (string.IsNullOrWhiteSpace(task.OwnerAgent))
+                    issues.Add("Task without owner agent: " + task.TaskType);
+                if (task.Tools.Length == 0)
+                    issues.Add("Task without tools: " + task.TaskType);
+                if ((task.Operation == JarvisTaskOperation.Write ||
+                     task.Operation == JarvisTaskOperation.ExternalAction) &&
+                    !task.RequiresConfirmation)
+                    issues.Add("State-changing task without confirmation: " + task.TaskType);
+
+                foreach (string toolName in task.Tools)
+                {
+                    if (JarvisToolRegistry.Find(toolName) == null)
+                        issues.Add("Task references unregistered tool: " + task.TaskType + " -> " + toolName);
+                }
+            }
+
+            return issues.ToArray();
+        }
+
+        private static JarvisTaskDescriptor T(
+            string taskType,
+            string capability,
+            string ownerAgent,
+            JarvisTaskOperation operation,
+            bool requiresConfirmation,
+            JarvisTaskExecutionPolicy executionPolicy,
+            string description,
+            string[] tools,
+            string[] requiredInputs,
+            string[] optionalInputs,
+            string[] produces,
+            string[] dependencyCapabilities,
+            string[] intentHints)
+        {
+            return new JarvisTaskDescriptor(
+                taskType,
+                capability,
+                ownerAgent,
+                operation,
+                requiresConfirmation,
+                executionPolicy,
+                description,
+                tools,
+                requiredInputs,
+                optionalInputs,
+                produces,
+                dependencyCapabilities,
+                intentHints);
+        }
+
+        private static string[] A(params string[] values)
+        {
+            return values ?? new string[0];
+        }
+    }
+}
