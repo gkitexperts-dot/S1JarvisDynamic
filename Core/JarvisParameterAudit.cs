@@ -39,9 +39,10 @@ namespace S1Jarvis.Core
                 // Architecture diagnostics are deliberately non-blocking and
                 // run once on the same startup path as the parameter audit.
                 // They do not change routing/tool exposure; they only prove
-                // that runtime tool definitions and the central registry stay
+                // that runtime definitions and orchestration metadata stay
                 // synchronized as the product evolves.
                 JarvisToolInventoryReconciler.RunAndLog();
+                RunTaskRegistryAudit();
 
                 XTable table;
                 try
@@ -74,6 +75,31 @@ namespace S1Jarvis.Core
             }
 
             return result;
+        }
+
+        private static void RunTaskRegistryAudit()
+        {
+            try
+            {
+                string[] issues = JarvisTaskRegistryAudit.Validate();
+                if (issues == null || issues.Length == 0)
+                {
+                    DebugLog.Log(
+                        "[TASK-REGISTRY] reconciliation OK tasks=" +
+                        JarvisTaskRegistry.AllTasks.Count);
+                    return;
+                }
+
+                DebugLog.Log(
+                    "[TASK-REGISTRY] reconciliation issues=" + issues.Length +
+                    " :: " + string.Join(" | ", issues));
+            }
+            catch (Exception ex)
+            {
+                // Orchestration metadata is not yet runtime-authoritative, so an
+                // audit failure must never prevent Jarvis/Soft1 startup.
+                DebugLog.Log("[TASK-REGISTRY] audit failed: " + ex.GetType().Name + " - " + ex.Message);
+            }
         }
 
         private static void AuditNumeric(XSupport xSupport, int code, bool globallyRequired, Result result)
