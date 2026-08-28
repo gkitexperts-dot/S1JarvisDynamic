@@ -27,7 +27,7 @@ namespace S1Jarvis.Core
             JarvisCompanyContext company = JarvisCompanyContext.Resolve(xSupport);
             var sb = new StringBuilder();
             sb.AppendLine("[JARVIS_WISE_ADMIN_CONTEXT]");
-            sb.AppendLine("Ο τρέχων χειριστής είναι Jarvis Admin (ParamCode 500034). Αυτό δίνει δικαίωμα διαχείρισης του curated COMPANY.cccJWContext ΜΟΝΟ της ενεργής Soft1 εταιρίας.");
+            sb.AppendLine("Ο τρέχων χειριστής είναι Jarvis Admin (ParamCode 500036). Αυτό δίνει δικαίωμα διαχείρισης του curated COMPANY.cccJWContext ΜΟΝΟ της ενεργής Soft1 εταιρίας.");
             sb.AppendLine("Ενεργή εταιρία: CompanyId=" + company.CompanyId + ", Name=" + (company.CompanyName ?? "?") + ".");
             sb.AppendLine("Υπάρχον curated context:");
             sb.AppendLine(string.IsNullOrWhiteSpace(company.WiseContext) ? "(κενό)" : company.WiseContext.Trim());
@@ -84,10 +84,14 @@ namespace S1Jarvis.Core
             string s = (userText ?? string.Empty).Trim().ToLowerInvariant();
             if (s.Length == 0) return false;
 
+            s = Regex.Replace(s, @"[\.,!;:]+", " ");
+            s = Regex.Replace(s, @"\s+", " ").Trim();
+
             return s == "ναι" || s == "ναι αποθήκευσέ το" || s == "ναι αποθηκευσε το" ||
                    s == "αποθήκευσέ το" || s == "αποθηκευσε το" ||
                    s == "επιβεβαιώνω" || s == "επιβεβαιωνω" ||
                    s == "προχώρα" || s == "προχωρα" ||
+                   s == "ναι προχώρα" || s == "ναι προχωρα" ||
                    s == "save" || s == "confirm" || s == "yes save it";
         }
 
@@ -100,8 +104,6 @@ namespace S1Jarvis.Core
             if (!IsExplicitConfirmation(confirmationText))
                 throw new InvalidOperationException("Δεν υπάρχει ρητή επιβεβαίωση αποθήκευσης.");
 
-            // Re-check authorization at the exact write boundary. Boot recognition
-            // is for UX; this is the authoritative security gate.
             JarvisAuthorization.DemandCurrentUserAdmin(xSupport);
 
             int companyId = xSupport.ConnectionInfo.CompanyId;
