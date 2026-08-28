@@ -26,11 +26,14 @@ namespace S1Jarvis.Core
                 "Μην εκτελείς την εργασία και μην απαντάς στον χειριστή. Επέστρεψε ΜΟΝΟ έγκυρο JSON. " +
                 "Κάθε task πρέπει να έχει μοναδικό id, taskType, intentFragment, inputs και dependsOn. " +
                 "Το dependsOn περιέχει ids άλλων tasks του ίδιου plan. " +
-                "Βάλε input μόνο όταν προκύπτει καθαρά από το αίτημα. Μην μαντεύεις missing business data. " +
+                "Κάθε input είναι είτε literal τιμή είτε binding {\"fromTask\":\"t1\",\"output\":\"output_name\"}. " +
+                "Χρησιμοποίησε binding όταν ένα task χρειάζεται συγκεκριμένο output προηγούμενου task και βάλε το ίδιο task και στο dependsOn. " +
+                "Το output πρέπει να υπάρχει στο produces του source task. Μην επινοείς output names. " +
+                "Βάλε literal input μόνο όταν προκύπτει καθαρά από το αίτημα. Μην μαντεύεις missing business data. " +
                 "Μην ενώνεις ανεξάρτητο read και write intent στο ίδιο task. Για απλό αίτημα χρησιμοποίησε ένα task. " +
                 "Για σύνθετο αίτημα χρησιμοποίησε όσα atomic tasks χρειάζονται, χωρίς καρτεσιανούς συνδυασμούς. " +
-                "Όπου το δεύτερο task χρειάζεται αποτέλεσμα του πρώτου, βάλε dependsOn. Ανεξάρτητα tasks δεν πρέπει να έχουν ψεύτικη dependency. " +
-                "Schema: {\"tasks\":[{\"id\":\"t1\",\"taskType\":\"...\",\"intentFragment\":\"...\",\"inputs\":{\"name\":value},\"dependsOn\":[\"t0\"]}]}";
+                "Ανεξάρτητα tasks δεν πρέπει να έχουν ψεύτικη dependency. " +
+                "Schema: {\"tasks\":[{\"id\":\"t1\",\"taskType\":\"...\",\"intentFragment\":\"...\",\"inputs\":{\"name\":value,\"other\":{\"fromTask\":\"t0\",\"output\":\"output_name\"}},\"dependsOn\":[\"t0\"]}]}";
         }
 
         internal static string BuildTaskCatalogJson()
@@ -111,6 +114,7 @@ namespace S1Jarvis.Core
 
             var externalToInternal = new Dictionary<string, JarvisPlannedTask>(StringComparer.OrdinalIgnoreCase);
             var pendingDependencies = new Dictionary<JarvisPlannedTask, string[]>();
+            var pendingInputs = new Dictionary<JarvisPlannedTask, JObject>();
 
             foreach (JObject item in taskArray.OfType<JObject>())
             {
@@ -138,9 +142,9 @@ namespace S1Jarvis.Core
                     continue;
                 }
 
-                BindLiteralInputs(task, item["inputs"] as JObject, errors);
                 plan.Tasks.Add(task);
                 externalToInternal[externalId] = task;
+                pendingInputs[task] = item["inputs"] as JObject;
 
                 JArray dependencyArray = item["dependsOn"] as JArray;
                 pendingDependencies[task] = dependencyArray == null
@@ -168,14 +172,18 @@ namespace S1Jarvis.Core
                 }
             }
 
+            foreach (KeyValuePair<JarvisPlannedTask, JObject> entry in pendingInputs)
+                BindInputs(entry.Key, entry.Value, externalToInternal, errors);
+
             errors.AddRange(plan.Validate());
             issues = errors.Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
             return issues.Length == 0;
         }
 
-        private static void BindLiteralInputs(
+        private static void BindInputs(
             JarvisPlannedTask task,
             JObject inputObject,
+            IReadOnlyDictionary<string, JarvisPlannedTask> externalToInternal,
             List<string> errors)
         {
             if (task == null || inputObject == null)
@@ -201,6 +209,14 @@ namespace S1Jarvis.Core
                     continue;
                 }
 
+                JObject bindingObject = property.Value as JObject;
+                if (bindingObject != null &&
+                    (bindingObject["fromTask"] != null || bindingObject["output"] != null))
+                {
+                    BindSourceOutput(task, name, bindingObject, externalToInternal, errors);
+                    continue;
+                }
+
                 object value = ConvertLiteral(property.Value);
                 if (value == null)
                     continue;
@@ -211,6 +227,61 @@ namespace S1Jarvis.Core
                     Value = value
                 });
             }
+        }
+
+        private static void BindSourceOutput(
+            JarvisPlannedTask consumer,
+            string inputName,
+            JObject bindingObject,
+            IReadOnlyDictionary<string, JarvisPlannedTask> externalToInternal,
+            List<string> errors)
+        {
+            string externalSourceId = bindingObject["fromTask"] == null
+                ? null
+                : bindingObject["fromTask"].ToString().Trim();
+            string outputName = bindingObject["output"] == null
+                ? null
+                : bindingObject["output"].ToString().Trim();
+
+            if (string.IsNullOrWhiteSpace(externalSourceId) || string.IsNullOrWhiteSpace(outputName))
+            {
+                errors.Add("Incomplete source binding for input '" + inputName + "' on task " + consumer.TaskType);
+                return;
+            }
+
+            JarvisPlannedTask source;
+            if (!externalToInternal.TryGetValue(externalSourceId, out source))
+            {
+                errors.Add("Unknown fromTask id: " + externalSourceId + " for input '" + inputName + "' on " + consumer.TaskType);
+                return;
+            }
+
+            if (string.Equals(source.TaskId, consumer.TaskId, StringComparison.OrdinalIgnoreCase))
+            {
+                errors.Add("Task cannot bind input from itself: " + consumer.TaskType + " -> " + inputName);
+                return;
+            }
+
+            JarvisTaskDescriptor sourceDescriptor = source.Descriptor;
+            if (sourceDescriptor == null || !sourceDescriptor.Produces.Contains(outputName, StringComparer.OrdinalIgnoreCase))
+            {
+                errors.Add("Unknown source output '" + outputName + "' from task " + source.TaskType +
+                    " for input '" + inputName + "' on " + consumer.TaskType);
+                return;
+            }
+
+            if (!consumer.DependsOnTaskIds.Contains(source.TaskId, StringComparer.OrdinalIgnoreCase))
+            {
+                errors.Add("Input binding requires dependsOn: " + consumer.TaskType + " -> " + externalSourceId);
+                return;
+            }
+
+            consumer.Inputs.Add(new JarvisTaskInputBinding
+            {
+                Name = inputName,
+                SourceTaskId = source.TaskId,
+                SourceOutputName = outputName
+            });
         }
 
         private static object ConvertLiteral(JToken token)
