@@ -65,23 +65,30 @@ namespace S1Jarvis.UI
 
             int serial = ++_mainIdentitySerial;
 
-            // Internal routing may still choose Atlas/another specialist, but product identity
-            // must never leak into the Main Chat surface. Suppress the primary AI turn and
-            // answer deterministically as Jarvis.
+            // The normal Main Chat router is authoritative for routing and can still select
+            // Atlas/another specialist. We do not race it with a second visible reply.
+            // Ask cancellation to stop unnecessary provider work when possible, but always
+            // wait until the primary UI turn has actually finished before writing the
+            // product-level identity. This prevents a late routed-agent response from
+            // overwriting the Jarvis identity response.
             _agentClient.CancelCurrent();
             _ = CompleteMainIdentityTurnAsync(serial);
         }
 
         private async Task CompleteMainIdentityTurnAsync(int serial)
         {
-            int[] delaysMs = { 40, 100, 220, 400 };
-            for (int i = 0; i < delaysMs.Length; i++)
+            int[] cancelDelaysMs = { 40, 100, 220, 400 };
+            for (int i = 0; i < cancelDelaysMs.Length; i++)
             {
-                await Task.Delay(delaysMs[i]);
+                await Task.Delay(cancelDelaysMs[i]);
                 if (serial != _mainIdentitySerial) return;
                 _agentClient.CancelCurrent();
             }
 
+            // Cancellation is best-effort. Some routed/provider calls may already be in flight
+            // and can still complete. Wait for the Main Chat thinking state to finish, then
+            // replace the final assistant surface/history deterministically.
+            await WaitForMainIdentityPrimaryTurnAsync(serial);
             if (serial != _mainIdentitySerial) return;
 
             const string answer =
@@ -91,7 +98,32 @@ namespace S1Jarvis.UI
 
             ReplaceLastAssistantHistory(_conversation, answer);
             PostJarvisActivity("complete", "main", answer);
-            DebugLog.Log("[JARVIS-IDENTITY] product identity response completed");
+            DebugLog.Log("[JARVIS-IDENTITY] product identity response completed after primary turn");
+        }
+
+        private async Task WaitForMainIdentityPrimaryTurnAsync(int serial)
+        {
+            if (webView.CoreWebView2 == null) return;
+
+            for (int i = 0; i < 240; i++)
+            {
+                if (serial != _mainIdentitySerial) return;
+                try
+                {
+                    string raw = await webView.CoreWebView2.ExecuteScriptAsync(
+                        "(()=>{const o=document.getElementById('orbWrap');return !!(o&&o.classList.contains('thinking'));})()");
+                    bool thinking;
+                    if ((bool.TryParse(raw, out thinking) && !thinking) || raw == "false")
+                    {
+                        // Give the normal renderer one event-loop turn to commit its final bubble.
+                        await Task.Delay(75);
+                        return;
+                    }
+                }
+                catch { }
+
+                await Task.Delay(250);
+            }
         }
 
         private static bool LooksLikeIdentityQuestion(string text)
@@ -101,10 +133,13 @@ namespace S1Jarvis.UI
 
             return
                 s == "ποιος εισαι" || s == "ποιος είσαι" ||
+                s == "ποιος εισαι?" || s == "ποιος είσαι?" ||
                 s == "τι εισαι" || s == "τι είσαι" ||
+                s == "τι εισαι?" || s == "τι είσαι?" ||
                 s.Contains("πως σε λενε") || s.Contains("πώς σε λένε") ||
                 s.Contains("ποιο ειναι το ονομα σου") || s.Contains("ποιο είναι το όνομά σου") ||
-                s == "who are you" || s == "what are you" ||
+                s == "who are you" || s == "who are you?" ||
+                s == "what are you" || s == "what are you?" ||
                 s.Contains("what is your name") || s.Contains("what's your name");
         }
     }
