@@ -182,6 +182,10 @@
       <LogicalName>S1Jarvis.web.dr-trader-role-ui.js</LogicalName>
     </EmbeddedResource>
 
+    <EmbeddedResource Include="..\UI\web\welcomestores-stock.js">
+      <LogicalName>S1Jarvis.web.welcomestores-stock.js</LogicalName>
+    </EmbeddedResource>
+
   </ItemGroup>
 
   <Import Project="$(MSBuildToolsPath)\Microsoft.CSharp.targets" />
