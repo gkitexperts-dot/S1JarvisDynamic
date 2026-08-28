@@ -18,23 +18,25 @@ namespace S1Jarvis.UI
     /// </summary>
     public partial class JarvisShell
     {
+        // JarvisShell already has a static constructor in the UAT partial.
+        // Partial classes may have only one static constructor, so Jarvis Wise
+        // registers its class handler through a static field initializer instead.
+        private static readonly bool _jarvisWiseBootstrapRegistered = RegisterJarvisWiseBootstrap();
+
         private bool _jarvisWiseCoreHooked;
         private int _jarvisWiseMainTurnSerial;
         private int _jarvisWiseHelpTurnSerial;
         private string _jarvisWiseLastMainRaw;
         private readonly HashSet<int> _jarvisWisePromotedHelpIds = new HashSet<int>();
 
-        static JarvisShell()
+        private static bool RegisterJarvisWiseBootstrap()
         {
-            // Class handler runs before the instance Loaded handler. This lets us
-            // subscribe to CoreWebView2InitializationCompleted before
-            // JarvisShell_Loaded calls EnsureCoreWebView2Async, so our synchronous
-            // context injection runs before the existing primary message router.
             EventManager.RegisterClassHandler(
                 typeof(JarvisShell),
                 FrameworkElement.LoadedEvent,
                 new RoutedEventHandler(JarvisWiseLoaded),
                 true);
+            return true;
         }
 
         private static void JarvisWiseLoaded(object sender, RoutedEventArgs e)
@@ -81,7 +83,6 @@ namespace S1Jarvis.UI
 
             if (string.IsNullOrWhiteSpace(raw)) return;
 
-            // Structured commands are JSON strings produced by postCommand().
             if (raw.Length > 1 && raw[0] == '{')
             {
                 JObject cmd;
@@ -96,10 +97,6 @@ namespace S1Jarvis.UI
                     return;
                 }
 
-                // Existing Help stars and generic inline rate: links continue to
-                // use their old commands. We observe the same command and update
-                // the new Jarvis Wise status fields; the existing handler still
-                // updates SOSMALLINT exactly as before.
                 if (string.Equals(type, "help_rate", StringComparison.Ordinal) ||
                     string.Equals(type, "rate_order_prompt", StringComparison.Ordinal))
                 {
@@ -116,11 +113,9 @@ namespace S1Jarvis.UI
                     return;
                 }
 
-                // Other curtains/deterministic commands keep their existing flow.
                 return;
             }
 
-            // Sentinels and internal commands are not chat knowledge turns.
             if (raw.StartsWith("__JARVIS_", StringComparison.Ordinal)) return;
 
             PrepareJarvisWiseMainTurn(raw);
@@ -130,9 +125,6 @@ namespace S1Jarvis.UI
         {
             try
             {
-                // Synchronous by design: XSupport/Soft1 SDK access stays on the
-                // Soft1 integration/UI thread. The existing AskAsync handler runs
-                // after this handler and therefore sees the injected context.
                 Core.JarvisWise.InjectTurnContext(
                     _xSupport,
                     _conversation,
@@ -152,10 +144,6 @@ namespace S1Jarvis.UI
         {
             try
             {
-                // Help already has its proven ΛΕΞΕΙΣ-ΚΛΕΙΔΙΑ / ΠΕΡΙΛΗΨΗ /
-                // ΛΥΣΗ completion marker and star workflow. We inject company +
-                // retrieved knowledge only, then promote the SAME SOACTION record
-                // after help_solution instead of creating a duplicate candidate.
                 Core.JarvisWise.InjectTurnContext(
                     _xSupport,
                     _helpConversation,
@@ -175,7 +163,7 @@ namespace S1Jarvis.UI
         {
             try
             {
-                for (int attempt = 0; attempt < 240; attempt++) // max ~120 sec
+                for (int attempt = 0; attempt < 240; attempt++)
                 {
                     await Task.Delay(500);
                     if (serial != _jarvisWiseMainTurnSerial) return;
@@ -203,8 +191,6 @@ namespace S1Jarvis.UI
                         out var candidate,
                         out var visibleText))
                     {
-                        // Strip machine metadata from the model history as well as
-                        // the visible DOM so it never becomes conversational noise.
                         Core.JarvisWise.CleanMarkerFromHistory(_conversation);
 
                         int soactionId = 0;
@@ -240,7 +226,7 @@ namespace S1Jarvis.UI
         {
             try
             {
-                for (int attempt = 0; attempt < 240; attempt++) // max ~120 sec
+                for (int attempt = 0; attempt < 240; attempt++)
                 {
                     await Task.Delay(500);
                     if (serial != _jarvisWiseHelpTurnSerial) return;
@@ -263,7 +249,7 @@ namespace S1Jarvis.UI
                         })()");
 
                     if (state == null || state.Value<bool>("thinking")) continue;
-                    if (!state.Value<bool>("resolved")) return; // intermediate help_reply
+                    if (!state.Value<bool>("resolved")) return;
 
                     int soactionId = state.Value<int?>("soactionId") ?? 0;
                     if (soactionId <= 0 || _jarvisWisePromotedHelpIds.Contains(soactionId)) return;
