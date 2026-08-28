@@ -10,16 +10,16 @@ namespace S1Jarvis.Core
     /// <summary>
     /// WelcomeStores-specific inventory read model.
     ///
-    /// Configuration:
-    /// 500030 / ParamValueString = comma separated participating COMPANY ids
-    /// 500031 / ParamValue or ParamValueString = master catalogue COMPANY id
+    /// Configuration (see PARAMS.md):
+    /// 500060 / ParamValueString = comma separated participating COMPANY ids
+    /// 500061 / ParamValue       = master catalogue COMPANY id
     ///
     /// The service is read-only. It does not create suppliers or orders.
     /// </summary>
     internal static class WelcomeStoresInventoryService
     {
-        internal const int StockCompaniesParamCode = 500030;
-        internal const int MasterCompanyParamCode = 500031;
+        internal const int StockCompaniesParamCode = 500060;
+        internal const int MasterCompanyParamCode = 500061;
 
         internal sealed class Config
         {
@@ -54,14 +54,13 @@ namespace S1Jarvis.Core
         {
             if (xSupport == null) throw new ArgumentNullException(nameof(xSupport));
 
-            string companyList = ReadParamString(xSupport, StockCompaniesParamCode);
+            string companyList = ReadRequiredParamString(xSupport, StockCompaniesParamCode);
             int[] companies = ParseCompanyIds(companyList);
             if (companies.Length == 0)
                 throw new Exception("Η παράμετρος " + StockCompaniesParamCode + " (WelcomeStores Stock Companies) δεν περιέχει έγκυρες εταιρίες.");
 
-            string masterRaw = ReadParamString(xSupport, MasterCompanyParamCode);
-            int masterCompany;
-            if (!int.TryParse(masterRaw, out masterCompany) || masterCompany <= 0)
+            int masterCompany = ReadRequiredParamInt(xSupport, MasterCompanyParamCode);
+            if (masterCompany <= 0)
                 throw new Exception("Η παράμετρος " + MasterCompanyParamCode + " (WelcomeStores Master Item Company) δεν περιέχει έγκυρη εταιρία.");
 
             return new Config
@@ -133,8 +132,8 @@ namespace S1Jarvis.Core
             // that store is already opened as a supplier in the logged-in company.
             // SODTYPE=12 is the supplier type for this installation.
             //
-            // Phone is intentionally left null until the exact COMPANY phone
-            // column is confirmed; do not guess a schema field in production SQL.
+            // Phone stays blank until the exact COMPANY phone field is confirmed
+            // for this installation; do not guess production schema fields.
             string sql =
                 "DECLARE @CurrentCompany INT=:1; " +
                 "DECLARE @ItemCode VARCHAR(100)=:2; " +
@@ -207,11 +206,26 @@ namespace S1Jarvis.Core
             });
         }
 
-        private static string ReadParamString(XSupport xSupport, int paramCode)
+        private static string ReadRequiredParamString(XSupport xSupport, int paramCode)
         {
             XTable table = xSupport.GetSQLDataSet(
-                "SELECT TOP 1 " +
-                "COALESCE(NULLIF(LTRIM(RTRIM(ParamValueString)),''), CONVERT(VARCHAR(200),ParamValue)) AS V " +
+                "SELECT TOP 1 LTRIM(RTRIM(ParamValueString)) AS V " +
+                "FROM cccParams " +
+                "WHERE ParamCode=:1 AND (paramsIsActive=1 OR paramsIsActive IS NULL) " +
+                "ORDER BY cccParams DESC",
+                paramCode);
+
+            if (table == null || table.Count == 0 || table.Current["V"] == DBNull.Value ||
+                string.IsNullOrWhiteSpace(Convert.ToString(table.Current["V"])))
+                throw new Exception("Δεν βρέθηκε ενεργή WelcomeStores παράμετρος " + paramCode + ".");
+
+            return Convert.ToString(table.Current["V"]).Trim();
+        }
+
+        private static int ReadRequiredParamInt(XSupport xSupport, int paramCode)
+        {
+            XTable table = xSupport.GetSQLDataSet(
+                "SELECT TOP 1 ParamValue AS V " +
                 "FROM cccParams " +
                 "WHERE ParamCode=:1 AND (paramsIsActive=1 OR paramsIsActive IS NULL) " +
                 "ORDER BY cccParams DESC",
@@ -220,7 +234,11 @@ namespace S1Jarvis.Core
             if (table == null || table.Count == 0 || table.Current["V"] == DBNull.Value)
                 throw new Exception("Δεν βρέθηκε ενεργή WelcomeStores παράμετρος " + paramCode + ".");
 
-            return Convert.ToString(table.Current["V"]).Trim();
+            int value;
+            if (!int.TryParse(Convert.ToString(table.Current["V"]), out value))
+                throw new Exception("Η WelcomeStores παράμετρος " + paramCode + " δεν είναι έγκυρος ακέραιος.");
+
+            return value;
         }
 
         private static int[] ParseCompanyIds(string raw)
