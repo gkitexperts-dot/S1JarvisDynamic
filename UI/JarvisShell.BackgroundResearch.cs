@@ -68,7 +68,29 @@ namespace S1Jarvis.UI
             if (!LooksLikeInternetResearch(raw)) return;
 
             int serial = ++_backgroundResearchSerial;
+
+            // Internet research belongs exclusively to the hidden-browser worker.
+            // The primary Main Chat WebMessageReceived handler receives the same
+            // user message as well and can start its normal AskAsync in parallel.
+            // Cancel that call immediately, then repeat briefly to close the tiny
+            // race where its CancellationTokenSource has not been created yet.
+            // _backgroundResearchClient is a different instance, so these cancels
+            // cannot stop the actual browser research.
+            _agentClient.CancelCurrent();
+            _ = CancelPrimaryResearchTurnRaceAsync(serial);
             _ = RunBackgroundResearchAsync(serial, raw);
+        }
+
+        private async Task CancelPrimaryResearchTurnRaceAsync(int serial)
+        {
+            int[] delaysMs = { 40, 100, 220, 400 };
+            for (int i = 0; i < delaysMs.Length; i++)
+            {
+                await Task.Delay(delaysMs[i]);
+                if (serial != _backgroundResearchSerial) return;
+                _agentClient.CancelCurrent();
+            }
+            DebugLog.Log("[JARVIS-RESEARCH] primary main-chat turn suppressed");
         }
 
         private static bool LooksLikeInternetResearch(string text)
