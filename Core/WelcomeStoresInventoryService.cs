@@ -84,25 +84,30 @@ namespace S1Jarvis.Core
             if (maxRows <= 0) maxRows = 30;
             if (maxRows > 100) maxRows = 100;
 
+            // Soft1 positional placeholders are bound by occurrence. Bind each
+            // argument exactly once into a SQL variable and reuse the variable.
             string sql =
+                "DECLARE @MasterCompany INT=:1; " +
+                "DECLARE @Contains VARCHAR(250)=:2; " +
+                "DECLARE @Exact VARCHAR(250)=:3; " +
+                "DECLARE @Starts VARCHAR(250)=:4; " +
                 "SELECT TOP " + maxRows + " " +
                 "M.MTRL, M.CODE, M.NAME " +
                 "FROM MTRL M " +
                 "LEFT JOIN MTREXTRA X ON X.MTRL=M.MTRL " +
-                "WHERE M.COMPANY=:1 " +
+                "WHERE M.COMPANY=@MasterCompany " +
                 "AND M.ISACTIVE=1 " +
                 "AND (X.BOOL02=1 OR X.BOOL02 IS NULL) " +
-                "AND (M.CODE LIKE :2 OR M.NAME LIKE :2) " +
-                "ORDER BY CASE WHEN M.CODE=:3 THEN 0 WHEN M.CODE LIKE :4 THEN 1 ELSE 2 END, M.CODE";
+                "AND (M.CODE LIKE @Contains OR M.NAME LIKE @Contains) " +
+                "ORDER BY CASE WHEN M.CODE=@Exact THEN 0 WHEN M.CODE LIKE @Starts THEN 1 ELSE 2 END, M.CODE";
 
-            string contains = "%" + searchText.Trim() + "%";
-            string starts = searchText.Trim() + "%";
+            string normalized = searchText.Trim();
             XTable table = xSupport.GetSQLDataSet(
                 sql,
                 config.MasterCompany,
-                contains,
-                searchText.Trim(),
-                starts);
+                "%" + normalized + "%",
+                normalized,
+                normalized + "%");
 
             return ReadRows(table, row => new ItemSearchRow
             {
@@ -131,6 +136,8 @@ namespace S1Jarvis.Core
             // Phone is intentionally left null until the exact COMPANY phone
             // column is confirmed; do not guess a schema field in production SQL.
             string sql =
+                "DECLARE @CurrentCompany INT=:1; " +
+                "DECLARE @ItemCode VARCHAR(100)=:2; " +
                 "SELECT " +
                 "A.COMP AS StoreCompany, " +
                 "COMPANY.NAME AS StoreName, " +
@@ -139,7 +146,7 @@ namespace S1Jarvis.Core
                 "A.WHOUSE, WHOUSE.NAME AS WarehouseName, " +
                 "A.CODE AS ItemCode, A.NAME AS ItemName, " +
                 "CAST(ISNULL(A.REMAIN,0)-ISNULL(A.SoReserved,0) AS DECIMAL(18,4)) AS Available, " +
-                "CASE WHEN A.COMP=:1 THEN 1 ELSE 0 END AS IsCurrentStore, " +
+                "CASE WHEN A.COMP=@CurrentCompany THEN 1 ELSE 0 END AS IsCurrentStore, " +
                 "CASE WHEN SUP.TRDR IS NULL THEN 0 ELSE 1 END AS SupplierExists, " +
                 "SUP.TRDR AS SupplierTRDR " +
                 "FROM CCCVIEWMTRDATA A " +
@@ -150,7 +157,7 @@ namespace S1Jarvis.Core
                 "OUTER APPLY (" +
                 "  SELECT TOP 1 T.TRDR " +
                 "  FROM TRDR T " +
-                "  WHERE T.COMPANY=:1 " +
+                "  WHERE T.COMPANY=@CurrentCompany " +
                 "    AND T.SODTYPE=12 " +
                 "    AND T.AFM=COMPANY.AFM " +
                 "  ORDER BY T.TRDR" +
@@ -159,7 +166,7 @@ namespace S1Jarvis.Core
                 "AND A.FISCPRD=YEAR(GETDATE()) " +
                 "AND B.ISACTIVE=1 " +
                 "AND C.BOOL02=1 " +
-                "AND A.CODE=:2 " +
+                "AND A.CODE=@ItemCode " +
                 "AND (ISNULL(A.REMAIN,0)-ISNULL(A.SoReserved,0))>2 " +
                 "ORDER BY A.COMP, A.WHOUSE, A.CODE";
 
