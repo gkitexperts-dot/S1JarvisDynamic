@@ -350,6 +350,19 @@ namespace S1Jarvis.UI
                     return;
                 }
 
+                // Deterministic local command: never send HEALTH to the LLM.
+                // It performs a fresh signed Verilic routing/provider probe and
+                // posts the current AI-agent status back into the active chat.
+                if (string.Equals(userText.Trim(), "HEALTH", StringComparison.OrdinalIgnoreCase))
+                {
+                    await RefreshProviderHealthStatusAsync(true);
+                    return;
+                }
+
+                // A healthy startup badge is no longer useful once interaction starts.
+                // Error state remains visible above the currently active chat box.
+                await HideProviderHealthIfReadyAsync();
+
                 // Δομημένη εντολή (JSON, βλ. index.html postCommand) -
                 // ξεχωρίζει από απλό chat text (που ο χρήστης πληκτρολογεί,
                 // ποτέ δεν ξεκινάει με '{') με το πεδίο "type". Αποτυχία

@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Weavers>
+  <!--
+    Legacy Costura weaving is intentionally disabled.
+
+    The outer S1Jarvis.dll is now a thin Soft1 bootstrap. The real Jarvis runtime
+    and all private managed dependencies are embedded explicitly as
+    S1Jarvis.Private.* resources by S1Jarvis.csproj and resolved at runtime by
+    JarvisRuntimeLoader. Keeping Costura active here would create a second packaging
+    mechanism and can mask or replace the deterministic runtime bundle.
+  -->
+</Weavers>

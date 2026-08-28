@@ -480,11 +480,10 @@ namespace S1Jarvis.Core
                     string anthropicJson = JsonConvert.SerializeObject(requestBody);
                     DebugLog.Log($"[iter {iteration}] isLast={isLastIteration} REQUEST: {anthropicJson}");
 
-                    var proxyResp = await CallProxyAsync(new AgentProxyRequest
-                    {
-                        AgentAccountRef = agentAccountRef,
-                        AnthropicRequestJson = anthropicJson
-                    }, token);
+                    // Main Jarvis chat goes through the signed Verilic endpoint.
+                    // Licence, routing, account and model are re-validated server-side.
+                    var proxyResp = await new S1Jarvis.Access.Verilic.VerilicAiMessagesClient()
+                        .SendAsync(xSupport, anthropicJson, token);
 
                     DebugLog.Log($"[iter {iteration}] PROXY success={proxyResp.Success} " +
                         $"credits={proxyResp.CreditsExhausted} err={proxyResp.ErrorMessage} " +

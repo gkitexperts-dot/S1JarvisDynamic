@@ -1,0 +1,12 @@
+.vs/
+bin/
+obj/
+
+*.user
+*.suo
+*.pdb
+*.cache
+
+# Visual Studio generated files
+*.VC.db
+*.VC.VC.opendb

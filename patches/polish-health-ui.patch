@@ -1,0 +1,23 @@
+diff --git a/UI/JarvisShell.ProviderHealth.cs b/UI/JarvisShell.ProviderHealth.cs
+--- a/UI/JarvisShell.ProviderHealth.cs
++++ b/UI/JarvisShell.ProviderHealth.cs
+@@ -142,7 +142,7 @@ namespace S1Jarvis.UI
+             }
+ 
+             var text = new StringBuilder();
+-            text.AppendLine("**AI HEALTH**");
++            text.AppendLine("### AI HEALTH");
+             text.AppendLine();
+             text.AppendLine("| Agent | Status | Provider | Model | Routing |");
+             text.AppendLine("|---|---|---|---|---|");
+diff --git a/UI/web/index.html b/UI/web/index.html
+--- a/UI/web/index.html
++++ b/UI/web/index.html
+@@ -7860,6 +7860,7 @@
+         '**CLEARS**: Ίδιο με το CLEAR, αλλά πρώτα αποθηκεύει τη συζήτηση σε αρχείο .md.\n' +
+         '**CREATEAADEAFM (ΑΦΜ) [CUS]**: Ελέγχει αν υπάρχει ήδη συναλλασσόμενος με αυτό το ΑΦΜ (Προμηθευτής, ή Πελάτης με CUS) - αν όχι, τον φέρνει από την ΑΑΔΕ και τον δημιουργεί.\n' +
+         '**CREATEVOUCHER (αριθμός παραστατικού)**: Ανοίγει την κουρτίνα Courier και ξεκινάει συζήτηση έκδοσης voucher για το συγκεκριμένο παραστατικό - θα σε ρωτήσω ό,τι χρειάζεται (courier, αντικαταβολή κ.λπ.) πριν εκδώσω.\n' +
++        '**HEALTH**: Κάνει live έλεγχο του Jarvis και όλων των AI sub-agents και δείχνει Status, Provider, Model και αν το routing είναι Dedicated ή Inherited.\n' +
+         '**HelpCommands**: Δείχνει αυτή τη λίστα εντολών.');
+       input.value = '';
+       autoResize();

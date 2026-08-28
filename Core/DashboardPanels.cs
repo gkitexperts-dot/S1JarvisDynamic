@@ -8,40 +8,15 @@ using Softone;
 
 namespace S1Jarvis.Core
 {
-    // ══════════════════════════════════════════════════════════════════════
-    // DashboardPanels
-    //
-    // ΝΕΟ 20/08, ρητό αίτημα χρήστη - το Commercial dashboard "δε θα καλεί
-    // καθόλου agent παρά θα τρέχει τα queries". Πριν: HandleDashboardQueryAsync
-    // έστελνε prompt στον πλήρη AI agent loop (4 tool-use round-trips, αργό -
-    // βλ. παλιά BuildDashboardPrompt). Τώρα: 20 "slots" (ParamCode
-    // 500040-500059), ΕΝΑ cccParams row ανά panel -
-    //   ParamValue        = τύπος γραφήματος (αριθμός, βλ. ChartTypeFromNumber)
-    //   ParamValueString  = SQL query, ΕΝΑ παράμετρος placeholder (:1 = η
-    //                       επιλεγμένη ημερομηνία, βλ. GetSQLDataSet(sql, date))
-    // Άδειο/λείπον ParamValueString = το panel παραλείπεται σιωπηλά -
-    // επιτρέπει σταδιακή συμπλήρωση 4->20 χωρίς rebuild/deployment.
-    //
-    // ΣΧΗΜΑ αποτελέσματος SQL: στήλη 0 = labels (π.χ. όνομα πελάτη/προϊόντος),
-    // στήλες 1..N = ένα dataset η καθεμία (label = όνομα στήλης, π.χ. "Τζίρο").
-    //
-    // Η έξοδος (BuildDashboardText) είναι το ΙΔΙΟ ```chart fenced-block
-    // κείμενο που παλιά έγραφε ο Claude - ΜΗΔΕΝ αλλαγές χρειάζονται στο
-    // index.html/frontend, το ήδη υπάρχον renderDashboardResult/
-    // parseAssistant/upgradeTablesToCharts/blocksToHtml/mountPendingCharts
-    // το δείχνουν ΑΚΡΙΒΩΣ όπως πριν.
-    // ══════════════════════════════════════════════════════════════════════
     public static class DashboardPanels
     {
         public const int FirstParamCode = 500040;
-        public const int LastParamCode = 500059; // 20 slots
+        public const int LastParamCode = 500059;
 
-        // Τίτλοι ΜΟΝΟ για τα 4 αρχικά, γνωστά panels (κληρονομιά από το
-        // παλιό AI-driven BuildDashboardPrompt) - ρητή απόφαση χρήστη "δύο
-        // τιμές ανά param" (τύπος+SQL, ΟΧΙ τρίτο param για τίτλο). Νέα
-        // panels (5-20) δείχνονται ΧΩΡΙΣ τίτλο μέχρι να αποφασιστεί
-        // μηχανισμός ονομασίας - βλ. buildChartJsConfig στο index.html,
-        // ήδη χειρίζεται graceful κενό title (κρύβει την τίτλο-γραμμή).
+        public const string AiUsageTodayMode = "__AI_USAGE_TODAY__";
+        public const string AiUsage30DaysMode = "__AI_USAGE_30D__";
+        public const string AiUsagePayloadPrefix = "@@JARVIS_AI_USAGE@@";
+
         private static readonly Dictionary<int, string> DefaultTitles = new Dictionary<int, string>
         {
             [500040] = "Top 10 πελάτες με τζίρο",
@@ -57,14 +32,22 @@ namespace S1Jarvis.Core
                 case 2: return "line";
                 case 3: return "pie";
                 case 4: return "doughnut";
-                default: return "bar"; // 1 ή οτιδήποτε άγνωστο -> ασφαλές default
+                default: return "bar";
             }
         }
 
-        // Επιστρέφει null αν ΚΑΝΕΝΑ panel δεν είναι ρυθμισμένο/είχε
-        // δεδομένα - ο caller δείχνει το ήδη υπάρχον "Δεν βρέθηκαν δεδομένα"
-        // placeholder (ίδιο μήνυμα με πριν, βλ. renderDashboardResult).
         public static string BuildDashboardText(XSupport xSupport, string date)
+        {
+            if (string.Equals(date, AiUsageTodayMode, StringComparison.Ordinal))
+                return BuildAiUsageTodayPayload(xSupport);
+
+            if (string.Equals(date, AiUsage30DaysMode, StringComparison.Ordinal))
+                return BuildAiUsage30DaysPayload(xSupport);
+
+            return BuildCommercialDashboardText(xSupport, date);
+        }
+
+        private static string BuildCommercialDashboardText(XSupport xSupport, string date)
         {
             var sb = new StringBuilder();
             int panelsRendered = 0;
@@ -76,7 +59,7 @@ namespace S1Jarvis.Core
                 if (!TryReadPanelParam(xSupport, code, out sql, out chartTypeNum))
                     continue;
                 if (string.IsNullOrWhiteSpace(sql))
-                    continue; // δεν έχει ρυθμιστεί ακόμα αυτό το slot
+                    continue;
 
                 DataTable dt;
                 try
@@ -86,15 +69,12 @@ namespace S1Jarvis.Core
                 }
                 catch (Exception ex)
                 {
-                    // ΕΝΑ σπασμένο panel (π.χ. λάθος SQL σε ένα slot) ΔΕΝ
-                    // πρέπει να ρίξει όλο το dashboard - log και συνέχισε
-                    // στο επόμενο.
                     DebugLog.Log($"[DashboardPanels] panel {code} SQL EXCEPTION: {ex.Message}");
                     continue;
                 }
 
                 if (dt.Rows.Count == 0 || dt.Columns.Count < 2)
-                    continue; // καμία πώληση/καμία στήλη δεδομένων εκείνη την ημέρα
+                    continue;
 
                 var labels = new JArray();
                 foreach (DataRow row in dt.Rows)
@@ -132,6 +112,261 @@ namespace S1Jarvis.Core
             }
 
             return panelsRendered > 0 ? sb.ToString() : null;
+        }
+
+        private static string BuildAiUsageTodayPayload(XSupport xSupport)
+        {
+            UsageIdentity identity = GetUsageIdentity(xSupport);
+
+            // Soft1 XTable metadata does not reliably expose SQL aggregate
+            // expressions (COUNT/SUM) unless the final projected expression has
+            // an explicit classic type. Without these CASTs CreateDataTable()
+            // reports field type 0 (for example "Calls") and throws.
+            const string sql = @"
+SET NOCOUNT ON;
+DECLARE @Serial varchar(30) = :1;
+DECLARE @UserId int = :2;
+DECLARE @CanSeeAll bit = CASE WHEN @UserId IN (1,262) THEN 1 ELSE 0 END;
+DECLARE @Today date = CONVERT(date, GETDATE());
+
+SELECT
+    L.CCCUSERID AS UserId,
+    ISNULL(MAX(U.NAME), 'User ' + CONVERT(varchar(20), L.CCCUSERID)) AS UserName,
+    ISNULL(L.CCCAGENT, '') AS Agent,
+    ISNULL(L.CCCPROVIDER, '') AS Provider,
+    ISNULL(L.CCCMODEL, '') AS Model,
+    CAST(COUNT(*) AS int) AS Calls,
+    CAST(SUM(ISNULL(L.CCCINTOK, 0)) AS int) AS InTokens,
+    CAST(SUM(ISNULL(L.CCCOUTTOK, 0)) AS int) AS OutTokens,
+    CAST(SUM(ISNULL(L.CCCTOTOK, 0)) AS int) AS TotalTokens,
+    CAST(SUM(CASE WHEN L.CCCSUCCESS = 1 THEN 1 ELSE 0 END) AS int) AS OkCalls,
+    CAST(SUM(CASE WHEN L.CCCSUCCESS = 1 THEN 0 ELSE 1 END) AS int) AS ErrorCalls
+FROM CCCJAILOG L
+LEFT JOIN USERS U ON U.USERS = L.CCCUSERID
+WHERE L.CCCSERIAL = @Serial
+  AND L.CCCDATETIME >= @Today
+  AND L.CCCDATETIME < DATEADD(day, 1, @Today)
+  AND (@CanSeeAll = 1 OR L.CCCUSERID = @UserId)
+GROUP BY
+    L.CCCUSERID, L.CCCAGENT, L.CCCPROVIDER, L.CCCMODEL
+ORDER BY TotalTokens DESC, Calls DESC;";
+
+            XTable result = xSupport.GetSQLDataSet(sql, identity.Serial, identity.UserId);
+            DataTable dt = result.CreateDataTable(true);
+
+            var rows = new JArray();
+            long calls = 0, inTokens = 0, outTokens = 0, totalTokens = 0, okCalls = 0, errorCalls = 0;
+
+            foreach (DataRow row in dt.Rows)
+            {
+                long rowCalls = ToInt64(row["Calls"]);
+                long rowIn = ToInt64(row["InTokens"]);
+                long rowOut = ToInt64(row["OutTokens"]);
+                long rowTotal = ToInt64(row["TotalTokens"]);
+                long rowOk = ToInt64(row["OkCalls"]);
+                long rowErr = ToInt64(row["ErrorCalls"]);
+
+                calls += rowCalls;
+                inTokens += rowIn;
+                outTokens += rowOut;
+                totalTokens += rowTotal;
+                okCalls += rowOk;
+                errorCalls += rowErr;
+
+                rows.Add(new JObject
+                {
+                    ["userId"] = ToInt32(row["UserId"]),
+                    ["userName"] = SafeString(row["UserName"]),
+                    ["agent"] = SafeString(row["Agent"]),
+                    ["provider"] = SafeString(row["Provider"]),
+                    ["model"] = SafeString(row["Model"]),
+                    ["calls"] = rowCalls,
+                    ["inTokens"] = rowIn,
+                    ["outTokens"] = rowOut,
+                    ["totalTokens"] = rowTotal,
+                    ["okCalls"] = rowOk,
+                    ["errorCalls"] = rowErr
+                });
+            }
+
+            var payload = BuildUsageEnvelope(identity, "today");
+            payload["date"] = DateTime.Today.ToString("yyyy-MM-dd");
+            payload["summary"] = new JObject
+            {
+                ["calls"] = calls,
+                ["inTokens"] = inTokens,
+                ["outTokens"] = outTokens,
+                ["totalTokens"] = totalTokens,
+                ["okCalls"] = okCalls,
+                ["errorCalls"] = errorCalls
+            };
+            payload["rows"] = rows;
+
+            return AiUsagePayloadPrefix + payload.ToString(Formatting.None);
+        }
+
+        private static string BuildAiUsage30DaysPayload(XSupport xSupport)
+        {
+            UsageIdentity identity = GetUsageIdentity(xSupport);
+
+            const string sql = @"
+SET NOCOUNT ON;
+DECLARE @Serial varchar(30) = :1;
+DECLARE @UserId int = :2;
+DECLARE @CanSeeAll bit = CASE WHEN @UserId IN (1,262) THEN 1 ELSE 0 END;
+DECLARE @Today date = CONVERT(date, GETDATE());
+DECLARE @FromDate date = DATEADD(day, -29, @Today);
+
+;WITH UsageRows AS
+(
+    SELECT
+        D.CCCDATE AS UsageDate,
+        CAST(SUM(ISNULL(D.CCCCALLS, 0)) AS int) AS Calls,
+        CAST(SUM(ISNULL(D.CCCINTOK, 0)) AS int) AS InTokens,
+        CAST(SUM(ISNULL(D.CCCOUTTOK, 0)) AS int) AS OutTokens,
+        CAST(SUM(ISNULL(D.CCCTOTOK, 0)) AS int) AS TotalTokens,
+        CAST(SUM(ISNULL(D.CCCOKCALLS, 0)) AS int) AS OkCalls,
+        CAST(SUM(ISNULL(D.CCCERRCALLS, 0)) AS int) AS ErrorCalls
+    FROM CCCJAIDAY D
+    WHERE D.CCCSERIAL = @Serial
+      AND D.CCCDATE >= @FromDate
+      AND D.CCCDATE < @Today
+      AND (@CanSeeAll = 1 OR D.CCCUSERID = @UserId)
+    GROUP BY D.CCCDATE
+
+    UNION ALL
+
+    SELECT
+        CONVERT(date, L.CCCDATETIME) AS UsageDate,
+        CAST(COUNT(*) AS int) AS Calls,
+        CAST(SUM(ISNULL(L.CCCINTOK, 0)) AS int) AS InTokens,
+        CAST(SUM(ISNULL(L.CCCOUTTOK, 0)) AS int) AS OutTokens,
+        CAST(SUM(ISNULL(L.CCCTOTOK, 0)) AS int) AS TotalTokens,
+        CAST(SUM(CASE WHEN L.CCCSUCCESS = 1 THEN 1 ELSE 0 END) AS int) AS OkCalls,
+        CAST(SUM(CASE WHEN L.CCCSUCCESS = 1 THEN 0 ELSE 1 END) AS int) AS ErrorCalls
+    FROM CCCJAILOG L
+    WHERE L.CCCSERIAL = @Serial
+      AND L.CCCDATETIME >= @FromDate
+      AND L.CCCDATETIME < DATEADD(day, 1, @Today)
+      AND (L.CCCDATETIME >= @Today OR L.CCCPROCESS = 0)
+      AND (@CanSeeAll = 1 OR L.CCCUSERID = @UserId)
+    GROUP BY CONVERT(date, L.CCCDATETIME)
+)
+SELECT
+    UsageDate,
+    CAST(SUM(Calls) AS int) AS Calls,
+    CAST(SUM(InTokens) AS int) AS InTokens,
+    CAST(SUM(OutTokens) AS int) AS OutTokens,
+    CAST(SUM(TotalTokens) AS int) AS TotalTokens,
+    CAST(SUM(OkCalls) AS int) AS OkCalls,
+    CAST(SUM(ErrorCalls) AS int) AS ErrorCalls
+FROM UsageRows
+GROUP BY UsageDate
+ORDER BY UsageDate;";
+
+            XTable result = xSupport.GetSQLDataSet(sql, identity.Serial, identity.UserId);
+            DataTable dt = result.CreateDataTable(true);
+
+            var rows = new JArray();
+            long calls = 0, inTokens = 0, outTokens = 0, totalTokens = 0, okCalls = 0, errorCalls = 0;
+
+            foreach (DataRow row in dt.Rows)
+            {
+                long rowCalls = ToInt64(row["Calls"]);
+                long rowIn = ToInt64(row["InTokens"]);
+                long rowOut = ToInt64(row["OutTokens"]);
+                long rowTotal = ToInt64(row["TotalTokens"]);
+                long rowOk = ToInt64(row["OkCalls"]);
+                long rowErr = ToInt64(row["ErrorCalls"]);
+
+                calls += rowCalls;
+                inTokens += rowIn;
+                outTokens += rowOut;
+                totalTokens += rowTotal;
+                okCalls += rowOk;
+                errorCalls += rowErr;
+
+                DateTime usageDate = Convert.ToDateTime(row["UsageDate"]);
+                rows.Add(new JObject
+                {
+                    ["date"] = usageDate.ToString("yyyy-MM-dd"),
+                    ["calls"] = rowCalls,
+                    ["inTokens"] = rowIn,
+                    ["outTokens"] = rowOut,
+                    ["totalTokens"] = rowTotal,
+                    ["okCalls"] = rowOk,
+                    ["errorCalls"] = rowErr
+                });
+            }
+
+            var payload = BuildUsageEnvelope(identity, "30d");
+            payload["fromDate"] = DateTime.Today.AddDays(-29).ToString("yyyy-MM-dd");
+            payload["toDate"] = DateTime.Today.ToString("yyyy-MM-dd");
+            payload["summary"] = new JObject
+            {
+                ["calls"] = calls,
+                ["inTokens"] = inTokens,
+                ["outTokens"] = outTokens,
+                ["totalTokens"] = totalTokens,
+                ["okCalls"] = okCalls,
+                ["errorCalls"] = errorCalls
+            };
+            payload["rows"] = rows;
+
+            return AiUsagePayloadPrefix + payload.ToString(Formatting.None);
+        }
+
+        private static JObject BuildUsageEnvelope(UsageIdentity identity, string period)
+        {
+            return new JObject
+            {
+                ["kind"] = "ai_usage",
+                ["period"] = period,
+                ["scope"] = identity.CanSeeAll ? "all" : "self",
+                ["currentUserId"] = identity.UserId
+            };
+        }
+
+        private static UsageIdentity GetUsageIdentity(XSupport xSupport)
+        {
+            if (xSupport == null || xSupport.ConnectionInfo == null)
+                throw new InvalidOperationException("Soft1 connection identity unavailable.");
+
+            var info = xSupport.ConnectionInfo;
+            string serial = info.SerialNum == null ? string.Empty : info.SerialNum.ToString();
+            int userId = info.UserId;
+
+            if (string.IsNullOrWhiteSpace(serial))
+                throw new InvalidOperationException("Soft1 serial unavailable.");
+
+            return new UsageIdentity
+            {
+                Serial = serial,
+                UserId = userId,
+                CanSeeAll = userId == 1 || userId == 262
+            };
+        }
+
+        private static long ToInt64(object value)
+        {
+            return value == null || value == DBNull.Value ? 0L : Convert.ToInt64(value);
+        }
+
+        private static int ToInt32(object value)
+        {
+            return value == null || value == DBNull.Value ? 0 : Convert.ToInt32(value);
+        }
+
+        private static string SafeString(object value)
+        {
+            return value == null || value == DBNull.Value ? string.Empty : Convert.ToString(value);
+        }
+
+        private sealed class UsageIdentity
+        {
+            public string Serial;
+            public int UserId;
+            public bool CanSeeAll;
         }
 
         private static bool TryReadPanelParam(XSupport xSupport, int paramCode, out string sql, out int chartTypeNum)
