@@ -54,20 +54,24 @@
     - [x] Product identity invariant: user always interacts with Jarvis; internal agent names are implementation details and must not leak or be invented.
   - Layer 2: Common Soft1 Knowledge / Training (also reusable by DR where applicable).
   - Layer 3: Agent-specific responsibilities / tool translation.
+    - Use the completed `JarvisToolRegistry` as the source architecture map when moving optimizer tool sets and capability routing away from duplicated hardcoded sets.
   - Layer 4: Provider adapters containing only provider/protocol-specific behavior.
   - Do not restart provider-by-provider prompt optimization before this restructuring.
 
 ## Tools Inventory
 
-- [ ] **Create an explicit tools inventory as part of the restructuring.**
-  - [x] Central machine-readable registry created in `Core/JarvisToolRegistry.cs`.
-  - [x] Initial baseline maps 30 current tools to domain, owner subAgent, allowed agents, read/write policy, confirmation requirement, UI side effect, capabilities, compact modes, durable-result behavior and fallback policy.
-  - [x] Current capability -> subAgent routing map documented.
-  - [x] Human-readable architecture map created in `TOOLS_INVENTORY.md`.
-  - [x] Metadata validation added for duplicates, missing owners/capabilities/allowed agents, write tools without confirmation policy and orphan routing capabilities.
-  - [ ] Automatically compare the registry against the real runtime tool definitions/dispatch surface and flag missing/removed/renamed tools.
-  - [ ] Review the baseline mappings and resolve intentional shared-tool/Help-mode exceptions before making the registry authoritative.
-  - [ ] Phase 2: make optimizer tool sets and capability routing derive from the registry; remove duplicated hardcoded ownership/routing data only after review.
+- [x] **Create an explicit tools and parameters inventory as part of the restructuring.**
+  - Central machine-readable tool registry created in `Core/JarvisToolRegistry.cs`.
+  - Baseline maps 30 current tools to domain, owner subAgent, allowed agents, read/write policy, confirmation requirement, UI side effect, capabilities, compact modes, durable-result behavior and fallback policy.
+  - Current capability -> subAgent routing map documented.
+  - Human-readable architecture map and comprehensive parameters inventory maintained in `TOOLS_INVENTORY.md`.
+  - Parameters audit covers active/configurable `cccParams`, including security-sensitive configuration and intentional inactive historical roadmap codes.
+  - Metadata validation covers duplicates, missing owners/capabilities/allowed agents, write tools without confirmation policy and orphan routing capabilities.
+  - Runtime reconciliation implemented in `Core/JarvisToolInventoryReconciler.cs`: it automatically discovers real static `*ToolDefinition` objects from JarvisTools / Email / Courier / Items and compares them bidirectionally with the registry.
+  - Reconciliation is executed on the existing non-blocking startup audit path and logs `[TOOL-INVENTORY] reconciliation OK ...` or exact missing/removed/renamed/duplicate diagnostics without affecting Soft1 startup.
+  - The current execution/definition surface and registry both contain the same 30-tool baseline. `Help` is intentionally a routing-only capability that reuses shared read tools and is treated as a documented warning rather than an orphan tool.
+  - Future rule: every new tool must be registered in `JarvisToolRegistry`; runtime reconciliation will flag any definition added/removed/renamed without the matching registry update.
+  - Optimizer/routing deriving directly from the registry is **not** part of Inventory closure; it belongs to the Common behavior / agent restructuring phase above.
 
 ## Soft1 threading rule
 
