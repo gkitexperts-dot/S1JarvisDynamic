@@ -13,7 +13,9 @@ namespace S1Jarvis.Core
     /// Configuration (see PARAMS.md):
     /// 500060 / ParamValueString = comma separated participating COMPANY ids
     /// 500061 / ParamValue       = master catalogue COMPANY id
-    /// 500062 / ParamValueString = per-company PURDOC SERIES mapping, e.g. 1000=120;2000=220
+    ///
+    /// Purchase order series is an explicit installation rule: SERIES=1021
+    /// for PURDOC SOSOURCE=1251 in every participating company.
     ///
     /// This service remains read-only. Supplier/order writes are delegated to
     /// the already-audited JarvisTools Soft1 object flows.
@@ -22,8 +24,8 @@ namespace S1Jarvis.Core
     {
         internal const int StockCompaniesParamCode = 500060;
         internal const int MasterCompanyParamCode = 500061;
-        internal const int PurchaseSeriesByCompanyParamCode = 500062;
         internal const int PurchaseOrderSosource = 1251;
+        internal const int PurchaseOrderSeries = 1021;
 
         internal sealed class Config
         {
@@ -87,8 +89,6 @@ namespace S1Jarvis.Core
             if (maxRows <= 0) maxRows = 30;
             if (maxRows > 100) maxRows = 100;
 
-            // Soft1 positional placeholders are bound by occurrence. Bind each
-            // argument exactly once into a SQL variable and reuse the variable.
             string sql =
                 "DECLARE @MasterCompany INT=:1; " +
                 "DECLARE @Contains VARCHAR(250)=:2; " +
@@ -132,12 +132,6 @@ namespace S1Jarvis.Core
             int currentCompany = xSupport.ConnectionInfo.CompanyId;
             string companiesSql = string.Join(",", config.StockCompanies.Select(x => x.ToString()).ToArray());
 
-            // COMPANY.AFM is the group-company identity used to resolve whether
-            // that store is already opened as a supplier in the logged-in company.
-            // SODTYPE=12 is the supplier type for this installation.
-            //
-            // Phone stays blank until the exact COMPANY phone field is confirmed
-            // for this installation; do not guess production schema fields.
             string sql =
                 "DECLARE @CurrentCompany INT=:1; " +
                 "DECLARE @ItemCode VARCHAR(100)=:2; " +
@@ -191,10 +185,6 @@ namespace S1Jarvis.Core
             });
         }
 
-        /// <summary>
-        /// Resolves the selected canonical CODE to the MTRL id of the currently
-        /// logged-in company. Cross-company MTRL ids are never assumed equal.
-        /// </summary>
         internal static int ResolveCurrentCompanyMtrl(XSupport xSupport, string itemCode)
         {
             if (xSupport == null) throw new ArgumentNullException(nameof(xSupport));
@@ -220,35 +210,23 @@ namespace S1Jarvis.Core
             return Convert.ToInt32(data.Rows[0]["MTRL"]);
         }
 
-        /// <summary>
-        /// Resolves the purchase-order SERIES for the current company from a
-        /// single installation-level mapping, e.g. "1000=120;2000=220".
-        /// The series is also validated against SERIES/SOSOURCE=1251 before use.
-        /// </summary>
         internal static int ResolvePurchaseOrderSeries(XSupport xSupport)
         {
             if (xSupport == null) throw new ArgumentNullException(nameof(xSupport));
 
-            string raw = ReadRequiredParamString(xSupport, PurchaseSeriesByCompanyParamCode);
             int company = xSupport.ConnectionInfo.CompanyId;
-            int series = ParseCompanySeries(raw, company);
-            if (series <= 0)
-                throw new Exception(
-                    "Η παράμετρος " + PurchaseSeriesByCompanyParamCode +
-                    " δεν περιέχει σειρά παραγγελίας για την εταιρία " + company + ".");
-
             XTable table = xSupport.GetSQLDataSet(
                 "SELECT TOP 1 SERIES FROM SERIES WHERE COMPANY=:1 AND SERIES=:2 AND SOSOURCE=:3",
                 company,
-                series,
+                PurchaseOrderSeries,
                 PurchaseOrderSosource);
 
             if (table == null || table.Count == 0)
                 throw new Exception(
-                    "Η σειρά " + series + " της εταιρίας " + company +
+                    "Η ρητά ορισμένη σειρά " + PurchaseOrderSeries + " της εταιρίας " + company +
                     " δεν ανήκει στο PURDOC SOSOURCE=" + PurchaseOrderSosource + ".");
 
-            return series;
+            return PurchaseOrderSeries;
         }
 
         internal static string SearchMasterItemsJson(XSupport xSupport, string searchText)
@@ -317,26 +295,6 @@ namespace S1Jarvis.Core
                     values.Add(company);
             }
             return values.ToArray();
-        }
-
-        private static int ParseCompanySeries(string raw, int company)
-        {
-            if (string.IsNullOrWhiteSpace(raw) || company <= 0) return 0;
-
-            foreach (string entry in raw.Split(new[] { ';', ',' }, StringSplitOptions.RemoveEmptyEntries))
-            {
-                string[] pair = entry.Split(new[] { '=' }, 2);
-                if (pair.Length != 2) continue;
-
-                int mappedCompany;
-                int mappedSeries;
-                if (int.TryParse(pair[0].Trim(), out mappedCompany) &&
-                    int.TryParse(pair[1].Trim(), out mappedSeries) &&
-                    mappedCompany == company && mappedSeries > 0)
-                    return mappedSeries;
-            }
-
-            return 0;
         }
 
         private static List<T> ReadRows<T>(XTable table, Func<DataRow, T> map)
