@@ -6,8 +6,8 @@ namespace S1Jarvis.SoftoneIntegration
     // Soft1 may load the same S1Jarvis.dll more than once from different
     // deployment/cache locations. Static fields are isolated per loaded
     // assembly instance, while AppDomain data is shared inside the same
-    // Soft1 process. Keep both paths so the normal single-load On-Premise
-    // case stays fast and duplicate-load environments remain safe.
+    // Soft1 process. Keep both paths so the normal single-load case stays
+    // fast and duplicate-load environments remain safe.
     public class S1Init : TXCode
     {
         public override void Initialize()
