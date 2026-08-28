@@ -58,6 +58,28 @@
   - Layer 4: Provider adapters containing only provider/protocol-specific behavior.
   - Do not restart provider-by-provider prompt optimization before this restructuring.
 
+### Orchestration / routing checkpoint — 28/08/2026
+
+- [x] Tool Registry / Task Registry architecture established: `Task -> Capability -> Owner Agent -> Allowed Tools`.
+- [x] Cross-registry reconciliation audit added (`JarvisTaskRegistryAudit`).
+- [x] Granular capability owner resolution added so capabilities such as `Export`, `EmailWrite`, `CalendarWrite`, `CourierRead` and `CourierWrite` resolve from the real Tool Registry instead of requiring a second hardcoded routing table.
+- [x] Initial atomic-task cleanup started:
+  - `ManageCalendar` split into `ReadCalendar` and `CreateCalendarEvent`.
+  - email write flow split into `SendEmail` and `ReplyEmail`.
+- [x] Semantic planner is gated by registry consistency: it must not build a planner catalog when reconciliation finds invalid metadata.
+- [x] Task-registry reconciliation is wired into the existing non-blocking startup audit/logging path.
+- [ ] **Calendar / Teams capability extensions before resuming routing work.**
+  - Extend `create_outlook_event` with Teams meeting support (`isOnlineMeeting=true`, `onlineMeetingProvider=teamsForBusiness`) and return the generated Teams join URL when available.
+  - Add a new calendar-response tool/task for meeting invitations so Jarvis can `accept`, `tentative` or `decline` a resolved Outlook/Teams invitation after explicit user confirmation.
+  - Keep both capabilities under the existing Echo / CalendarWrite ownership model; do not create a separate Teams agent.
+- [ ] **Resume routing optimization after the Calendar / Teams extensions above.**
+  - Audit `RequiredInputs`, `OptionalInputs` and `Produces` for every atomic task against the real tool schemas.
+  - Normalize any remaining task/tool capability mismatches.
+  - Verify startup log reaches clean Task Registry reconciliation with zero blocking mismatches.
+  - Connect `JarvisSemanticPlanning` to one isolated provider planner call: prompt -> strict JSON plan -> validation -> `JarvisPlan`, with no live tool execution yet.
+  - Test single-task, dependent multi-task, parallel multi-task, missing-input and hallucinated-task rejection cases.
+  - Only after isolated planner UAT, integrate registry-driven orchestration into Main Chat and retire duplicated legacy routing gradually.
+
 ## Tools Inventory
 
 - [x] **Create an explicit tools and parameters inventory as part of the restructuring.**
