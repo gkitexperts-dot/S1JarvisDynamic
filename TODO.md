@@ -78,3 +78,17 @@
   - File selection must return only the selected paths/metadata into the DR workflow; subsequent file reading/parsing remains Jarvis-owned.
   - Add debug checkpoints around file-selection lifecycle: request, picker-open, picker-return/cancel, selected paths accepted, file-read start/end.
   - Any UI-side failure must remain contained inside Jarvis and must never propagate as an unhandled exception to the Soft1 host process.
+
+## Architecture consolidation — single On-Premise + Cloud/Azure release
+
+- [ ] **Consolidate the validated On-Premise and Cloud/Azure implementations into one common S1 Jarvis release.**
+  - Compare `S1JarvisDynamic` and `JarvisAzureDynamic` and explicitly document every runtime/build difference before merging behavior.
+  - Separate genuinely Azure-specific compatibility work from improvements that belong in the common runtime.
+  - Bring the validated shared `XSupport` / AppDomain runtime-context handling into the common architecture without regressing the stable On-Premise installation.
+  - Remove environment-specific paths and assumptions from product code; resolve Soft1 runtime/dependency locations safely for each supported deployment model.
+  - Define one stable strategy for Soft1 Cache/Azure duplicate-assembly loading and runtime identity.
+  - Keep licensing, AI routing, usage logging, WebView2 bootstrap and tool initialization behavior common across deployment models.
+  - Consolidate project/build configuration so one source baseline produces the supported release artifact.
+  - Add a repeatable regression checklist covering both On-Premise and Cloud/Azure before declaring any future build stable.
+  - Preserve the currently validated repositories/builds until the consolidated version has passed full end-to-end validation in both environments.
+  - **Definition of Done:** one common repository/source baseline, one build and one S1 Jarvis DLL can be installed and run end-to-end on both On-Premise and Cloud/Azure Soft1 without a deployment-specific fork or runtime binary.
