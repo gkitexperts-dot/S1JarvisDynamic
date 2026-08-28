@@ -125,3 +125,21 @@
   - Single-load On-Premise continues to use the fast static value; duplicate assembly loads can recover the same `XSupport` through AppDomain shared data.
   - No Azure-specific filesystem path or deployment assumption is introduced into the common hook.
   - Final smoke test after pull/build: open Jarvis in the On-Premise Soft1 installation and confirm normal startup and core interaction.
+
+## WelcomeStores Stores Inventory — custom Azure workflow
+
+- [x] Custom feature isolated on branch `feature/welcomestores-stock` and opened from exact Main Chat command `Stock`.
+- [x] Parameterized configuration registered in `PARAMS.md`:
+  - `500060` = participating stock companies (`ParamValueString`).
+  - `500061` = master item company (`ParamValue`).
+  - `500062` = per-company PURDOC SERIES mapping (`ParamValueString`, required only for order creation).
+- [x] Master item search and multi-company stock lookup implemented with `CCCVIEWMTRDATA`, available = `REMAIN - SoReserved`, supplier resolution by `COMPANY.AFM` -> current-company `TRDR.AFM`, `SODTYPE=12`.
+- [x] Supplier status/current-store UI implemented. Missing supplier action uses existing AADE + `ExecuteCreateTraderFromAade` path with preview and explicit confirmation, followed by live refresh.
+- [x] Existing `create_order` audited and reused for purchase orders: `SOSOURCE=1251` -> `PURDOC`, line table `ITELINES`, supports `TRDR`, `SERIES`, `MTRL`, `QTY1`, optional `PRICE`.
+- [x] Purchase-order dialog implemented: agreed wholesale price exists only inside the dialog and is never displayed in the stock list.
+- [x] Purchase write path revalidates live stock, supplier, local current-company `MTRL` by canonical item CODE, and configured SERIES before calling `ExecuteCreateOrder`.
+- [ ] **Runtime/UAT WelcomeStores Stock.**
+  - Create/populate `500062` with real `COMPANY=SERIES` values and set active.
+  - Confirm actual `COMPANY` phone field (currently intentionally blank in the stock service).
+  - Pull/build branch and test: `Stock` -> item search -> stock list -> supplier status -> Άνοιγμα supplier -> quantity -> order dialog -> price -> PURDOC creation/open.
+  - After successful UAT, consider phase-2 query/cardinality/performance tuning and optional auto-chain `Παραγγελία` -> supplier creation when supplier is missing.
