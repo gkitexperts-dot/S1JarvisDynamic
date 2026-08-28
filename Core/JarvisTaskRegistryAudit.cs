@@ -15,6 +15,7 @@ namespace S1Jarvis.Core
         {
             var issues = new List<string>();
             issues.AddRange(JarvisTaskRegistry.ValidateAgainstToolRegistry());
+            issues.AddRange(JarvisTaskContractAudit.Validate());
 
             foreach (JarvisTaskDescriptor task in JarvisTaskRegistry.AllTasks)
             {
