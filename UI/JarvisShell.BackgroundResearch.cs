@@ -119,6 +119,7 @@ namespace S1Jarvis.UI
                 if (serial != _backgroundResearchSerial) return;
 
                 _backgroundResearchConversation.Clear();
+                SeedBackgroundResearchHistory(userText);
                 string researchPrompt = BuildBackgroundResearchPrompt(userText, companyContextResearch);
 
                 string answer = await _backgroundResearchClient.AskAsync(
@@ -209,6 +210,31 @@ namespace S1Jarvis.UI
             {
                 if (!completed && serial == _backgroundResearchSerial)
                     PostJarvisActivity("end", "main");
+            }
+        }
+
+        private void SeedBackgroundResearchHistory(string currentUserText)
+        {
+            if (_conversation == null || _conversation.Count == 0) return;
+
+            int start = Math.Max(0, _conversation.Count - 8);
+            for (int i = start; i < _conversation.Count; i++)
+            {
+                JObject msg = _conversation[i];
+                if (msg == null) continue;
+                string role = msg.Value<string>("role");
+                if (role != "user" && role != "assistant") continue;
+                string content = msg.Value<string>("content") ?? string.Empty;
+                if (string.IsNullOrWhiteSpace(content)) continue;
+                if (content.StartsWith("[JARVIS_", StringComparison.Ordinal)) continue;
+                if (role == "user" && string.Equals(content.Trim(), (currentUserText ?? string.Empty).Trim(), StringComparison.Ordinal))
+                    continue;
+
+                _backgroundResearchConversation.Add(new JObject
+                {
+                    ["role"] = role,
+                    ["content"] = content
+                });
             }
         }
 
