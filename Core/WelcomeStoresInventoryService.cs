@@ -8,18 +8,22 @@ using Softone;
 namespace S1Jarvis.Core
 {
     /// <summary>
-    /// WelcomeStores-specific inventory read model.
+    /// WelcomeStores-specific inventory/configuration read model.
     ///
     /// Configuration (see PARAMS.md):
     /// 500060 / ParamValueString = comma separated participating COMPANY ids
     /// 500061 / ParamValue       = master catalogue COMPANY id
+    /// 500062 / ParamValueString = per-company PURDOC SERIES mapping, e.g. 1000=120;2000=220
     ///
-    /// The service is read-only. It does not create suppliers or orders.
+    /// This service remains read-only. Supplier/order writes are delegated to
+    /// the already-audited JarvisTools Soft1 object flows.
     /// </summary>
     internal static class WelcomeStoresInventoryService
     {
         internal const int StockCompaniesParamCode = 500060;
         internal const int MasterCompanyParamCode = 500061;
+        internal const int PurchaseSeriesByCompanyParamCode = 500062;
+        internal const int PurchaseOrderSosource = 1251;
 
         internal sealed class Config
         {
@@ -187,6 +191,66 @@ namespace S1Jarvis.Core
             });
         }
 
+        /// <summary>
+        /// Resolves the selected canonical CODE to the MTRL id of the currently
+        /// logged-in company. Cross-company MTRL ids are never assumed equal.
+        /// </summary>
+        internal static int ResolveCurrentCompanyMtrl(XSupport xSupport, string itemCode)
+        {
+            if (xSupport == null) throw new ArgumentNullException(nameof(xSupport));
+            if (string.IsNullOrWhiteSpace(itemCode))
+                throw new Exception("Λείπει ο κωδικός είδους για την παραγγελία.");
+
+            XTable table = xSupport.GetSQLDataSet(
+                "SELECT TOP 2 MTRL FROM MTRL WHERE COMPANY=:1 AND CODE=:2 AND ISACTIVE=1 ORDER BY MTRL",
+                xSupport.ConnectionInfo.CompanyId,
+                itemCode.Trim());
+
+            if (table == null || table.Count == 0)
+                throw new Exception(
+                    "Το είδος " + itemCode.Trim() + " δεν είναι ανοιγμένο στην τρέχουσα εταιρία. " +
+                    "Δεν μπορεί να δημιουργηθεί PURDOC μέχρι να υπάρχει τοπικό MTRL.");
+
+            DataTable data = table.CreateDataTable(true);
+            if (data.Rows.Count > 1)
+                throw new Exception(
+                    "Βρέθηκαν περισσότερα από ένα ενεργά είδη με κωδικό " + itemCode.Trim() +
+                    " στην τρέχουσα εταιρία. Η παραγγελία σταμάτησε για αποφυγή λάθους MTRL.");
+
+            return Convert.ToInt32(data.Rows[0]["MTRL"]);
+        }
+
+        /// <summary>
+        /// Resolves the purchase-order SERIES for the current company from a
+        /// single installation-level mapping, e.g. "1000=120;2000=220".
+        /// The series is also validated against SERIES/SOSOURCE=1251 before use.
+        /// </summary>
+        internal static int ResolvePurchaseOrderSeries(XSupport xSupport)
+        {
+            if (xSupport == null) throw new ArgumentNullException(nameof(xSupport));
+
+            string raw = ReadRequiredParamString(xSupport, PurchaseSeriesByCompanyParamCode);
+            int company = xSupport.ConnectionInfo.CompanyId;
+            int series = ParseCompanySeries(raw, company);
+            if (series <= 0)
+                throw new Exception(
+                    "Η παράμετρος " + PurchaseSeriesByCompanyParamCode +
+                    " δεν περιέχει σειρά παραγγελίας για την εταιρία " + company + ".");
+
+            XTable table = xSupport.GetSQLDataSet(
+                "SELECT TOP 1 SERIES FROM SERIES WHERE COMPANY=:1 AND SERIES=:2 AND SOSOURCE=:3",
+                company,
+                series,
+                PurchaseOrderSosource);
+
+            if (table == null || table.Count == 0)
+                throw new Exception(
+                    "Η σειρά " + series + " της εταιρίας " + company +
+                    " δεν ανήκει στο PURDOC SOSOURCE=" + PurchaseOrderSosource + ".");
+
+            return series;
+        }
+
         internal static string SearchMasterItemsJson(XSupport xSupport, string searchText)
         {
             return JsonConvert.SerializeObject(new
@@ -253,6 +317,26 @@ namespace S1Jarvis.Core
                     values.Add(company);
             }
             return values.ToArray();
+        }
+
+        private static int ParseCompanySeries(string raw, int company)
+        {
+            if (string.IsNullOrWhiteSpace(raw) || company <= 0) return 0;
+
+            foreach (string entry in raw.Split(new[] { ';', ',' }, StringSplitOptions.RemoveEmptyEntries))
+            {
+                string[] pair = entry.Split(new[] { '=' }, 2);
+                if (pair.Length != 2) continue;
+
+                int mappedCompany;
+                int mappedSeries;
+                if (int.TryParse(pair[0].Trim(), out mappedCompany) &&
+                    int.TryParse(pair[1].Trim(), out mappedSeries) &&
+                    mappedCompany == company && mappedSeries > 0)
+                    return mappedSeries;
+            }
+
+            return 0;
         }
 
         private static List<T> ReadRows<T>(XTable table, Func<DataRow, T> map)
