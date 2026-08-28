@@ -30,14 +30,14 @@
 
 ## Dashboard AI usage analytics
 
-- [ ] **Runtime/UAT verify the new deterministic AI Usage Dashboard pages.**
+- [x] **Runtime/UAT verify the new deterministic AI Usage Dashboard pages.**
   - `AI Usage · Σήμερα`: summary cards plus detailed breakdown by User / Agent / Provider / Model from `CCCJAILOG`.
   - `AI Usage · 30 ημέρες`: daily summary/trend using closed days from `CCCJAIDAY` plus today's raw `CCCJAILOG` rows (and any older unprocessed rows as fallback).
   - Access is enforced in the SQL/data layer:
     - Soft1 users `1` and `262` -> usage for all users of the current Soft1 serial.
     - every other Soft1 user -> only their own `CCCUSERID` rows.
   - Both views are deterministic and make no AI/provider call.
-  - Verify on one admin user (`1` or `262`) and one normal user before closing this item.
+  - Implemented and accepted in runtime/UAT before 28/08/2026.
 
 ## Provider-neutral UI behavior audit
 
@@ -51,6 +51,7 @@
 
 - [ ] **Next optimization phase: restructure common behavior and knowledge before doing any further optimizer tuning.**
   - Layer 1: Common Jarvis Behavior.
+    - [x] Product identity invariant: user always interacts with Jarvis; internal agent names are implementation details and must not leak or be invented.
   - Layer 2: Common Soft1 Knowledge / Training (also reusable by DR where applicable).
   - Layer 3: Agent-specific responsibilities / tool translation.
   - Layer 4: Provider adapters containing only provider/protocol-specific behavior.
@@ -59,14 +60,14 @@
 ## Tools Inventory
 
 - [ ] **Create an explicit tools inventory as part of the restructuring.**
-  - Tool name and owner domain/agent.
-  - Read vs write/action.
-  - Required parameters and confirmation requirements.
-  - Result shape and UI side effects.
-  - Durable-context requirements and compact modes that need the tool.
-  - Common vs agent-specific classification.
-  - Provider/protocol considerations.
-  - Failure/fallback behavior.
+  - [x] Central machine-readable registry created in `Core/JarvisToolRegistry.cs`.
+  - [x] Initial baseline maps 30 current tools to domain, owner subAgent, allowed agents, read/write policy, confirmation requirement, UI side effect, capabilities, compact modes, durable-result behavior and fallback policy.
+  - [x] Current capability -> subAgent routing map documented.
+  - [x] Human-readable architecture map created in `TOOLS_INVENTORY.md`.
+  - [x] Metadata validation added for duplicates, missing owners/capabilities/allowed agents, write tools without confirmation policy and orphan routing capabilities.
+  - [ ] Automatically compare the registry against the real runtime tool definitions/dispatch surface and flag missing/removed/renamed tools.
+  - [ ] Review the baseline mappings and resolve intentional shared-tool/Help-mode exceptions before making the registry authoritative.
+  - [ ] Phase 2: make optimizer tool sets and capability routing derive from the registry; remove duplicated hardcoded ownership/routing data only after review.
 
 ## Soft1 threading rule
 
