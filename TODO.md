@@ -2,16 +2,11 @@
 
 ## Current company awareness
 
-- [ ] **Resolve the active Soft1 company dynamically and remove Jetoil assumptions from Jarvis context.**
-  - Source of truth for the active company id: `XSupport.ConnectionInfo.CompanyId`.
-  - Load the corresponding row from Soft1 `COMPANY` using the active `COMPANY` id.
-  - Build a small runtime company context from the actual `COMPANY` row (company code/name and other safe business identity fields that exist in the installation).
-  - Inject that context into the Jarvis system prompt / agent context so the assistant knows which company the operator is currently working in.
-  - Never hardcode `Jetoil` as the current company. Jetoil-specific business knowledge must only be applied when the active company record actually identifies Jetoil or when explicitly configured as company-specific admin context.
-  - Re-resolve when the Soft1 company/session changes; do not cache one company identity for the lifetime of the DLL if the operator can switch company without restarting Soft1.
-  - Fail safe: if `COMPANY` cannot be read, keep only the numeric `CompanyId` and do not guess the company name.
-  - Keep the lookup synchronous on the Soft1 UI/integration thread; no `Task.Run` around `XSupport`, `GetSQLDataSet`, `XModule`, or `XTable`.
-  - Add debug evidence such as `[COMPANY-CONTEXT] companyId=... name=...` without logging sensitive fields.
+- [x] **Resolve the active Soft1 company dynamically and remove Jetoil assumptions from Jarvis context.**
+  - Source of truth is `XSupport.ConnectionInfo.CompanyId` and the active `COMPANY` row.
+  - Runtime company identity/context is injected dynamically; Jetoil is not assumed as the current company.
+  - Company-specific Jarvis Wise context and admin-controlled context maintenance are implemented and runtime/UAT verified 28/08/2026.
+  - Fail-safe behavior keeps the runtime from guessing company identity when Soft1 company data cannot be read.
 
 ## AI usage aggregation stability
 
@@ -91,16 +86,15 @@
   - Add debug checkpoints around file-selection lifecycle: request, picker-open, picker-return/cancel, selected paths accepted, file-read start/end.
   - Any UI-side failure must remain contained inside Jarvis and must never propagate as an unhandled exception to the Soft1 host process.
 
-## Architecture consolidation — single On-Premise + Cloud/Azure release
+## Architecture consolidation — common Soft1 hook for On-Premise + Cloud/Azure
 
-- [ ] **Consolidate the validated On-Premise and Cloud/Azure implementations into one common S1 Jarvis release.**
-  - Compare `S1JarvisDynamic` and `JarvisAzureDynamic` and explicitly document every runtime/build difference before merging behavior.
-  - Separate genuinely Azure-specific compatibility work from improvements that belong in the common runtime.
-  - Bring the validated shared `XSupport` / AppDomain runtime-context handling into the common architecture without regressing the stable On-Premise installation.
-  - Remove environment-specific paths and assumptions from product code; resolve Soft1 runtime/dependency locations safely for each supported deployment model.
-  - Define one stable strategy for Soft1 Cache/Azure duplicate-assembly loading and runtime identity.
-  - Keep licensing, AI routing, usage logging, WebView2 bootstrap and tool initialization behavior common across deployment models.
-  - Consolidate project/build configuration so one source baseline produces the supported release artifact.
-  - Add a repeatable regression checklist covering both On-Premise and Cloud/Azure before declaring any future build stable.
-  - Preserve the currently validated repositories/builds until the consolidated version has passed full end-to-end validation in both environments.
-  - **Definition of Done:** one common repository/source baseline, one build and one S1 Jarvis DLL can be installed and run end-to-end on both On-Premise and Cloud/Azure Soft1 without a deployment-specific fork or runtime binary.
+- [x] **Consolidate the Soft1 bootstrap/hook strategy used by On-Premise and Cloud/Azure.**
+  - Scope agreed 28/08/2026: the critical consolidation point is the Soft1 hook/bootstrap path, not a broad rewrite of the already-aligned runtime.
+  - `JarvisRuntimeLoader` and `JarvisObject` were already identical between `S1JarvisDynamic` and `JarvisAzureDynamic`.
+  - The only material hook difference was `XSupport` handoff: plain assembly-static storage On-Premise vs static + shared AppDomain fallback in Azure.
+  - The Azure-safe pattern is applicable to On-Premise with no behavioral downside and is now the common implementation.
+  - Common key is deployment-neutral: `S1Jarvis.Shared.XSupport`.
+  - `S1Init.Initialize()` now calls `JarvisCore.SetXSupport(XSupport)` and `JarvisHostForm` resolves through `JarvisCore.GetXSupport()`.
+  - Single-load On-Premise continues to use the fast static value; duplicate assembly loads can recover the same `XSupport` through AppDomain shared data.
+  - No Azure-specific filesystem path or deployment assumption is introduced into the common hook.
+  - Final smoke test after pull/build: open Jarvis in the On-Premise Soft1 installation and confirm normal startup and core interaction.
