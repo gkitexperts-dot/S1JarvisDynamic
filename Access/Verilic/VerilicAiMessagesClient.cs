@@ -141,6 +141,14 @@ namespace S1Jarvis.Access.Verilic
                 agentName,
                 providerRequestJson);
 
+            // Product identity is a boundary invariant, independent of whichever
+            // internal execution role was selected. Apply it AFTER optimization so
+            // compact role prompts can never redefine Atlas/Forge/etc. as the visible
+            // assistant identity.
+            providerRequestJson = ApplyProductIdentityPolicy(
+                agentName,
+                providerRequestJson);
+
             // Local-only correlation id for Soft1 usage telemetry. It contains
             // no prompt/response content and is not sent to the provider.
             string usageRequestId = Guid.NewGuid().ToString("N");
@@ -326,6 +334,84 @@ namespace S1Jarvis.Access.Verilic
                 {
                     DebugLog.Log("[COMPANY-CONTEXT] normalization skipped: " + ex.Message);
                 }
+                catch { }
+                return providerRequestJson;
+            }
+        }
+
+        private static string ApplyProductIdentityPolicy(
+            string internalAgentName,
+            string providerRequestJson)
+        {
+            if (string.IsNullOrWhiteSpace(providerRequestJson))
+                return providerRequestJson;
+
+            try
+            {
+                JObject request = JObject.Parse(providerRequestJson);
+                string role = string.IsNullOrWhiteSpace(internalAgentName)
+                    ? "internal"
+                    : internalAgentName.Trim();
+
+                const string identityRule =
+                    "PRODUCT IDENTITY — AUTHORITATIVE: Είσαι ο Jarvis, ο ψηφιακός βοηθός μέσα στο Soft1. " +
+                    "Ο χειριστής μιλά πάντα με τον Jarvis. Τα ονόματα Atlas, Forge, Compass, Echo, Sprint, Scout και Sage είναι μόνο εσωτερικοί execution roles και ΔΕΝ αποτελούν ξεχωριστές ορατές ταυτότητες. " +
+                    "Μην αυτοσυστήνεσαι ποτέ ως εσωτερικός agent και μην λες ότι είσαι ο Atlas/Forge/Compass/Echo/Sprint/Scout/Sage. " +
+                    "Αν ο χειριστής ρωτήσει ποιος είσαι ή πώς σε λένε, απάντησε ότι είσαι ο Jarvis. " +
+                    "Αν ρωτήσει για εσωτερικούς agents/αρχιτεκτονική, μην επινοήσεις ονόματα, πλήθος ή ρόλους· εξήγησε μόνο ότι ο Jarvis χρησιμοποιεί εσωτερική δρομολόγηση σε εξειδικευμένες δυνατότητες και ότι αυτό είναι implementation detail.";
+
+                JArray blocks = request["system"] as JArray;
+                if (blocks == null)
+                {
+                    string existing = request["system"] == null
+                        ? string.Empty
+                        : request["system"].ToString();
+                    blocks = new JArray();
+                    if (!string.IsNullOrWhiteSpace(existing))
+                    {
+                        blocks.Add(new JObject
+                        {
+                            ["type"] = "text",
+                            ["text"] = existing
+                        });
+                    }
+                    request["system"] = blocks;
+                }
+
+                // Remove any compact prompt phrasing that explicitly promotes the
+                // internal role to visible identity. Role remains available through
+                // AgentName for routing/telemetry, not as assistant persona.
+                foreach (JObject block in blocks.OfType<JObject>())
+                {
+                    JToken textToken = block["text"];
+                    if (textToken == null || textToken.Type != JTokenType.String)
+                        continue;
+
+                    string text = textToken.ToString();
+                    if (!string.Equals(role, "Jarvis", StringComparison.OrdinalIgnoreCase))
+                    {
+                        text = text.Replace(
+                            "Είσαι ο " + role + " του Jarvis μέσα στο Soft1.",
+                            "Είσαι ο Jarvis μέσα στο Soft1.");
+                        text = text.Replace(
+                            "Είσαι ο " + role + ",",
+                            "Είσαι ο Jarvis,");
+                    }
+                    block["text"] = text;
+                }
+
+                blocks.Insert(0, new JObject
+                {
+                    ["type"] = "text",
+                    ["text"] = identityRule,
+                    ["cache_control"] = new JObject { ["type"] = "ephemeral" }
+                });
+
+                return request.ToString(Formatting.None);
+            }
+            catch (Exception ex)
+            {
+                try { DebugLog.Log("[JARVIS-IDENTITY] provider policy skipped: " + ex.Message); }
                 catch { }
                 return providerRequestJson;
             }
