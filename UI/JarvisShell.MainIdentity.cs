@@ -65,30 +65,17 @@ namespace S1Jarvis.UI
 
             int serial = ++_mainIdentitySerial;
 
-            // The normal Main Chat router is authoritative for routing and can still select
-            // Atlas/another specialist. We do not race it with a second visible reply.
-            // Ask cancellation to stop unnecessary provider work when possible, but always
-            // wait until the primary UI turn has actually finished before writing the
-            // product-level identity. This prevents a late routed-agent response from
-            // overwriting the Jarvis identity response.
-            _agentClient.CancelCurrent();
+            // Do NOT cancel the primary turn. Cancellation is visible to the user as
+            // "Σταμάτησα" before the product-identity answer. Instead, suppress the
+            // internal agent response in the Main Chat DOM, let the normal routed turn
+            // finish, then replace that completed assistant turn with Jarvis identity.
+            PostJarvisActivity("start", "main", "Επεξεργασία…", true);
             _ = CompleteMainIdentityTurnAsync(serial);
         }
 
         private async Task CompleteMainIdentityTurnAsync(int serial)
         {
-            int[] cancelDelaysMs = { 40, 100, 220, 400 };
-            for (int i = 0; i < cancelDelaysMs.Length; i++)
-            {
-                await Task.Delay(cancelDelaysMs[i]);
-                if (serial != _mainIdentitySerial) return;
-                _agentClient.CancelCurrent();
-            }
-
-            // Cancellation is best-effort. Some routed/provider calls may already be in flight
-            // and can still complete. Wait for the Main Chat thinking state to finish, then
-            // replace the final assistant surface/history deterministically.
-            await WaitForMainIdentityPrimaryTurnAsync(serial);
+            await WaitForSuppressedPrimaryIdentityResponseAsync(serial);
             if (serial != _mainIdentitySerial) return;
 
             const string answer =
@@ -98,32 +85,37 @@ namespace S1Jarvis.UI
 
             ReplaceLastAssistantHistory(_conversation, answer);
             PostJarvisActivity("complete", "main", answer);
-            DebugLog.Log("[JARVIS-IDENTITY] product identity response completed after primary turn");
+            DebugLog.Log("[JARVIS-IDENTITY] product identity response completed without cancellation");
         }
 
-        private async Task WaitForMainIdentityPrimaryTurnAsync(int serial)
+        private async Task WaitForSuppressedPrimaryIdentityResponseAsync(int serial)
         {
             if (webView.CoreWebView2 == null) return;
 
-            for (int i = 0; i < 240; i++)
+            // PostJarvisActivity(suppressAssistant:true) marks the routed agent's
+            // assistant bubble with data-jarvis-suppressed as soon as it appears.
+            // Waiting for that marker is more reliable than racing the orb/thinking
+            // state because the primary handler and this companion receive the same
+            // WebMessageReceived event independently.
+            for (int i = 0; i < 400; i++)
             {
                 if (serial != _mainIdentitySerial) return;
                 try
                 {
                     string raw = await webView.CoreWebView2.ExecuteScriptAsync(
-                        "(()=>{const o=document.getElementById('orbWrap');return !!(o&&o.classList.contains('thinking'));})()");
-                    bool thinking;
-                    if ((bool.TryParse(raw, out thinking) && !thinking) || raw == "false")
-                    {
-                        // Give the normal renderer one event-loop turn to commit its final bubble.
-                        await Task.Delay(75);
+                        "(()=>{const h=document.getElementById('transcript');return !!(h&&h.querySelector('[data-jarvis-suppressed=\\\"1\\\"]'));})()");
+                    bool found;
+                    if (bool.TryParse(raw, out found) && found)
                         return;
-                    }
+                    if (raw == "true")
+                        return;
                 }
                 catch { }
 
                 await Task.Delay(250);
             }
+
+            DebugLog.Log("[JARVIS-IDENTITY] timed out waiting for routed identity response; completing product identity");
         }
 
         private static bool LooksLikeIdentityQuestion(string text)
@@ -133,13 +125,10 @@ namespace S1Jarvis.UI
 
             return
                 s == "ποιος εισαι" || s == "ποιος είσαι" ||
-                s == "ποιος εισαι?" || s == "ποιος είσαι?" ||
                 s == "τι εισαι" || s == "τι είσαι" ||
-                s == "τι εισαι?" || s == "τι είσαι?" ||
                 s.Contains("πως σε λενε") || s.Contains("πώς σε λένε") ||
                 s.Contains("ποιο ειναι το ονομα σου") || s.Contains("ποιο είναι το όνομά σου") ||
-                s == "who are you" || s == "who are you?" ||
-                s == "what are you" || s == "what are you?" ||
+                s == "who are you" || s == "what are you" ||
                 s.Contains("what is your name") || s.Contains("what's your name");
         }
     }
