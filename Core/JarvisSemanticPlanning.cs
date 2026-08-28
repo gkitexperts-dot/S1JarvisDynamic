@@ -27,12 +27,22 @@ namespace S1Jarvis.Core
                 "Κάθε task πρέπει να έχει μοναδικό id, taskType, intentFragment, inputs και dependsOn. " +
                 "Το dependsOn περιέχει ids άλλων tasks του ίδιου plan. " +
                 "Βάλε input μόνο όταν προκύπτει καθαρά από το αίτημα. Μην μαντεύεις missing business data. " +
-                "Για απλό αίτημα χρησιμοποίησε ένα task. Για σύνθετο αίτημα χρησιμοποίησε όσα atomic tasks χρειάζονται, χωρίς καρτεσιανούς συνδυασμούς. " +
+                "Μην ενώνεις ανεξάρτητο read και write intent στο ίδιο task. Για απλό αίτημα χρησιμοποίησε ένα task. " +
+                "Για σύνθετο αίτημα χρησιμοποίησε όσα atomic tasks χρειάζονται, χωρίς καρτεσιανούς συνδυασμούς. " +
+                "Όπου το δεύτερο task χρειάζεται αποτέλεσμα του πρώτου, βάλε dependsOn. Ανεξάρτητα tasks δεν πρέπει να έχουν ψεύτικη dependency. " +
                 "Schema: {\"tasks\":[{\"id\":\"t1\",\"taskType\":\"...\",\"intentFragment\":\"...\",\"inputs\":{\"name\":value},\"dependsOn\":[\"t0\"]}]}";
         }
 
         internal static string BuildTaskCatalogJson()
         {
+            string[] auditIssues = JarvisTaskRegistryAudit.Validate();
+            if (auditIssues.Length > 0)
+            {
+                throw new InvalidOperationException(
+                    "Jarvis orchestration task registry is not planner-ready: " +
+                    string.Join(" | ", auditIssues));
+            }
+
             JArray tasks = new JArray();
             foreach (JarvisTaskDescriptor descriptor in JarvisTaskRegistry.AllTasks)
             {
@@ -40,6 +50,8 @@ namespace S1Jarvis.Core
                 {
                     ["taskType"] = descriptor.TaskType,
                     ["capability"] = descriptor.Capability,
+                    ["operation"] = descriptor.Operation.ToString(),
+                    ["executionPolicy"] = descriptor.ExecutionPolicy.ToString(),
                     ["description"] = descriptor.Description,
                     ["requiredInputs"] = new JArray(descriptor.RequiredInputs),
                     ["optionalInputs"] = new JArray(descriptor.OptionalInputs),
