@@ -67,12 +67,18 @@ namespace S1Jarvis.Core
     }
 
     /// <summary>
-    /// Phase 1 orchestration contract.
+    /// Atomic business-task catalog used by Jarvis orchestration planning.
     ///
-    /// This registry describes atomic business tasks that Jarvis can plan.
-    /// It does NOT change the mature runtime routing/tool loop yet.
-    /// Jarvis remains the user-facing orchestrator; OwnerAgent values are
-    /// internal execution roles resolved after a task/capability is selected.
+    /// Rules:
+    /// - one task represents one user-visible business outcome;
+    /// - helper reads may live inside a write task when they are prerequisites
+    ///   of that single write outcome;
+    /// - independent read/write intents must be separate tasks;
+    /// - OwnerAgent is internal metadata only; Jarvis remains user-facing;
+    /// - tools must exist in JarvisToolRegistry and confirmation policy remains
+    ///   authoritative regardless of planner output.
+    ///
+    /// This registry still does not replace the mature Main Chat runtime router.
     /// </summary>
     internal static class JarvisTaskRegistry
     {
@@ -164,40 +170,62 @@ namespace S1Jarvis.Core
                 A("sender", "date_range", "read_state", "keywords", "attachment"),
                 A("email_messages", "email_artifacts"),
                 A(),
-                A("email", "inbox", "message", "εισερχόμενα", "μήνυμα")),
+                A("email", "inbox", "message", "attachment", "εισερχόμενα", "μήνυμα", "συνημμένο")),
 
             T(
-                "ManageCalendar", "Calendar", "Echo", JarvisTaskOperation.Mixed, true,
-                JarvisTaskExecutionPolicy.DependsOnInputs,
-                "Read/filter calendar entries or create a confirmed Outlook event.",
-                A("filter_calendar", "show_calendar_entries", "read_calendar", "create_outlook_event"),
+                "ReadCalendar", "Calendar", "Echo", JarvisTaskOperation.Read, false,
+                JarvisTaskExecutionPolicy.ParallelSafe,
+                "Read or filter Outlook calendar entries without creating or changing events.",
+                A("filter_calendar", "show_calendar_entries", "read_calendar"),
                 A("calendar_request"),
-                A("date_range", "subject", "start", "end", "attendees"),
-                A("calendar_entries", "calendar_event"),
+                A("date_range", "search_text"),
+                A("calendar_entries"),
                 A(),
-                A("calendar", "meeting", "appointment", "ραντεβού", "ημερολόγιο", "υπενθύμιση")),
+                A("calendar", "what do I have", "schedule", "τι έχω", "ημερολόγιο", "ραντεβού")),
+
+            T(
+                "CreateCalendarEvent", "CalendarWrite", "Echo", JarvisTaskOperation.ExternalAction, true,
+                JarvisTaskExecutionPolicy.DependsOnInputs,
+                "Create one Outlook calendar event/reminder; contact lookup may be used only to resolve attendee addresses.",
+                A("search_outlook_contacts", "show_contact_results", "create_outlook_event"),
+                A("event_request"),
+                A("subject", "start", "end", "location", "attendees", "body", "reminder_minutes", "is_all_day"),
+                A("calendar_event"),
+                A("Contacts"),
+                A("create event", "calendar event", "outlook reminder", "κλείσε ραντεβού", "βάλε στο calendar", "υπενθύμιση outlook")),
 
             T(
                 "CreateCrmTask", "CRM", "Echo", JarvisTaskOperation.Write, true,
                 JarvisTaskExecutionPolicy.DependsOnInputs,
-                "Create a CRM task/action in Soft1.",
+                "Create one CRM task/action in Soft1.",
                 A("create_crm_task"),
                 A("task_subject"),
                 A("trader_reference", "due_date", "notes", "assignee"),
                 A("crm_task_reference"),
                 A("TraderLookup", "Email", "Calendar"),
-                A("crm task", "follow up", "εργασία crm", "ενέργεια crm")),
+                A("crm task", "follow up", "εργασία crm", "ενέργεια crm", "ανάθεση εργασίας")),
 
             T(
                 "SendEmail", "EmailWrite", "Echo", JarvisTaskOperation.ExternalAction, true,
                 JarvisTaskExecutionPolicy.DependsOnInputs,
-                "Send or reply to an Outlook email using resolved recipients/content/artifacts.",
-                A("search_outlook_contacts", "show_contact_results", "send_email", "reply_email"),
+                "Send one new Outlook email; contact lookup may be used only to resolve recipients.",
+                A("search_outlook_contacts", "show_contact_results", "send_email"),
                 A("recipient", "message_content"),
-                A("subject", "reply_source", "attachments", "artifact_reference"),
+                A("subject", "cc", "attachments", "artifact_reference"),
                 A("email_send_result"),
                 A("Contacts", "Export", "OrderWrite", "DocumentRead"),
-                A("send email", "reply", "στείλε email", "απάντησε", "στείλε μήνυμα")),
+                A("send email", "στείλε email", "στείλε μήνυμα", "email this")),
+
+            T(
+                "ReplyEmail", "EmailWrite", "Echo", JarvisTaskOperation.ExternalAction, true,
+                JarvisTaskExecutionPolicy.DependsOnInputs,
+                "Reply to one already resolved Outlook message using its message id.",
+                A("read_email", "reply_email"),
+                A("reply_source", "message_content"),
+                A("cc"),
+                A("email_reply_result"),
+                A("Email"),
+                A("reply email", "reply to", "απάντησε", "απάντησε στο email", "απάντηση στο μήνυμα")),
 
             T(
                 "CourierDocuments", "CourierRead", "Sprint", JarvisTaskOperation.Read, false,
@@ -213,7 +241,7 @@ namespace S1Jarvis.Core
             T(
                 "CreateCourierVoucher", "CourierWrite", "Sprint", JarvisTaskOperation.ExternalAction, true,
                 JarvisTaskExecutionPolicy.DependsOnInputs,
-                "Create a courier voucher for a resolved eligible document.",
+                "Create one courier voucher for a resolved eligible document.",
                 A("get_courier_voucher_data", "create_courier_voucher"),
                 A("document_reference", "courier_provider"),
                 A("shipment_options"),
@@ -224,7 +252,7 @@ namespace S1Jarvis.Core
             T(
                 "CancelCourierVoucher", "CourierWrite", "Sprint", JarvisTaskOperation.ExternalAction, true,
                 JarvisTaskExecutionPolicy.DependsOnInputs,
-                "Cancel an existing resolved courier voucher.",
+                "Cancel one existing resolved courier voucher.",
                 A("get_courier_voucher_data", "cancel_courier_voucher"),
                 A("voucher_reference"),
                 A("document_reference", "provider"),
@@ -246,7 +274,7 @@ namespace S1Jarvis.Core
             T(
                 "CreateOrder", "OrderWrite", "Scout", JarvisTaskOperation.Write, true,
                 JarvisTaskExecutionPolicy.DependsOnInputs,
-                "Create a Soft1 order using resolved customer and order-line data.",
+                "Create one Soft1 order using resolved customer and order-line data.",
                 A("create_order"),
                 A("customer_reference", "order_lines"),
                 A("series", "delivery_data", "comments"),
