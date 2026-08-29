@@ -148,6 +148,10 @@ namespace S1Jarvis.Core
         {
             try
             {
+                JArray issueArray = result == null
+                    ? new JArray()
+                    : new JArray(result.Issues);
+
                 var root = new JObject
                 {
                     ["gate"] = result != null && result.GateEnabled,
@@ -155,7 +159,7 @@ namespace S1Jarvis.Core
                     ["prompt"] = prompt ?? string.Empty,
                     ["objects"] = SerializeObjects(result == null ? null : result.IntentObjects),
                     ["preview"] = SerializePreview(result == null ? null : result.Preview),
-                    ["issues"] = new JArray(result == null ? new string[0] : result.Issues)
+                    ["issues"] = issueArray
                 };
 
                 DebugLog.Log("[ORCH-SHADOW] " + root.ToString(Formatting.None));
