@@ -130,6 +130,9 @@ namespace S1Jarvis.Core
             R("CreateOrder", "findocId", "CreateCourierVoucher", "findocId",
                 "Newly created order FINDOC may feed a requested courier action."),
 
+            R("ReportData", "summary", "SendEmail", "body",
+                "Report summary is the authoritative content source for the requested email body."),
+
             R("ExportData", "file_artifact", "SendEmail", "artifact_reference",
                 "Export artifact feeds a requested email attachment."),
 
