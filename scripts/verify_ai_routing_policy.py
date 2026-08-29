@@ -16,21 +16,29 @@ ROOT = Path(__file__).resolve().parents[1]
 errors = []
 
 # Runtime C# must never own a concrete AI model identifier. Models come from
-# the immutable startup Verilic Health snapshot.
-model_literal_patterns = [
-    re.compile(r'\b(?:const\s+string\s+)?(?:Model|model|RuntimeAiModel)\s*=\s*"[^"\r\n]+"'),
-    re.compile(r'\[\s*"model"\s*\]\s*=\s*"[^"\r\n]+"'),
+# the immutable startup Verilic Health snapshot. Match actual code assignment
+# syntax, not logging strings such as " model=".
+assignment_patterns = [
+    re.compile(r'^\s*(?:private|public|internal|protected)?\s*(?:static\s+)?(?:readonly\s+)?(?:const\s+)?string\s+(?:Model|RuntimeAiModel)\s*=\s*"[^"\r\n]+"'),
+    re.compile(r'^\s*model\s*=\s*"[^"\r\n]+"\s*[,;]'),
+    re.compile(r'^\s*\[\s*"model"\s*\]\s*=\s*"[^"\r\n]+"\s*[,;]'),
 ]
 known_model_id = re.compile(
     r'"(?:claude-[^"\s]+|gemini-[^"\s]+|gpt-[^"\s]+|o[1-9](?:-[^"\s]+)?)"',
     re.IGNORECASE,
 )
 
+# This exact value is not an AI target: it is the UI source label requested for
+# deterministic local replies (`IN 0 OUT 0 JARVIS`).
+local_ui_marker = 'UI/JarvisShell.OrchestrationShadow.cs'
+
 for path in ROOT.rglob('*.cs'):
     rel = path.relative_to(ROOT).as_posix()
     text = path.read_text(encoding='utf-8', errors='replace')
     for lineno, line in enumerate(text.splitlines(), 1):
-        if any(pattern.search(line) for pattern in model_literal_patterns):
+        if rel == local_ui_marker and '["model"] = "JARVIS"' in line:
+            continue
+        if any(pattern.search(line) for pattern in assignment_patterns):
             errors.append(f'{rel}:{lineno}: hardcoded model assignment: {line.strip()}')
         elif known_model_id.search(line):
             errors.append(f'{rel}:{lineno}: concrete model id in C# source: {line.strip()}')
@@ -54,15 +62,18 @@ if uat.exists() and 'JarvisAgentHealthProbe' in uat.read_text(encoding='utf-8', 
         'UI/JarvisShell.UatRunner.cs: UAT HEALTH must read JarvisAgentRuntimeSnapshot, not call Verilic Health again.'
     )
 
-# Health endpoint access is allowed only in the probe implementation; normal
-# runtime code must consume JarvisAgentRuntimeSnapshot instead.
+# Direct health endpoint use is implementation detail of configuration + probe.
+allowed_health_uri_files = {
+    'Core/JarvisAgentHealthProbe.cs',
+    'Access/Verilic/VerilicRuntimeConfiguration.cs',
+}
 for path in ROOT.rglob('*.cs'):
     rel = path.relative_to(ROOT).as_posix()
-    if rel == 'Core/JarvisAgentHealthProbe.cs':
+    if rel in allowed_health_uri_files:
         continue
     text = path.read_text(encoding='utf-8', errors='replace')
     if 'ProviderHealthUri' in text:
-        errors.append(f'{rel}: direct ProviderHealthUri access outside JarvisAgentHealthProbe is forbidden.')
+        errors.append(f'{rel}: direct ProviderHealthUri access outside configuration/probe is forbidden.')
 
 required_files = [
     ROOT / 'AGENTS.md',
