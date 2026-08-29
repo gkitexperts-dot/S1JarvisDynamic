@@ -97,11 +97,6 @@ namespace S1Jarvis.UI
             {
                 if (!e.IsSuccess) return;
 
-                // JarvisShell_Loaded adds the legacy WebMessageReceived handler only
-                // after EnsureCoreWebView2Async returns. Enforcing only from the
-                // initialization-completed callback can therefore run too early.
-                // Queue one final pass after navigation, when all boot registrations
-                // have completed but before the user can interact with the DR UI.
                 Dispatcher.BeginInvoke(new Action(EnforceSinglePrimaryWebMessageRouter),
                     DispatcherPriority.ContextIdle);
             }
@@ -121,13 +116,16 @@ namespace S1Jarvis.UI
                     return;
                 }
 
-                // Remove every router we own first, then add exactly one primary
-                // router. -= is safe even when the delegate is not subscribed.
+                // The orchestration primary router delegates all unsupported and
+                // typed commands to the mature DR/legacy path, while consuming a
+                // supported pilot flow exactly once. Keeping it as the sole
+                // WebMessageReceived entry prevents duplicate irreversible sends.
                 webView.CoreWebView2.WebMessageReceived -= CoreWebView2_WebMessageReceived;
                 webView.CoreWebView2.WebMessageReceived -= DrRecognitionFlow_WebMessageReceived;
-                webView.CoreWebView2.WebMessageReceived += DrRecognitionFlow_WebMessageReceived;
+                webView.CoreWebView2.WebMessageReceived -= OrchestrationPrimary_WebMessageReceived;
+                webView.CoreWebView2.WebMessageReceived += OrchestrationPrimary_WebMessageReceived;
 
-                DebugLog.Log("[host-safety] single primary WebMessageReceived router enforced; legacy duplicate removed.");
+                DebugLog.Log("[host-safety] single orchestration-aware primary WebMessageReceived router enforced.");
             }
             catch (Exception ex)
             {
