@@ -47,10 +47,14 @@ namespace S1Jarvis.Core
 
             try
             {
+                // Deliberately keep the caller synchronization context here.
+                // After the no-tools HTTP call completes, Pass 2 may read
+                // Soft1 routing knowledge through XSupport and must resume on
+                // the host/UI context instead of a ThreadPool continuation.
                 string decomposerJson = await JarvisShadowSemanticClient.DecomposeAsync(
                     xSupport,
                     userPrompt,
-                    cancellationToken).ConfigureAwait(false);
+                    cancellationToken);
 
                 JarvisIntentObjectSet objectSet;
                 string[] parseIssues;
@@ -129,7 +133,9 @@ namespace S1Jarvis.Core
         {
             try
             {
-                await RunAsync(xSupport, userPrompt).ConfigureAwait(false);
+                // Do not ConfigureAwait(false): XSupport-backed Pass 2 must
+                // continue on the Soft1/WPF synchronization context.
+                await RunAsync(xSupport, userPrompt);
             }
             catch (Exception ex)
             {
