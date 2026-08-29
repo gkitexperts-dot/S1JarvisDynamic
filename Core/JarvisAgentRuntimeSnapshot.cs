@@ -44,6 +44,16 @@ namespace S1Jarvis.Core
             out string issue)
         {
             issue = null;
+
+            lock (Sync)
+            {
+                // Startup snapshot is intentionally immutable. A later HEALTH
+                // command or any other code path must never replace routing in
+                // the middle of an open Jarvis session.
+                if (_initialized)
+                    return true;
+            }
+
             if (healthTargets == null || healthTargets.Count == 0)
             {
                 issue = "startup health returned no agent targets";
@@ -99,6 +109,9 @@ namespace S1Jarvis.Core
 
             lock (Sync)
             {
+                if (_initialized)
+                    return true;
+
                 _targets = next;
                 _initialized = true;
             }
@@ -125,6 +138,17 @@ namespace S1Jarvis.Core
 
                 target = found.Clone();
                 return true;
+            }
+        }
+
+        internal static IReadOnlyList<JarvisAgentRuntimeTarget> GetAll()
+        {
+            lock (Sync)
+            {
+                return _targets.Values
+                    .OrderBy(x => x.Agent, StringComparer.OrdinalIgnoreCase)
+                    .Select(x => x.Clone())
+                    .ToList();
             }
         }
 
