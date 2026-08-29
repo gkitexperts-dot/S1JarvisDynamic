@@ -5,11 +5,6 @@ using Softone;
 
 namespace S1Jarvis.Core
 {
-    /// <summary>
-    /// Canonical Soft1/SQL names for the dynamic routing tables created in the
-    /// customer database. These names intentionally mirror the real Soft1
-    /// custom-table schema and must not be replaced by longer logical aliases.
-    /// </summary>
     internal static class JarvisDynamicRoutingSchema
     {
         internal static class Knowledge
@@ -131,12 +126,10 @@ namespace S1Jarvis.Core
     }
 
     /// <summary>
-    /// Read-only access to approved/active dynamic routing knowledge.
-    /// Phase 1 intentionally performs no writes to CCCJROUTKNOW,
-    /// CCCJROUTECAND or CCCJROUTELOG.
-    ///
-    /// Fail-open rule: missing tables, schema mismatch or read failure returns an
-    /// empty result, so default hardcoded Task Registry routing remains usable.
+    /// Read-only access to active dynamic routing knowledge.
+    /// The knowledge table is the approved store; candidate approval/promotion
+    /// will be added in a later phase. Missing table/schema/read failure is
+    /// deliberately fail-open so hardcoded routing remains available.
     /// </summary>
     internal static class JarvisDynamicRoutingRepository
     {
@@ -151,6 +144,8 @@ namespace S1Jarvis.Core
             try
             {
                 const string sql = @"
+DECLARE @Company int = :1;
+
 SELECT
     CCCJROUTKNOW,
     COMPANY,
@@ -171,9 +166,9 @@ SELECT
     UPDATEDAT
 FROM CCCJROUTKNOW
 WHERE ISNULL(ISACTIVE, 0) = 1
-  AND (ISNULL(COMPANY, 0) = 0 OR COMPANY = :1)
+  AND (ISNULL(COMPANY, 0) = 0 OR COMPANY = @Company)
 ORDER BY
-    CASE WHEN COMPANY = :1 THEN 0 ELSE 1 END,
+    CASE WHEN COMPANY = @Company THEN 0 ELSE 1 END,
     ISNULL(PRIORITY, 0) DESC,
     ISNULL(CONFIDENCE, 0) DESC,
     CCCJROUTKNOW;";
@@ -288,8 +283,11 @@ ORDER BY
     }
 
     /// <summary>
-    /// Defines the resolution order without deciding confidence thresholds yet.
-    /// Thresholds/merge scoring belong to the next routing step.
+    /// Pass 1 = hardcoded JarvisTaskRegistry metadata.
+    /// Pass 2 = active table-hosted CCCJROUTKNOW knowledge.
+    /// Pass 3 = explicit user clarification; unresolved intent is never guessed.
+    /// Confidence thresholds and merge/re-score rules intentionally belong to
+    /// the next routing step and are not hardcoded here yet.
     /// </summary>
     internal static class JarvisRoutingPassContract
     {
@@ -305,7 +303,7 @@ ORDER BY
                 case JarvisRoutingResolutionPass.DefaultMetadata:
                     return "Hardcoded JarvisTaskRegistry metadata";
                 case JarvisRoutingResolutionPass.DynamicKnowledge:
-                    return "Approved active CCCJROUTKNOW knowledge";
+                    return "Active CCCJROUTKNOW knowledge for global/current company scope";
                 case JarvisRoutingResolutionPass.UserClarification:
                     return "Explicit user clarification; never guess unresolved intent";
                 default:
