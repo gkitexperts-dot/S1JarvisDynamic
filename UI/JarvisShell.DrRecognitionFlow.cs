@@ -268,24 +268,14 @@ namespace S1Jarvis.UI
                         parsed["jarvisAuditError"] = auditError;
                 }
 
+                // Registration success is returned to the DR UI only. Do NOT
+                // auto-open the native Soft1 document here: ExecS1Command/AUTOLOCATE
+                // can raise EExternalException 80000003 in this host context.
+                // The operator may explicitly request document display from the
+                // success UI instead.
                 parsed["type"] = "dr_register_document_result";
                 parsed["fileId"] = fileId;
                 webView.CoreWebView2.PostWebMessageAsString(parsed.ToString(Formatting.None));
-
-                if ((bool?)parsed["success"] == true && (int?)parsed["findocId"] > 0)
-                {
-                    int sosource = (int?)parsed["sosource"] ?? (int?)cmd["sosource"] ?? 0;
-                    int findocId = (int)parsed["findocId"];
-                    try
-                    {
-                        JarvisTools.ExecuteOpenDocument(_xSupport,
-                            new JObject { ["sosource"] = sosource, ["mode"] = "locate", ["id"] = findocId });
-                    }
-                    catch (Exception openEx)
-                    {
-                        DebugLog.Log("[dr-recognition-flow] registration-v2 auto-open EXCEPTION: " + openEx);
-                    }
-                }
             }
             catch (Exception ex)
             {
