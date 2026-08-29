@@ -266,7 +266,6 @@ namespace S1Jarvis.UI
 
                 var providerRequest = new JObject
                 {
-                    ["model"] = "server-authoritative",
                     ["max_tokens"] = 2400,
                     ["system"] = systemPrompt,
                     ["messages"] = messages
