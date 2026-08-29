@@ -41,8 +41,6 @@ namespace S1Jarvis.UI
         private readonly bool _orchestrationShadowBootstrapRegistered =
             JarvisOrchestrationShadowBootstrap.EnsureRegistered();
 
-        // Instance-scoped: a confirmation can resume only the pending plan that
-        // belongs to this JarvisShell. No global/static business payload is kept.
         private readonly JarvisPendingConfirmationSession _orchestrationPendingConfirmation =
             new JarvisPendingConfirmationSession();
 
@@ -69,21 +67,20 @@ namespace S1Jarvis.UI
                 {
                     if (webView != null && webView.CoreWebView2 != null)
                     {
-                        webView.CoreWebView2.WebMessageReceived +=
-                            OrchestrationShadow_WebMessageReceived;
+                        InstallOrchestrationPrimaryRouter();
                         _orchestrationShadowHookAttached = true;
-                        DebugLog.Log("[ORCH-SHADOW] Main Chat observer attached.");
+                        DebugLog.Log("[ORCH-SHADOW] controlled Main Chat primary router attached.");
                         return;
                     }
 
                     await Task.Delay(50);
                 }
 
-                DebugLog.Log("[ORCH-SHADOW] Main Chat observer not attached: CoreWebView2 was not ready in time.");
+                DebugLog.Log("[ORCH-SHADOW] Main Chat router not attached: CoreWebView2 was not ready in time.");
             }
             catch (Exception ex)
             {
-                DebugLog.Log("[ORCH-SHADOW] observer attach failed; legacy chat unaffected: " + ex);
+                DebugLog.Log("[ORCH-SHADOW] router attach failed; legacy chat unaffected: " + ex);
             }
             finally
             {
@@ -91,7 +88,21 @@ namespace S1Jarvis.UI
             }
         }
 
-        private void OrchestrationShadow_WebMessageReceived(
+        internal void InstallOrchestrationPrimaryRouter()
+        {
+            if (webView == null || webView.CoreWebView2 == null)
+                return;
+
+            // Exactly one primary router. All non-pilot traffic is delegated to
+            // the mature DR/legacy router. This prevents the confirmation turn
+            // from being processed once by legacy and once by controlled Echo.
+            webView.CoreWebView2.WebMessageReceived -= CoreWebView2_WebMessageReceived;
+            webView.CoreWebView2.WebMessageReceived -= DrRecognitionFlow_WebMessageReceived;
+            webView.CoreWebView2.WebMessageReceived -= OrchestrationPrimary_WebMessageReceived;
+            webView.CoreWebView2.WebMessageReceived += OrchestrationPrimary_WebMessageReceived;
+        }
+
+        private async void OrchestrationPrimary_WebMessageReceived(
             object sender,
             Microsoft.Web.WebView2.Core.CoreWebView2WebMessageReceivedEventArgs e)
         {
@@ -99,35 +110,75 @@ namespace S1Jarvis.UI
             {
                 string userText = e.TryGetWebMessageAsString();
                 if (string.IsNullOrWhiteSpace(userText))
+                {
+                    DrRecognitionFlow_WebMessageReceived(sender, e);
                     return;
+                }
 
                 string trimmed = userText.Trim();
-                if (string.Equals(trimmed, "Stop", StringComparison.OrdinalIgnoreCase))
-                    return;
 
+                // Typed UI/DR commands remain entirely on the mature deterministic
+                // router. The controlled pilot observes only ordinary Main Chat.
                 JObject command = null;
                 try { command = JObject.Parse(trimmed); }
                 catch { }
-
                 if (command != null && command["type"] != null)
+                {
+                    DrRecognitionFlow_WebMessageReceived(sender, e);
                     return;
+                }
 
-                // A confirmation turn belongs to the already pending plan. Do not
-                // decompose it as a fresh orchestration prompt. The legacy handler
-                // remains untouched and continues its normal visible flow.
-                if (JarvisExecutionShadowHarness.TryResumeConfirmation(
-                    _orchestrationPendingConfirmation,
-                    userText))
+                if (string.Equals(trimmed, "Stop", StringComparison.OrdinalIgnoreCase))
+                {
+                    DrRecognitionFlow_WebMessageReceived(sender, e);
                     return;
+                }
 
-                JarvisExecutionShadowHarness.RunAndLogSafeAsync(
-                    _xSupport,
-                    userText,
-                    _orchestrationPendingConfirmation);
+                if (_orchestrationPendingConfirmation.HasPending &&
+                    JarvisPendingConfirmationSession.IsAffirmativeConfirmation(userText))
+                {
+                    JarvisControlledPilotOutcome resumed =
+                        await JarvisExecutionShadowHarness.TryResumeConfirmationAndExecuteAsync(
+                            _xSupport,
+                            _orchestrationPendingConfirmation,
+                            userText);
+
+                    if (resumed != null && resumed.Handled)
+                    {
+                        if (!string.IsNullOrWhiteSpace(resumed.UserMessage))
+                            webView.CoreWebView2.PostWebMessageAsString(resumed.UserMessage);
+                        return;
+                    }
+                }
+
+                JarvisControlledPilotOutcome pilot =
+                    await JarvisExecutionShadowHarness.TryRunControlledPilotAsync(
+                        _xSupport,
+                        userText,
+                        _orchestrationPendingConfirmation);
+
+                if (pilot != null && pilot.Handled)
+                {
+                    if (!string.IsNullOrWhiteSpace(pilot.UserMessage))
+                        webView.CoreWebView2.PostWebMessageAsString(pilot.UserMessage);
+                    return;
+                }
+
+                // Unsupported/invalid plans continue through the existing product
+                // path unchanged.
+                DrRecognitionFlow_WebMessageReceived(sender, e);
             }
             catch (Exception ex)
             {
-                DebugLog.Log("[ORCH-SHADOW] observer suppressed exception: " + ex);
+                DebugLog.Log("[ORCH-SHADOW] primary router suppressed exception: " + ex);
+                try
+                {
+                    DrRecognitionFlow_WebMessageReceived(sender, e);
+                }
+                catch (Exception fallbackEx)
+                {
+                    DebugLog.Log("[ORCH-SHADOW] legacy fallback failed: " + fallbackEx);
+                }
             }
         }
     }
