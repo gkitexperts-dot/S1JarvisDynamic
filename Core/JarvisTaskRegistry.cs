@@ -78,6 +78,10 @@ namespace S1Jarvis.Core
     /// - tools must exist in JarvisToolRegistry and confirmation policy remains
     ///   authoritative regardless of planner output.
     ///
+    /// Task contracts are business-level contracts, not blind copies of a
+    /// single tool schema. Tool-level prerequisites are documented in
+    /// TOOLS_INVENTORY.md and may be resolved by helper tools inside the task.
+    ///
     /// This registry still does not replace the mature Main Chat runtime router.
     /// </summary>
     internal static class JarvisTaskRegistry
@@ -133,9 +137,9 @@ namespace S1Jarvis.Core
                 JarvisTaskExecutionPolicy.DependsOnInputs,
                 "Create a Soft1 item using the approved item-template/write flow.",
                 A("get_item_template", "create_item"),
-                A("item_identity"),
-                A("template_reference", "description", "code", "commercial_fields"),
-                A("item_reference"),
+                A("name", "mtrunit1", "vat", "mtracn", "mtrlotuse", "mtrsnuse"),
+                A("code", "templateMtrl", "mtrunit3", "mtrunit4", "pricer", "pricew", "copiedFields"),
+                A("item_reference", "mtrl", "code", "name"),
                 A("ItemRead", "InternetResearch"),
                 A("create item", "new item", "είδος", "δημιουργία είδους")),
 
@@ -153,11 +157,11 @@ namespace S1Jarvis.Core
             T(
                 "CreateTrader", "TraderWrite", "Compass", JarvisTaskOperation.Write, true,
                 JarvisTaskExecutionPolicy.DependsOnInputs,
-                "Create a Soft1 trader from resolved AADE/business data.",
+                "Create a Soft1 trader from resolved AADE/business data. AADE may provide name/address/code suggestions inside the task before confirmation.",
                 A("find_trader_by_afm", "get_aade_data", "create_trader_from_aade"),
-                A("afm"),
-                A("role", "resolved_aade_data"),
-                A("trader_reference"),
+                A("afm", "role"),
+                A("sodType", "name", "code", "address", "city", "doy", "zip", "jobType", "resolved_aade_data"),
+                A("trader_reference", "trdrId", "sodType", "objectName", "code", "name"),
                 A("TraderLookup"),
                 A("create customer", "create supplier", "new trader", "νέος πελάτης", "νέος προμηθευτής")),
 
@@ -188,42 +192,42 @@ namespace S1Jarvis.Core
                 JarvisTaskExecutionPolicy.DependsOnInputs,
                 "Create one Outlook calendar event/reminder; contact lookup may be used only to resolve attendee addresses.",
                 A("search_outlook_contacts", "show_contact_results", "create_outlook_event"),
-                A("event_request"),
-                A("subject", "start", "end", "location", "attendees", "body", "reminder_minutes", "is_all_day"),
-                A("calendar_event"),
+                A("subject", "start"),
+                A("end", "location", "attendees", "body", "reminderMinutesBeforeStart", "isAllDay"),
+                A("calendar_event", "eventId", "webLink"),
                 A("Contacts"),
                 A("create event", "calendar event", "outlook reminder", "κλείσε ραντεβού", "βάλε στο calendar", "υπενθύμιση outlook")),
 
             T(
                 "CreateCrmTask", "CRM", "Echo", JarvisTaskOperation.Write, true,
                 JarvisTaskExecutionPolicy.DependsOnInputs,
-                "Create one CRM task/action in Soft1.",
+                "Create one CRM task/action in Soft1. The assignee must resolve to actorUserId or actorUserIds before the write.",
                 A("create_crm_task"),
-                A("task_subject"),
-                A("trader_reference", "due_date", "notes", "assignee"),
-                A("crm_task_reference"),
-                A("TraderLookup", "Email", "Calendar"),
+                A("title", "description", "fromDate", "assignee"),
+                A("actorUserId", "actorUserIds", "reminderDate", "trdr", "tsodType", "parentSoactionId", "inst", "prjc", "durationMinutes"),
+                A("crm_task_reference", "soaction_ids"),
+                A("TraderLookup", "Email", "Calendar", "Reporting"),
                 A("crm task", "follow up", "εργασία crm", "ενέργεια crm", "ανάθεση εργασίας")),
 
             T(
                 "SendEmail", "EmailWrite", "Echo", JarvisTaskOperation.ExternalAction, true,
                 JarvisTaskExecutionPolicy.DependsOnInputs,
-                "Send one new Outlook email; contact lookup may be used only to resolve recipients.",
+                "Send one new Outlook email; a named recipient may be resolved to an address with contact lookup before confirmation.",
                 A("search_outlook_contacts", "show_contact_results", "send_email"),
-                A("recipient", "message_content"),
-                A("subject", "cc", "attachments", "artifact_reference"),
-                A("email_send_result"),
+                A("to", "subject", "body"),
+                A("recipient_name", "cc", "attachmentFilePath", "attachmentContent", "attachmentFilename", "artifact_reference"),
+                A("email_send_result", "success", "hasAttachment"),
                 A("Contacts", "Export", "OrderWrite", "DocumentRead"),
                 A("send email", "στείλε email", "στείλε μήνυμα", "email this")),
 
             T(
                 "ReplyEmail", "EmailWrite", "Echo", JarvisTaskOperation.ExternalAction, true,
                 JarvisTaskExecutionPolicy.DependsOnInputs,
-                "Reply to one already resolved Outlook message using its message id.",
+                "Reply to one already resolved Outlook message using its Graph message id.",
                 A("read_email", "reply_email"),
-                A("reply_source", "message_content"),
+                A("messageId", "body"),
                 A("cc"),
-                A("email_reply_result"),
+                A("email_reply_result", "success"),
                 A("Email"),
                 A("reply email", "reply to", "απάντησε", "απάντησε στο email", "απάντηση στο μήνυμα")),
 
