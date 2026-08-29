@@ -6,14 +6,6 @@ using S1Jarvis.Core;
 
 namespace S1Jarvis.UI
 {
-    /// <summary>
-    /// One-time bootstrap for the shadow Main Chat observer.
-    ///
-    /// JarvisShell already has a static constructor in the UAT partial, so this
-    /// helper deliberately avoids defining another static JarvisShell(). The
-    /// field initializer in JarvisShell triggers this registration once and the
-    /// helper guards against duplicate class-handler registration.
-    /// </summary>
     internal static class JarvisOrchestrationShadowBootstrap
     {
         private static readonly object Sync = new object();
@@ -44,22 +36,15 @@ namespace S1Jarvis.UI
         }
     }
 
-    /// <summary>
-    /// Shadow-only Main Chat hook for the new orchestration path.
-    ///
-    /// This partial intentionally does not change CoreWebView2_WebMessageReceived
-    /// or the mature AskAsync path. It observes the same WebView message stream,
-    /// ignores typed UI commands, and launches the pilot orchestration pipeline
-    /// only for plain Main Chat user messages. Legacy execution remains the only
-    /// user-visible execution path.
-    /// </summary>
     public partial class JarvisShell
     {
-        // Field initializer is used instead of a second static JarvisShell()
-        // constructor. See JarvisShell.UatRunner.cs, which already owns the one
-        // static constructor allowed by C# for this partial type.
         private readonly bool _orchestrationShadowBootstrapRegistered =
             JarvisOrchestrationShadowBootstrap.EnsureRegistered();
+
+        // Instance-scoped: a confirmation can resume only the pending plan that
+        // belongs to this JarvisShell. No global/static business payload is kept.
+        private readonly JarvisPendingConfirmationSession _orchestrationPendingConfirmation =
+            new JarvisPendingConfirmationSession();
 
         private bool _orchestrationShadowHookAttached;
         private bool _orchestrationShadowHookInstalling;
@@ -80,9 +65,6 @@ namespace S1Jarvis.UI
             _orchestrationShadowHookInstalling = true;
             try
             {
-                // JarvisShell_Loaded initializes CoreWebView2 asynchronously.
-                // Wait briefly for that existing initialization instead of
-                // creating another WebView environment or changing boot order.
                 for (int attempt = 0; attempt < 100; attempt++)
                 {
                     if (webView != null && webView.CoreWebView2 != null)
@@ -123,23 +105,25 @@ namespace S1Jarvis.UI
                 if (string.Equals(trimmed, "Stop", StringComparison.OrdinalIgnoreCase))
                     return;
 
-                // Every curtain/control action currently travels as a typed
-                // JSON command. Observe only ordinary Main Chat text.
                 JObject command = null;
                 try { command = JObject.Parse(trimmed); }
-                catch { /* normal Main Chat text */ }
+                catch { }
 
                 if (command != null && command["type"] != null)
                     return;
 
-                // Do not await: the mature CoreWebView2_WebMessageReceived
-                // handler continues immediately into _agentClient.AskAsync.
-                // The harness remains feature-gated via the planner, validates
-                // the initial Jarvis execution state, and never dispatches a
-                // business executor while shadow mode is active.
+                // A confirmation turn belongs to the already pending plan. Do not
+                // decompose it as a fresh orchestration prompt. The legacy handler
+                // remains untouched and continues its normal visible flow.
+                if (JarvisExecutionShadowHarness.TryResumeConfirmation(
+                    _orchestrationPendingConfirmation,
+                    userText))
+                    return;
+
                 JarvisExecutionShadowHarness.RunAndLogSafeAsync(
                     _xSupport,
-                    userText);
+                    userText,
+                    _orchestrationPendingConfirmation);
             }
             catch (Exception ex)
             {
