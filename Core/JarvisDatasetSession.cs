@@ -25,6 +25,9 @@ namespace S1Jarvis.Core
     /// </summary>
     internal sealed class JarvisDatasetSession
     {
+        private const string RuntimeAiAgent = "Atlas";
+        private const string RuntimeAiModel = "gemini-3.6-flash";
+
         private readonly object _sync = new object();
         private string _businessQuestion;
         private JObject _dataset;
@@ -140,7 +143,7 @@ namespace S1Jarvis.Core
             JObject catalog = BuildCompactCatalog(dataset);
             JObject request = new JObject
             {
-                ["model"] = "claude-opus-5",
+                ["model"] = RuntimeAiModel,
                 ["max_tokens"] = 1200,
                 ["output_config"] = new JObject { ["effort"] = "low" },
                 ["system"] = new JArray
@@ -170,7 +173,7 @@ namespace S1Jarvis.Core
             };
 
             AgentProxyResponse response = await new S1Jarvis.Access.Verilic.VerilicAiMessagesClient()
-                .SendAsync(xSupport, "Jarvis", request.ToString(Formatting.None), cancellationToken)
+                .SendAsync(xSupport, RuntimeAiAgent, request.ToString(Formatting.None), cancellationToken)
                 .ConfigureAwait(false);
             if (response == null || !response.Success || string.IsNullOrWhiteSpace(response.RawResponseJson))
                 return null;
