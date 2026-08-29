@@ -10,10 +10,6 @@ namespace S1Jarvis.UI
     {
         private bool _aiUsageUiEnabled;
 
-        // Kept outside index.html deliberately: usage telemetry is runtime UI
-        // decoration and can evolve independently from the main embedded chat.
-        // The MutationObserver covers the main chat and all Jarvis curtain chats
-        // because they share the same .msg user/assistant convention.
         private const string AiUsageUiScript = @"
 (function () {
   if (window.__jarvisUsageUiInstalled) return;
@@ -25,9 +21,7 @@ namespace S1Jarvis.UI
     return { input: 0, output: 0, model: '', provider: '', calls: 0, allLogged: true };
   }
 
-  function resetUsage() {
-    pending = emptyUsage();
-  }
+  function resetUsage() { pending = emptyUsage(); }
 
   window.__jarvisUsagePush = function (u) {
     if (!pending) resetUsage();
@@ -39,9 +33,7 @@ namespace S1Jarvis.UI
     pending.allLogged = pending.allLogged && !!u.logged;
   };
 
-  function hasUsage() {
-    return pending && pending.calls > 0;
-  }
+  function hasUsage() { return pending && pending.calls > 0; }
 
   function addUsageFooter(bubble) {
     if (!bubble || bubble.__jarvisUsageFooterAttached || !hasUsage()) return;
@@ -49,6 +41,8 @@ namespace S1Jarvis.UI
 
     var usage = pending;
     resetUsage();
+    var isLocal = String(usage.provider || '').toLowerCase() === 'local' &&
+                  Number(usage.input) === 0 && Number(usage.output) === 0;
 
     var footer = document.createElement('div');
     footer.className = 'jarvis-ai-usage-meta';
@@ -65,31 +59,29 @@ namespace S1Jarvis.UI
     outEl.style.cssText = 'color:#ff6b6b;opacity:.82;font-weight:600;margin-left:8px;';
 
     var modelEl = document.createElement('span');
-    modelEl.textContent = usage.model || 'model ?';
+    modelEl.textContent = usage.model || (isLocal ? 'JARVIS' : 'model ?');
     modelEl.style.cssText = 'color:var(--text-dim);opacity:.55;margin-left:8px;';
 
     var statusEl = document.createElement('span');
     statusEl.textContent = '●';
-    statusEl.style.cssText = usage.allLogged
+    statusEl.style.cssText = isLocal || usage.allLogged
       ? 'color:#4cc98a;opacity:.55;margin-left:7px;'
       : 'color:#ffc14c;opacity:.75;margin-left:7px;';
-    statusEl.title = usage.allLogged
-      ? 'AI usage καταγράφηκε στο CCCJAILOG'
-      : 'AI usage log απέτυχε - η απάντηση συνεχίστηκε κανονικά';
+    statusEl.title = isLocal
+      ? 'Local Jarvis response - δεν έγινε AI call'
+      : (usage.allLogged
+          ? 'AI usage καταγράφηκε στο CCCJAILOG'
+          : 'AI usage log απέτυχε - η απάντηση συνεχίστηκε κανονικά');
 
     footer.appendChild(inEl);
     footer.appendChild(outEl);
     footer.appendChild(modelEl);
     footer.appendChild(statusEl);
-
-    if (bubble.parentNode) {
-      bubble.parentNode.insertBefore(footer, bubble.nextSibling);
-    }
+    if (bubble.parentNode) bubble.parentNode.insertBefore(footer, bubble.nextSibling);
   }
 
   function inspectNode(node) {
     if (!node || node.nodeType !== 1) return;
-
     var users = [];
     var assistants = [];
     if (node.matches && node.matches('.msg.user')) users.push(node);
@@ -98,12 +90,8 @@ namespace S1Jarvis.UI
       node.querySelectorAll('.msg.user').forEach(function (x) { users.push(x); });
       node.querySelectorAll('.msg.assistant').forEach(function (x) { assistants.push(x); });
     }
-
     if (users.length > 0) resetUsage();
-
     assistants.forEach(function (bubble) {
-      // Provider usage is pushed from C# before the final visible response.
-      // Small defer protects against WebView message/script queue ordering.
       setTimeout(function () { addUsageFooter(bubble); }, 40);
     });
   }
@@ -112,43 +100,29 @@ namespace S1Jarvis.UI
     if (!document.body || window.__jarvisUsageObserver) return;
     resetUsage();
     window.__jarvisUsageObserver = new MutationObserver(function (mutations) {
-      mutations.forEach(function (m) {
-        m.addedNodes.forEach(inspectNode);
-      });
+      mutations.forEach(function (m) { m.addedNodes.forEach(inspectNode); });
     });
     window.__jarvisUsageObserver.observe(document.body, { childList: true, subtree: true });
   }
 
-  if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', startObserver, { once: true });
-  } else {
-    startObserver();
-  }
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', startObserver, { once: true });
+  else startObserver();
 })();";
 
         public void EnableAiUsageUi()
         {
-            if (_aiUsageUiEnabled)
-                return;
-
+            if (_aiUsageUiEnabled) return;
             _aiUsageUiEnabled = true;
             JarvisAiUsageLogger.UsageRecorded += OnAiUsageRecorded;
             Unloaded += JarvisShell_AiUsageUiUnloaded;
-
-            webView.CoreWebView2InitializationCompleted +=
-                WebView_AiUsageUiInitializationCompleted;
-
-            if (webView.CoreWebView2 != null)
-                _ = InstallAiUsageUiAsync();
+            webView.CoreWebView2InitializationCompleted += WebView_AiUsageUiInitializationCompleted;
+            if (webView.CoreWebView2 != null) _ = InstallAiUsageUiAsync();
         }
 
         private async void WebView_AiUsageUiInitializationCompleted(
-            object sender,
-            Microsoft.Web.WebView2.Core.CoreWebView2InitializationCompletedEventArgs e)
+            object sender, Microsoft.Web.WebView2.Core.CoreWebView2InitializationCompletedEventArgs e)
         {
-            if (!e.IsSuccess)
-                return;
-
+            if (!e.IsSuccess) return;
             await InstallAiUsageUiAsync();
         }
 
@@ -156,33 +130,23 @@ namespace S1Jarvis.UI
         {
             try
             {
-                if (webView.CoreWebView2 == null)
-                    return;
-
-                await webView.CoreWebView2.AddScriptToExecuteOnDocumentCreatedAsync(
-                    AiUsageUiScript);
+                if (webView.CoreWebView2 == null) return;
+                await webView.CoreWebView2.AddScriptToExecuteOnDocumentCreatedAsync(AiUsageUiScript);
                 await webView.CoreWebView2.ExecuteScriptAsync(AiUsageUiScript);
             }
-            catch (Exception ex)
-            {
-                DebugLog.Log("[AI-USAGE-UI] install failed: " + ex.Message);
-            }
+            catch (Exception ex) { DebugLog.Log("[AI-USAGE-UI] install failed: " + ex.Message); }
         }
 
         private void OnAiUsageRecorded(JarvisAiUsageEvent usage)
         {
-            if (usage == null)
-                return;
-
+            if (usage == null) return;
             try
             {
                 Dispatcher.BeginInvoke(new Action(async () =>
                 {
                     try
                     {
-                        if (webView.CoreWebView2 == null)
-                            return;
-
+                        if (webView.CoreWebView2 == null) return;
                         var payload = new JObject
                         {
                             ["inputTokens"] = usage.InputTokens,
@@ -191,31 +155,18 @@ namespace S1Jarvis.UI
                             ["provider"] = usage.Provider ?? string.Empty,
                             ["logged"] = usage.Logged
                         };
-
-                        string script =
-                            "if(window.__jarvisUsagePush){window.__jarvisUsagePush(" +
-                            payload.ToString(Formatting.None) + ");}";
+                        string script = "if(window.__jarvisUsagePush){window.__jarvisUsagePush(" + payload.ToString(Formatting.None) + ");}";
                         await webView.CoreWebView2.ExecuteScriptAsync(script);
                     }
-                    catch (Exception ex)
-                    {
-                        DebugLog.Log("[AI-USAGE-UI] push failed: " + ex.Message);
-                    }
+                    catch (Exception ex) { DebugLog.Log("[AI-USAGE-UI] push failed: " + ex.Message); }
                 }));
             }
-            catch (Exception ex)
-            {
-                DebugLog.Log("[AI-USAGE-UI] dispatch failed: " + ex.Message);
-            }
+            catch (Exception ex) { DebugLog.Log("[AI-USAGE-UI] dispatch failed: " + ex.Message); }
         }
 
-        private void JarvisShell_AiUsageUiUnloaded(
-            object sender,
-            System.Windows.RoutedEventArgs e)
+        private void JarvisShell_AiUsageUiUnloaded(object sender, System.Windows.RoutedEventArgs e)
         {
-            if (!_aiUsageUiEnabled)
-                return;
-
+            if (!_aiUsageUiEnabled) return;
             JarvisAiUsageLogger.UsageRecorded -= OnAiUsageRecorded;
             _aiUsageUiEnabled = false;
         }
