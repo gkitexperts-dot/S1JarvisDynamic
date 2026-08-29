@@ -82,11 +82,10 @@ namespace S1Jarvis.Core
     }
 
     /// <summary>
-    /// Performs the provider probe through Verilic. The request is authenticated
-    /// with the activated installation's ES256 proof and carries only the same
-    /// Soft1 identity fields used by authoritative AI routing. Verilic resolves
-    /// the provider/model for Jarvis and every configured helper and keeps all
-    /// provider credentials server-side.
+    /// Performs the ONE authoritative agent/provider/model load for an opened
+    /// Jarvis shell. The signed Verilic Health response itself is authoritative;
+    /// callers do not resolve a model first and do not perform a separate routing
+    /// lookup. The complete target set is stored by JarvisAgentRuntimeSnapshot.
     /// </summary>
     internal sealed class JarvisAgentHealthProbe
     {
@@ -122,6 +121,16 @@ namespace S1Jarvis.Core
                 SecurityProtocolType.Tls12 | SecurityProtocolType.Tls13;
         }
 
+        public Task<JarvisAgentHealthResult> ProbeAsync(
+            XSupport xSupport,
+            string expectedAgentAccountRef)
+        {
+            return ProbeAsync(xSupport, expectedAgentAccountRef, null);
+        }
+
+        // Compatibility overload. expectedModel is optional and is used only
+        // by old callers that explicitly want a consistency assertion. It is
+        // NEVER needed for normal Jarvis startup; Health supplies the model.
         public async Task<JarvisAgentHealthResult> ProbeAsync(
             XSupport xSupport,
             string expectedAgentAccountRef,
@@ -131,10 +140,10 @@ namespace S1Jarvis.Core
                 return JarvisAgentHealthResult.Failure("provider_probe_identity_missing");
             if (string.IsNullOrWhiteSpace(expectedAgentAccountRef))
                 return JarvisAgentHealthResult.Failure("agent_account_missing");
-            if (string.IsNullOrWhiteSpace(expectedModel))
-                return JarvisAgentHealthResult.Failure("provider_model_missing");
 
-            string selectedModel = expectedModel.Trim();
+            string selectedModel = string.IsNullOrWhiteSpace(expectedModel)
+                ? null
+                : expectedModel.Trim();
 
             try
             {
@@ -243,7 +252,19 @@ namespace S1Jarvis.Core
                         IReadOnlyList<JarvisAgentHealthTargetResult> targets =
                             ConvertTargets(health.Targets);
 
-                        if (!string.Equals(
+                        if (string.IsNullOrWhiteSpace(returnedModel))
+                            return JarvisAgentHealthResult.Failure(
+                                "provider_model_missing",
+                                provider: health.Provider,
+                                targets: targets,
+                                diagnosticCode: health.DiagnosticCode,
+                                diagnosticMessage: health.DiagnosticMessage);
+
+                        // Only compatibility callers that explicitly supplied an
+                        // expected model get a consistency check. Startup does not
+                        // pre-resolve a model; the Health response is authoritative.
+                        if (!string.IsNullOrWhiteSpace(selectedModel) &&
+                            !string.Equals(
                                 returnedModel,
                                 selectedModel,
                                 StringComparison.Ordinal))
