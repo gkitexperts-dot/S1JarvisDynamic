@@ -1,6 +1,6 @@
 # S1Jarvis Development Invariants
 
-This file is a persistent engineering contract for anyone (human or AI) changing S1Jarvis. Read it before modifying routing, providers, models, agent orchestration, Health, or AI request construction.
+This file is a persistent engineering contract for anyone (human or AI) changing S1Jarvis. **Read this file first whenever a new coding conversation/session starts** and before modifying routing, providers, models, agent orchestration, Health, or AI request construction.
 
 ## AI agent/provider/model routing — NON-NEGOTIABLE
 
@@ -31,9 +31,21 @@ This file is a persistent engineering contract for anyone (human or AI) changing
 ## Enforcement points
 
 - `UI/JarvisShell.ProviderHealth.cs` — the one normal startup load of the Verilic agent schema.
+- `Core/JarvisAgentHealthProbe.cs` — performs that single signed startup Health request; the Health response itself is authoritative and does not require a prior model/routing lookup.
 - `Core/JarvisAgentRuntimeSnapshot.cs` — immutable in-memory session snapshot.
 - `Access/Verilic/VerilicAiMessagesClient.cs` — final AI boundary; injects the startup model for the logical agent and rejects missing/drifted snapshots.
 - `Core/JarvisAgentClient.cs` and orchestration clients — choose logical agents only; they must not own model configuration.
+- `UI/JarvisShell.UatRunner.cs` — HEALTH/UAT reads the already-loaded snapshot; it must not perform another Health/routing call.
+
+## Automated guard
+
+Run this before considering any AI-routing change complete:
+
+```text
+python scripts/verify_ai_routing_policy.py
+```
+
+The same check is wired into `.github/workflows/ai-routing-policy.yml`. It rejects runtime C# changes that reintroduce concrete/hardcoded model assignments or violate the startup-only Health/schema-load rule.
 
 ## Before changing AI code
 
