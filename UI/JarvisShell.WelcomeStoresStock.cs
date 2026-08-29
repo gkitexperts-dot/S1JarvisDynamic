@@ -17,10 +17,6 @@ namespace S1Jarvis.UI
         private bool _welcomeStoresStockHooked;
         private bool _welcomeStoresStockInjected;
 
-        // Short-lived server-side AADE payloads for the explicit
-        // "Άνοιγμα προμηθευτή" confirmation flow. The browser receives only
-        // a token and display data; the authoritative create payload remains
-        // in the host and is not trusted back from JavaScript.
         private readonly Dictionary<string, JObject> _welcomeStoresPendingSuppliers =
             new Dictionary<string, JObject>(StringComparer.OrdinalIgnoreCase);
 
@@ -192,9 +188,6 @@ namespace S1Jarvis.UI
                         throw new Exception("Η επιβεβαίωση ανοίγματος προμηθευτή έληξε. Ξεκίνησε ξανά από το κουμπί Άνοιγμα.");
 
                     string afm = ((string)createPayload["afm"] ?? string.Empty).Trim();
-
-                    // Re-check immediately before the write to avoid a duplicate
-                    // if another user opened the supplier after the preview.
                     JObject existing = JObject.Parse(
                         JarvisTools.ExecuteFindTraderByAfmAndSodType(_xSupport, afm, 12));
                     if ((bool?)existing["found"] == true)
@@ -231,6 +224,32 @@ namespace S1Jarvis.UI
                     await HandleWelcomeStoresOrderCreateAsync(cmd);
                     return;
                 }
+
+                if (string.Equals(type, "ws_stock_order_open", StringComparison.OrdinalIgnoreCase))
+                {
+                    int findocId = (int?)cmd["findocId"] ?? 0;
+                    if (findocId <= 0)
+                        throw new Exception("Λείπει το FINDOC της παραγγελίας.");
+
+                    var doc = _xSupport.GetSQLDataSet(
+                        "SELECT TOP 1 FINDOC FROM FINDOC WHERE COMPANY=:1 AND SOSOURCE=:2 AND FINDOC=:3",
+                        _xSupport.ConnectionInfo.CompanyId,
+                        WelcomeStoresInventoryService.PurchaseOrderSosource,
+                        findocId);
+                    if (doc == null || doc.Count == 0)
+                        throw new Exception("Η παραγγελία δεν βρέθηκε στην τρέχουσα εταιρία.");
+
+                    // Deliberately no WebView call after this command. The native
+                    // Soft1 document is opened only after an explicit user click
+                    // and remains the last UI action in the sequence.
+                    JarvisTools.ExecuteOpenDocument(_xSupport, new JObject
+                    {
+                        ["sosource"] = WelcomeStoresInventoryService.PurchaseOrderSosource,
+                        ["mode"] = "locate",
+                        ["id"] = findocId
+                    });
+                    return;
+                }
             }
             catch (Exception ex)
             {
@@ -260,8 +279,6 @@ namespace S1Jarvis.UI
             if (price <= 0)
                 throw new Exception("Η συμφωνημένη τιμή πρέπει να είναι μεγαλύτερη από μηδέν.");
 
-            // Re-read live availability immediately before the write. The UI
-            // value is display state only and is not trusted as stock authority.
             WelcomeStoresInventoryService.StockRow stockRow =
                 WelcomeStoresInventoryService.GetStoreAvailability(_xSupport, itemCode)
                     .FirstOrDefault(x =>
@@ -277,8 +294,6 @@ namespace S1Jarvis.UI
             if (!stockRow.SupplierExists || !stockRow.SupplierTrdr.HasValue || stockRow.SupplierTrdr.Value <= 0)
                 throw new Exception("Το κατάστημα δεν είναι ακόμα ανοιγμένο ως προμηθευτής. Πάτησε πρώτα Άνοιγμα.");
 
-            // Canonical item CODE is resolved to the local company's own MTRL.
-            // Never reuse MTRL ids from company 1000 or from the source store.
             int localMtrl = WelcomeStoresInventoryService.ResolveCurrentCompanyMtrl(_xSupport, itemCode);
             int series = WelcomeStoresInventoryService.ResolvePurchaseOrderSeries(_xSupport);
 
@@ -300,9 +315,6 @@ namespace S1Jarvis.UI
                     "WelcomeStores Stores Inventory - παραγγελία από εταιρία " + storeCompany +
                     ", αποθήκη " + whouse + ", είδος " + itemCode +
                     ", ποσότητα " + quantity + ", συμφωνημένη τιμή " + price,
-                // Deterministic UI flow: store/supplier/item/qty/price are all
-                // explicitly selected and server-validated, so there is no AI
-                // interpretation uncertainty at this point.
                 ["confidence"] = 1.0
             };
 
@@ -311,35 +323,25 @@ namespace S1Jarvis.UI
                 throw new Exception((string)created["message"] ?? "Απέτυχε η δημιουργία παραγγελίας PURDOC.");
 
             int findocId = (int?)created["findocId"] ?? 0;
-            bool opened = false;
-            if (findocId > 0)
-            {
-                try
-                {
-                    JarvisTools.ExecuteOpenDocument(_xSupport, new JObject
-                    {
-                        ["sosource"] = WelcomeStoresInventoryService.PurchaseOrderSosource,
-                        ["mode"] = "locate",
-                        ["id"] = findocId
-                    });
-                    opened = true;
-                }
-                catch (Exception openEx)
-                {
-                    // The order already exists at this point. Opening the native
-                    // card is convenience only and must not turn a successful
-                    // write into a false failure.
-                    DebugLog.Log("[WS-STOCK] order created but native open failed: " + openEx);
-                }
-            }
+            if (findocId <= 0)
+                throw new Exception("Η παραγγελία καταχωρήθηκε αλλά δεν επιστράφηκε FINDOC.");
+
+            string fincode = string.Empty;
+            var postedDoc = _xSupport.GetSQLDataSet(
+                "SELECT TOP 1 FINCODE FROM FINDOC WHERE COMPANY=:1 AND SOSOURCE=:2 AND FINDOC=:3",
+                _xSupport.ConnectionInfo.CompanyId,
+                WelcomeStoresInventoryService.PurchaseOrderSosource,
+                findocId);
+            if (postedDoc != null && postedDoc.Count > 0 && postedDoc.Current["FINCODE"] != DBNull.Value)
+                fincode = Convert.ToString(postedDoc.Current["FINCODE"]).Trim();
 
             await SendWelcomeStoresStockResultAsync("order_created", new
             {
                 success = true,
                 findocId,
+                fincode,
                 series,
-                sosource = WelcomeStoresInventoryService.PurchaseOrderSosource,
-                opened
+                sosource = WelcomeStoresInventoryService.PurchaseOrderSosource
             });
         }
 
