@@ -25,12 +25,6 @@ namespace S1Jarvis.Core
         public List<string> Issues { get; private set; }
     }
 
-    /// <summary>
-    /// Pilot-only shadow pipeline. It may call the AI decomposer and read
-    /// routing knowledge, but it never executes business tools, lookups,
-    /// confirmations or task actions. Any failure is diagnostic-only and must
-    /// never affect the mature Main Chat path.
-    /// </summary>
     internal static class JarvisOrchestrationShadowCoordinator
     {
         internal static async Task<JarvisShadowOrchestrationResult> RunAsync(
@@ -39,30 +33,19 @@ namespace S1Jarvis.Core
             CancellationToken cancellationToken = default(CancellationToken))
         {
             var result = new JarvisShadowOrchestrationResult();
-
             if (!JarvisRoutingFeatureGate.UseNewRouting(xSupport))
                 return result;
 
             result.GateEnabled = true;
-
             try
             {
-                // Deliberately keep the caller synchronization context here.
-                // After the no-tools HTTP call completes, Pass 2 may read
-                // Soft1 routing knowledge through XSupport and must resume on
-                // the host/UI context instead of a ThreadPool continuation.
                 string decomposerJson = await JarvisShadowSemanticClient.DecomposeAsync(
-                    xSupport,
-                    userPrompt,
-                    cancellationToken);
+                    xSupport, userPrompt, cancellationToken);
 
                 JarvisIntentObjectSet objectSet;
                 string[] parseIssues;
                 bool parsed = JarvisIntentOrchestration.TryParsePass1(
-                    decomposerJson,
-                    userPrompt,
-                    out objectSet,
-                    out parseIssues);
+                    decomposerJson, userPrompt, out objectSet, out parseIssues);
 
                 result.IntentObjects = objectSet;
                 if (!parsed)
@@ -73,8 +56,6 @@ namespace S1Jarvis.Core
                 }
 
                 result.DecompositionSucceeded = true;
-
-                // Pass 2 runs independently only for objects that need it.
                 JarvisIntentOrchestration.ApplyDynamicPass(objectSet, xSupport);
 
                 JarvisIntentObject[] unresolved = objectSet.Objects
@@ -89,13 +70,11 @@ namespace S1Jarvis.Core
                             " unresolved after routing; status=" + item.Status +
                             "; diagnostic=" + JarvisIntentOrchestration.BuildClarificationDiagnostic(item));
                     }
-
                     LogResult(result, userPrompt);
                     return result;
                 }
 
-                IReadOnlyList<JarvisValidatedTaskNode> nodes =
-                    JarvisPrerequisiteResolution.BuildNodes(objectSet);
+                IReadOnlyList<JarvisValidatedTaskNode> nodes = JarvisPrerequisiteResolution.BuildNodes(objectSet);
                 result.Nodes = nodes;
 
                 JarvisDependencyGraph graph = JarvisDependencyBinder.Build(nodes);
@@ -133,13 +112,10 @@ namespace S1Jarvis.Core
         {
             try
             {
-                // Do not ConfigureAwait(false): XSupport-backed Pass 2 must
-                // continue on the Soft1/WPF synchronization context.
                 await RunAsync(xSupport, userPrompt);
             }
             catch (Exception ex)
             {
-                // Absolute safety boundary for fire-and-forget Main Chat hook.
                 DebugLog.Log("[ORCH-SHADOW] UNHANDLED SUPPRESSED: " + ex);
             }
         }
@@ -148,10 +124,7 @@ namespace S1Jarvis.Core
         {
             try
             {
-                JArray issueArray = result == null
-                    ? new JArray()
-                    : new JArray(result.Issues);
-
+                JArray issueArray = result == null ? new JArray() : new JArray(result.Issues);
                 var root = new JObject
                 {
                     ["gate"] = result != null && result.GateEnabled,
@@ -161,7 +134,6 @@ namespace S1Jarvis.Core
                     ["preview"] = SerializePreview(result == null ? null : result.Preview),
                     ["issues"] = issueArray
                 };
-
                 DebugLog.Log("[ORCH-SHADOW] " + root.ToString(Formatting.None));
             }
             catch (Exception ex)
@@ -220,13 +192,13 @@ namespace S1Jarvis.Core
     }
 
     /// <summary>
-    /// One-shot no-tools semantic call for the shadow decomposer. Uses the same
-    /// signed Verilic AI transport as Main Chat but provides no tool definitions,
-    /// therefore it cannot execute any Jarvis business action.
+    /// Shadow-only structured semantic decomposer. The synthetic tool is an output
+    /// envelope, not a Jarvis business tool, and is never dispatched or executed.
     /// </summary>
     internal static class JarvisShadowSemanticClient
     {
         private const string Model = "claude-opus-5";
+        private const string StructuredToolName = "emit_intent_objects";
         private const int MaxTokens = 6000;
 
         internal static async Task<string> DecomposeAsync(
@@ -236,15 +208,6 @@ namespace S1Jarvis.Core
         {
             if (xSupport == null)
                 throw new ArgumentNullException("xSupport");
-
-            var messages = new JArray
-            {
-                new JObject
-                {
-                    ["role"] = "user",
-                    ["content"] = JarvisIntentOrchestration.BuildDecomposerUserPayload(userPrompt)
-                }
-            };
 
             var requestBody = new JObject
             {
@@ -256,24 +219,33 @@ namespace S1Jarvis.Core
                     new JObject
                     {
                         ["type"] = "text",
-                        ["text"] = JarvisIntentOrchestration.BuildDecomposerSystemPrompt()
+                        ["text"] = JarvisIntentOrchestration.BuildDecomposerSystemPrompt() +
+                            " Η απάντηση πρέπει να δοθεί αποκλειστικά καλώντας το emit_intent_objects. " +
+                            "Το εργαλείο είναι μόνο structured output envelope και δεν εκτελεί business action."
                     }
                 },
-                ["tools"] = new JArray(),
-                ["messages"] = messages
+                ["tools"] = new JArray(BuildStructuredOutputTool()),
+                ["tool_choice"] = new JObject
+                {
+                    ["type"] = "tool",
+                    ["name"] = StructuredToolName
+                },
+                ["messages"] = new JArray
+                {
+                    new JObject
+                    {
+                        ["role"] = "user",
+                        ["content"] = JarvisIntentOrchestration.BuildDecomposerUserPayload(userPrompt)
+                    }
+                }
             };
 
-            string anthropicJson = requestBody.ToString(Formatting.None);
+            string providerRequestJson = requestBody.ToString(Formatting.None);
 
-            // Use the same configured runtime routing path as the mature client.
-            // The logical Jarvis role is not guaranteed to have a dedicated model
-            // in every installation; forcing it caused provider_model_missing in
-            // shadow mode. This compatibility route still remains provider-neutral
-            // and no-tools, while Verilic selects an actually configured internal
-            // role/provider/model. The decomposer contract itself remains defined
-            // exclusively by the system prompt and registered TASK_CATALOG.
+            // Atlas is an already configured read/planning-capable route in the
+            // current runtime. The synthetic tool itself is never executed.
             var proxyResp = await new S1Jarvis.Access.Verilic.VerilicAiMessagesClient()
-                .SendAsync(xSupport, anthropicJson, cancellationToken)
+                .SendAsync(xSupport, "Atlas", providerRequestJson, cancellationToken)
                 .ConfigureAwait(false);
 
             if (!proxyResp.Success)
@@ -282,29 +254,92 @@ namespace S1Jarvis.Core
                         ? "AI credits exhausted during shadow decomposition."
                         : (proxyResp.ErrorMessage ?? "Shadow semantic call failed."));
 
-            string raw = ExtractTextFromNormalizedResponse(proxyResp.RawResponseJson);
+            string structuredJson = ExtractStructuredToolInput(proxyResp.RawResponseJson);
+            if (!string.IsNullOrWhiteSpace(structuredJson))
+            {
+                DebugLog.Log(
+                    "[ORCH-SHADOW] structured decomposition received; runtimeAgent=" +
+                    (proxyResp.RuntimeAgent ?? string.Empty) + " provider=" +
+                    (proxyResp.RuntimeProvider ?? string.Empty) + " model=" +
+                    (proxyResp.RuntimeModel ?? string.Empty));
+                return structuredJson;
+            }
 
-            // Verilic also exposes provider-neutral ResponseText. Some provider
-            // adapters legitimately return useful text there even when the raw
-            // Anthropic-compatible content array has no text block. Do not turn
-            // such a successful call into an artificial empty decomposition.
+            // Diagnostic compatibility fallback only. It does not weaken the
+            // structured contract, but preserves visibility for older adapters.
+            string raw = ExtractTextFromNormalizedResponse(proxyResp.RawResponseJson);
             if (string.IsNullOrWhiteSpace(raw))
                 raw = (proxyResp.ResponseText ?? string.Empty).Trim();
 
-            if (string.IsNullOrWhiteSpace(raw))
-            {
-                DebugLog.Log(
-                    "[ORCH-SHADOW] decomposer successful but returned no text; " +
-                    "runtimeAgent=" + (proxyResp.RuntimeAgent ?? string.Empty) +
-                    " provider=" + (proxyResp.RuntimeProvider ?? string.Empty) +
-                    " model=" + (proxyResp.RuntimeModel ?? string.Empty) +
-                    " rawChars=" + (proxyResp.RawResponseJson ?? string.Empty).Length.ToString());
-            }
+            DebugLog.Log(
+                "[ORCH-SHADOW] structured tool output missing; runtimeAgent=" +
+                (proxyResp.RuntimeAgent ?? string.Empty) + " provider=" +
+                (proxyResp.RuntimeProvider ?? string.Empty) + " model=" +
+                (proxyResp.RuntimeModel ?? string.Empty) + " rawChars=" +
+                (proxyResp.RawResponseJson ?? string.Empty).Length.ToString());
 
             return ExtractJsonObject(raw);
         }
 
-        private static string ExtractTextFromNormalizedResponse(string responseJson)
+        private static JObject BuildStructuredOutputTool()
+        {
+            return new JObject
+            {
+                ["name"] = StructuredToolName,
+                ["description"] = "Return the decomposed autonomous intent objects. This is a structured output envelope only; it performs no action.",
+                ["input_schema"] = new JObject
+                {
+                    ["type"] = "object",
+                    ["additionalProperties"] = false,
+                    ["properties"] = new JObject
+                    {
+                        ["intentObjects"] = new JObject
+                        {
+                            ["type"] = "array",
+                            ["items"] = new JObject
+                            {
+                                ["type"] = "object",
+                                ["additionalProperties"] = false,
+                                ["properties"] = new JObject
+                                {
+                                    ["id"] = new JObject { ["type"] = "string" },
+                                    ["intentFragment"] = new JObject { ["type"] = "string" },
+                                    ["inputs"] = new JObject
+                                    {
+                                        ["type"] = "object",
+                                        ["additionalProperties"] = true
+                                    },
+                                    ["candidates"] = new JObject
+                                    {
+                                        ["type"] = "array",
+                                        ["items"] = new JObject
+                                        {
+                                            ["type"] = "object",
+                                            ["additionalProperties"] = false,
+                                            ["properties"] = new JObject
+                                            {
+                                                ["taskType"] = new JObject { ["type"] = "string" },
+                                                ["confidence"] = new JObject
+                                                {
+                                                    ["type"] = "number",
+                                                    ["minimum"] = 0.0,
+                                                    ["maximum"] = 1.0
+                                                }
+                                            },
+                                            ["required"] = new JArray("taskType", "confidence")
+                                        }
+                                    }
+                                },
+                                ["required"] = new JArray("id", "intentFragment", "inputs", "candidates")
+                            }
+                        }
+                    },
+                    ["required"] = new JArray("intentObjects")
+                }
+            };
+        }
+
+        private static string ExtractStructuredToolInput(string responseJson)
         {
             if (string.IsNullOrWhiteSpace(responseJson))
                 return string.Empty;
@@ -317,15 +352,34 @@ namespace S1Jarvis.Core
                 throw new InvalidOperationException("Shadow semantic decomposer refused the request.");
 
             JArray content = response["content"] as JArray ?? new JArray();
+            JObject toolUse = content
+                .OfType<JObject>()
+                .FirstOrDefault(x =>
+                    string.Equals((string)x["type"], "tool_use", StringComparison.OrdinalIgnoreCase) &&
+                    string.Equals((string)x["name"], StructuredToolName, StringComparison.OrdinalIgnoreCase));
+
+            if (toolUse == null || toolUse["input"] == null)
+                return string.Empty;
+
+            JObject input = toolUse["input"] as JObject;
+            if (input == null)
+                throw new InvalidOperationException("Structured decomposer tool input is not a JSON object.");
+
+            return input.ToString(Formatting.None);
+        }
+
+        private static string ExtractTextFromNormalizedResponse(string responseJson)
+        {
+            if (string.IsNullOrWhiteSpace(responseJson))
+                return string.Empty;
+
+            JObject response = JObject.Parse(responseJson);
+            JArray content = response["content"] as JArray ?? new JArray();
             IEnumerable<string> textParts = content
                 .OfType<JObject>()
-                .Where(x => string.Equals(
-                    (string)x["type"],
-                    "text",
-                    StringComparison.OrdinalIgnoreCase))
+                .Where(x => string.Equals((string)x["type"], "text", StringComparison.OrdinalIgnoreCase))
                 .Select(x => x["text"] == null ? string.Empty : x["text"].ToString())
                 .Where(x => !string.IsNullOrWhiteSpace(x));
-
             return string.Join("\n", textParts).Trim();
         }
 
@@ -347,7 +401,6 @@ namespace S1Jarvis.Core
             int lastBrace = trimmed.LastIndexOf('}');
             if (firstBrace >= 0 && lastBrace > firstBrace)
                 return trimmed.Substring(firstBrace, lastBrace - firstBrace + 1);
-
             return trimmed;
         }
     }
