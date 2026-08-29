@@ -18,13 +18,9 @@ namespace S1Jarvis.Core
 
     internal static class JarvisPresentationComposer
     {
-        // Presentation remains a Jarvis responsibility, but the current Verilic
-        // installation has a configured provider/model target for Atlas and no
-        // independent Jarvis provider target. Use the configured read-only AI
-        // route for wording only; the system prompt below still constrains it to
-        // presentation and never grants execution/data authority.
-        private const string RuntimeAiAgent = "Atlas";
-        private const string Model = "gemini-3.6-flash";
+        // The desktop selects only the logical agent. Provider and model are
+        // authoritative Verilic routing decisions and must never be hardcoded here.
+        private const string RuntimeAiAgent = "Jarvis";
         private const int MaxTokens = 1600;
 
         internal static async Task<JarvisPresentationResult> ComposeReportAsync(
@@ -120,7 +116,6 @@ namespace S1Jarvis.Core
         {
             return new JObject
             {
-                ["model"] = Model,
                 ["max_tokens"] = MaxTokens,
                 ["output_config"] = new JObject { ["effort"] = "low" },
                 ["system"] = new JArray
