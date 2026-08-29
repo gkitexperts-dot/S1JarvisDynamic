@@ -95,40 +95,14 @@ namespace S1Jarvis.UI
                     explicitCommand ? "AI agents: έλεγχος..." : "AI provider: έλεγχος σύνδεσης...",
                     "checking");
 
-                JarvisRuntimeAccessResult runtime = await Task.Run(() =>
-                    JarvisLicenseGuard.CheckRuntimeAccessSilent(_xSupport));
-
-                model = runtime?.AgentRouting?.Model;
-                if (string.IsNullOrWhiteSpace(model))
-                {
-                    message = "AI provider: δεν έχει οριστεί μοντέλο";
-                    state = "error";
-                    await ShowProviderHealthStatusAsync(message, state);
-                    if (explicitCommand)
-                        PostProviderHealthCommandResult(message, state);
-                    return;
-                }
-
-                if (runtime.AgentRouting == null ||
-                    !runtime.AgentRouting.Available ||
-                    !string.Equals(
-                        runtime.AgentRouting.AgentAccountRef,
-                        _agentAccountRef,
-                        StringComparison.Ordinal))
-                {
-                    message = "AI provider: η δρομολόγηση άλλαξε · " + model;
-                    state = "error";
-                    await ShowProviderHealthStatusAsync(message, state);
-                    if (explicitCommand)
-                        PostProviderHealthCommandResult(message, state);
-                    return;
-                }
-
+                // SINGLE remote agent-schema load. The startup Health response
+                // itself returns Jarvis + every helper Provider/Model target.
+                // Do not pre-resolve routing/model here and do not refresh it later.
                 var probe = new JarvisAgentHealthProbe();
                 JarvisAgentHealthResult result = await probe.ProbeAsync(
                     _xSupport,
-                    _agentAccountRef,
-                    model);
+                    _agentAccountRef);
+                model = result == null ? null : result.Model;
 
                 if (result.Ready)
                 {
@@ -147,7 +121,7 @@ namespace S1Jarvis.UI
                     }
                     else
                     {
-                        model = result.Model ?? model;
+                        model = result.Model;
                         string provider = string.IsNullOrWhiteSpace(result.Provider)
                             ? "provider"
                             : result.Provider;

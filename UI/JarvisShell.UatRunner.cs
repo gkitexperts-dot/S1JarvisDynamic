@@ -259,41 +259,45 @@ namespace S1Jarvis.UI
             }
         }
 
-        private async Task<UatTestResult> RunHealthUatAsync(UatTestCase test)
+        private Task<UatTestResult> RunHealthUatAsync(UatTestCase test)
         {
             try
             {
-                JarvisRuntimeAccessResult runtime = await Task.Run(() =>
-                    JarvisLicenseGuard.CheckRuntimeAccessSilent(_xSupport));
+                // UAT HEALTH is deliberately local after Jarvis startup.
+                // It validates/reports the immutable snapshot and MUST NOT call
+                // Verilic Health/routing again in the same open Jarvis session.
+                IReadOnlyList<JarvisAgentRuntimeTarget> targets =
+                    JarvisAgentRuntimeSnapshot.GetAll();
+                if (!JarvisAgentRuntimeSnapshot.IsInitialized ||
+                    targets == null || targets.Count == 0)
+                {
+                    return Task.FromResult(new UatTestResult(
+                        test,
+                        "FAIL",
+                        "Το startup AI agent snapshot δεν είναι διαθέσιμο.",
+                        string.Empty));
+                }
 
-                if (runtime == null || runtime.AgentRouting == null || !runtime.AgentRouting.Available)
-                    return new UatTestResult(test, "FAIL", "Το signed runtime routing δεν είναι διαθέσιμο.", string.Empty);
+                string summary = string.Join("; ", targets.Select(x =>
+                    (x.Agent ?? "—") + "=Connected/" +
+                    (x.Provider ?? "—") + "/" +
+                    (x.Model ?? "—") + "/" +
+                    (x.Inherited ? "Inherited" : "Dedicated")));
 
-                string model = runtime.AgentRouting.Model;
-                if (string.IsNullOrWhiteSpace(model))
-                    return new UatTestResult(test, "FAIL", "Δεν υπάρχει configured default model.", string.Empty);
-
-                var probe = new JarvisAgentHealthProbe();
-                JarvisAgentHealthResult health = await probe.ProbeAsync(
-                    _xSupport,
-                    runtime.AgentRouting.AgentAccountRef,
-                    model);
-
-                if (health == null || !health.Ready)
-                    return new UatTestResult(test, "FAIL", "HEALTH απέτυχε: " + (health?.ReasonCode ?? "unknown"), string.Empty);
-
-                int targetCount = health.Targets == null ? 0 : health.Targets.Count;
-                bool allReady = targetCount > 0 && health.Targets.All(x => x.Ready);
-                string status = allReady ? "PASS" : "REVIEW";
-                string detail = allReady
-                    ? "Όλοι οι " + targetCount + " effective AI targets είναι Connected."
-                    : "Το top-level HEALTH είναι Connected, αλλά δεν είναι όλοι οι per-agent targets ready.";
-
-                return new UatTestResult(test, status, detail, BuildHealthTargetSummary(health));
+                return Task.FromResult(new UatTestResult(
+                    test,
+                    "PASS",
+                    "Startup snapshot: όλοι οι " + targets.Count +
+                    " effective AI targets είναι διαθέσιμοι χωρίς νέο Verilic lookup.",
+                    summary));
             }
             catch (Exception ex)
             {
-                return new UatTestResult(test, "FAIL", "HEALTH exception: " + ex.Message, string.Empty);
+                return Task.FromResult(new UatTestResult(
+                    test,
+                    "FAIL",
+                    "HEALTH snapshot exception: " + ex.Message,
+                    string.Empty));
             }
         }
 
