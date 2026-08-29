@@ -21,6 +21,7 @@ namespace S1Jarvis.Core
         public JarvisIntentObject()
         {
             CandidateScores = new List<JarvisRoutingCandidateScore>();
+            InputHints = new Dictionary<string, JToken>(StringComparer.OrdinalIgnoreCase);
             ValidationIssues = new List<string>();
             Status = JarvisIntentObjectStatus.Pending;
             RoutingPass = JarvisRoutingResolutionPass.DefaultMetadata;
@@ -29,6 +30,7 @@ namespace S1Jarvis.Core
         public string ObjectId { get; set; }
         public string IntentFragment { get; set; }
         public List<JarvisRoutingCandidateScore> CandidateScores { get; private set; }
+        public Dictionary<string, JToken> InputHints { get; private set; }
         public JarvisRoutingDecision RoutingDecision { get; set; }
         public JarvisRoutingResolutionPass RoutingPass { get; set; }
         public JarvisIntentObjectStatus Status { get; set; }
@@ -96,10 +98,12 @@ namespace S1Jarvis.Core
                 "Για κάθε object επέστρεψε ranked task candidates ΜΟΝΟ από το TASK_CATALOG. " +
                 "Μην επινοείς agents, tools, capabilities ή task types. " +
                 "Δώσε confidence από 0.0 έως 1.0 για κάθε candidate και κράτησε το intentFragment όσο γίνεται πιστό στο αντίστοιχο κομμάτι του prompt. " +
+                "Στο inputs βάλε μόνο business values που αναφέρονται καθαρά στο συγκεκριμένο intent fragment. " +
+                "Τα input names πρέπει να προέρχονται από requiredInputs/optionalInputs κάποιου σχετικού candidate task. Μην μαντεύεις ids, series, emails ή άλλα resolved values. " +
                 "Αν ένα σύνθετο prompt ζητά παραγγελία, export, email και calendar, δημιούργησε τέσσερα διαφορετικά objects. " +
                 "Μην βάζεις whole-prompt confidence. Κάθε object έχει το δικό του confidence/ranking. " +
                 "Επέστρεψε ΜΟΝΟ έγκυρο JSON στο schema: " +
-                "{\"intentObjects\":[{\"id\":\"o1\",\"intentFragment\":\"...\",\"candidates\":[{\"taskType\":\"CreateOrder\",\"confidence\":0.94},{\"taskType\":\"...\",\"confidence\":0.20}]}]}";
+                "{\"intentObjects\":[{\"id\":\"o1\",\"intentFragment\":\"...\",\"inputs\":{\"name\":\"value\"},\"candidates\":[{\"taskType\":\"CreateOrder\",\"confidence\":0.94},{\"taskType\":\"...\",\"confidence\":0.20}]}]}";
         }
 
         internal static string BuildDecomposerUserPayload(string userPrompt)
@@ -276,6 +280,20 @@ namespace S1Jarvis.Core
                 ObjectId = id,
                 IntentFragment = fragment
             };
+
+            JObject inputs = item["inputs"] as JObject;
+            if (inputs != null)
+            {
+                foreach (JProperty property in inputs.Properties())
+                {
+                    string name = property.Name == null ? string.Empty : property.Name.Trim();
+                    if (string.IsNullOrWhiteSpace(name) || property.Value == null ||
+                        property.Value.Type == JTokenType.Null || property.Value.Type == JTokenType.Undefined)
+                        continue;
+
+                    result.InputHints[name] = property.Value.DeepClone();
+                }
+            }
 
             JArray candidates = item["candidates"] as JArray;
             if (candidates == null || candidates.Count == 0)
