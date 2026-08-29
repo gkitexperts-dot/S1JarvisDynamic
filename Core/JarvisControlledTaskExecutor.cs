@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Linq;
 using System.Text;
 using System.Threading;
@@ -12,14 +13,16 @@ namespace S1Jarvis.Core
     /// <summary>
     /// Restricted executor for the first live/read-only orchestration slice.
     /// Supports ReportData only. Jarvis owns dispatch and validation; Atlas may
-    /// request exactly one query_data SELECT. The returned query dataset is then
-    /// normalized deterministically into the registered ReportData outputs.
-    /// No write/external tool is exposed here.
+    /// request exactly one query_data SELECT. Jarvis validates the proposed SQL
+    /// against the business intent before execution and may request one corrected
+    /// proposal. The accepted query dataset is normalized deterministically into
+    /// the registered ReportData outputs. No write/external tool is exposed here.
     /// </summary>
     internal static class JarvisControlledTaskExecutor
     {
         private const string Model = "claude-opus-5";
         private const int MaxTokens = 6000;
+        private const int MaxPlanningAttempts = 2;
 
         internal static async Task<JarvisTaskExecutionResult> ExecuteReportDataAsync(
             XSupport xSupport,
@@ -43,20 +46,7 @@ namespace S1Jarvis.Core
                     throw new InvalidOperationException("ReportData dispatch is missing business_question.");
 
                 string question = dispatchInputs["business_question"].ToString();
-                JObject firstRequest = BuildQueryRequest(question);
-                S1Jarvis.Core.AgentProxyResponse firstResponse = await new S1Jarvis.Access.Verilic.VerilicAiMessagesClient()
-                    .SendAsync(xSupport, "Atlas", firstRequest.ToString(Formatting.None), cancellationToken)
-                    .ConfigureAwait(false);
-
-                EnsureSuccess(firstResponse, "Atlas ReportData query planning failed.");
-                JObject queryUse = FindToolUse(firstResponse.RawResponseJson, "query_data");
-                if (queryUse == null)
-                    throw new InvalidOperationException("Atlas ReportData did not return the required query_data tool call.");
-
-                JObject queryInput = queryUse["input"] as JObject;
-                string sql = queryInput == null ? null : (string)queryInput["sql"];
-                if (string.IsNullOrWhiteSpace(sql))
-                    throw new InvalidOperationException("Atlas ReportData returned query_data without SQL.");
+                string sql = await PlanAndValidateSqlAsync(xSupport, question, cancellationToken).ConfigureAwait(false);
 
                 string queryResult = JarvisTools.ExecuteQueryData(xSupport, sql);
                 if (string.IsNullOrWhiteSpace(queryResult))
@@ -64,11 +54,11 @@ namespace S1Jarvis.Core
                 if (LooksLikeQueryError(queryResult))
                     throw new InvalidOperationException("Atlas ReportData query failed: " + queryResult);
 
-                // Jarvis owns semantic cardinality validation. An executor may query a
-                // wider safe window, but a singular latest/most-recent request must not
-                // leak multiple rows into downstream tasks such as SendEmail.
-                string normalizedQueryResult = NormalizeQueryResultForQuestion(question, queryResult);
+                string[] resultIssues = ValidateQueryResultForQuestion(question, queryResult);
+                if (resultIssues.Length > 0)
+                    throw new InvalidOperationException("Jarvis rejected Atlas result: " + string.Join(" | ", resultIssues));
 
+                string normalizedQueryResult = NormalizeQueryResultForQuestion(question, queryResult);
                 string summary = BuildDeterministicSummary(question, normalizedQueryResult);
                 if (string.IsNullOrWhiteSpace(summary))
                     throw new InvalidOperationException("Atlas ReportData could not normalize the query result into a summary.");
@@ -85,8 +75,56 @@ namespace S1Jarvis.Core
             }
         }
 
-        private static JObject BuildQueryRequest(string question)
+        private static async Task<string> PlanAndValidateSqlAsync(
+            XSupport xSupport,
+            string question,
+            CancellationToken cancellationToken)
         {
+            string previousSql = null;
+            string previousDiagnostic = null;
+
+            for (int attempt = 1; attempt <= MaxPlanningAttempts; attempt++)
+            {
+                JObject request = BuildQueryRequest(question, previousSql, previousDiagnostic, attempt);
+                S1Jarvis.Core.AgentProxyResponse response = await new S1Jarvis.Access.Verilic.VerilicAiMessagesClient()
+                    .SendAsync(xSupport, "Atlas", request.ToString(Formatting.None), cancellationToken)
+                    .ConfigureAwait(false);
+
+                EnsureSuccess(response, "Atlas ReportData query planning failed.");
+                JObject queryUse = FindToolUse(response.RawResponseJson, "query_data");
+                if (queryUse == null)
+                    throw new InvalidOperationException("Atlas ReportData did not return the required query_data tool call.");
+
+                JObject queryInput = queryUse["input"] as JObject;
+                string sql = queryInput == null ? null : (string)queryInput["sql"];
+                if (string.IsNullOrWhiteSpace(sql))
+                    throw new InvalidOperationException("Atlas ReportData returned query_data without SQL.");
+
+                string[] issues = ValidateSqlForQuestion(question, sql);
+                if (issues.Length == 0)
+                    return sql;
+
+                previousSql = sql;
+                previousDiagnostic = string.Join(" | ", issues);
+            }
+
+            throw new InvalidOperationException(
+                "Jarvis semantic SQL validation failed after retry. Last SQL=" +
+                (previousSql ?? "<none>") + " Diagnostic=" + (previousDiagnostic ?? "<none>"));
+        }
+
+        private static JObject BuildQueryRequest(string question, string previousSql, string previousDiagnostic, int attempt)
+        {
+            string userContent = "business_question: " + (question ?? string.Empty);
+            if (attempt > 1)
+            {
+                userContent += "\n\n[JARVIS_VALIDATION_RETRY]" +
+                               "\nΤο προηγούμενο SQL απορρίφθηκε από τον Jarvis και ΔΕΝ εκτελέστηκε." +
+                               "\nprevious_sql: " + (previousSql ?? string.Empty) +
+                               "\nvalidation_issues: " + (previousDiagnostic ?? string.Empty) +
+                               "\nΕπέστρεψε νέο query_data call που διορθώνει ΟΛΑ τα παραπάνω. Μην εξηγήσεις με κείμενο.";
+            }
+
             return new JObject
             {
                 ["model"] = Model,
@@ -102,8 +140,8 @@ namespace S1Jarvis.Core
                                    "Αν το business_question ζητά ΕΝΑ τελευταίο/πιο πρόσφατο αποτέλεσμα, χρησιμοποίησε TOP 1 και deterministic ORDER BY. " +
                                    "Για παραστατικά χρησιμοποίησε FINDOC: FINDOC, FINCODE, TRNDATE, SUMAMNT, SERIES, SOSOURCE, COMPANY, TRDR. " +
                                    "Για όνομα συναλλασσόμενου JOIN TRDR ON TRDR.TRDR=FINDOC.TRDR. " +
-                                   "Για όνομα σειράς JOIN SERIES ON SERIES.COMPANY=FINDOC.COMPANY AND SERIES.SERIES=FINDOC.SERIES AND SERIES.SOSOURCE=FINDOC.SOSOURCE. " +
-                                   "Μην χρησιμοποιείς άγνωστες στήλες. Ο Jarvis θα κάνει validation και downstream σύνθεση του αποτελέσματος."
+                                   "Για όνομα σειράς το SERIES είναι composite identity: JOIN SERIES με COMPANY + SERIES + SOSOURCE, όχι μόνο SERIES. " +
+                                   "Μην χρησιμοποιείς άγνωστες στήλες. Ο Jarvis θα ελέγξει το SQL ΠΡΙΝ το εκτελέσει και θα απορρίψει query που δεν εκφράζει σωστά το intent."
                     }
                 },
                 ["tools"] = new JArray(BuildQueryDataTool()),
@@ -113,7 +151,7 @@ namespace S1Jarvis.Core
                     new JObject
                     {
                         ["role"] = "user",
-                        ["content"] = "business_question: " + (question ?? string.Empty)
+                        ["content"] = userContent
                     }
                 }
             };
@@ -149,6 +187,130 @@ namespace S1Jarvis.Core
                 string.Equals((string)x["name"], toolName, StringComparison.OrdinalIgnoreCase));
         }
 
+        private static string[] ValidateSqlForQuestion(string question, string sql)
+        {
+            var issues = new List<string>();
+            string normalized = NormalizeSql(sql);
+
+            if (!normalized.StartsWith("SELECT ", StringComparison.Ordinal))
+                issues.Add("Only SELECT is allowed.");
+            if (normalized.Contains(" INSERT ") || normalized.Contains(" UPDATE ") || normalized.Contains(" DELETE ") ||
+                normalized.Contains(" MERGE ") || normalized.Contains(" DROP ") || normalized.Contains(" ALTER ") ||
+                normalized.Contains(" EXEC ") || normalized.Contains(" EXECUTE "))
+                issues.Add("SQL contains a non-read-only operation.");
+
+            if (IsLatestDocumentQuestion(question))
+            {
+                if (!normalized.Contains(" FROM FINDOC "))
+                    issues.Add("Latest-document intent must read from FINDOC.");
+                if (!normalized.Contains("TOP 1"))
+                    issues.Add("Latest-document intent requires TOP 1.");
+                if (!normalized.Contains(" ORDER BY "))
+                    issues.Add("Latest-document intent requires ORDER BY.");
+                if (!ContainsOrderedColumn(normalized, "TRNDATE", "DESC"))
+                    issues.Add("Latest-document intent requires TRNDATE DESC.");
+                if (!ContainsOrderedColumn(normalized, "FINDOC", "DESC"))
+                    issues.Add("Latest-document intent requires FINDOC DESC as deterministic tie-breaker.");
+            }
+
+            string seriesJoin = ExtractJoinClause(normalized, "SERIES");
+            if (seriesJoin != null)
+            {
+                if (!seriesJoin.Contains("COMPANY"))
+                    issues.Add("SERIES join must include COMPANY.");
+                if (!seriesJoin.Contains("SOSOURCE"))
+                    issues.Add("SERIES join must include SOSOURCE.");
+                if (!seriesJoin.Contains("SERIES"))
+                    issues.Add("SERIES join must include SERIES key.");
+            }
+
+            return issues.Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+        }
+
+        private static string[] ValidateQueryResultForQuestion(string question, string queryResult)
+        {
+            var issues = new List<string>();
+            try
+            {
+                JObject root = JObject.Parse(queryResult);
+                JArray rows = root["rows"] as JArray;
+                if (rows == null)
+                {
+                    issues.Add("query_data result has no rows array.");
+                    return issues.ToArray();
+                }
+
+                if (IsSingularLatestQuestion(question) && rows.Count > 1)
+                    issues.Add("Singular latest intent returned more than one row despite validated TOP 1 SQL.");
+
+                if (IsLatestDocumentQuestion(question) && rows.Count > 0)
+                {
+                    JObject row = rows[0] as JObject;
+                    if (row == null)
+                        issues.Add("Latest-document result row is not an object.");
+                    else
+                    {
+                        if (FindPropertyValue(row, "FINDOC") == null)
+                            issues.Add("Latest-document result is missing FINDOC.");
+                        if (FindPropertyValue(row, "TRNDATE") == null)
+                            issues.Add("Latest-document result is missing TRNDATE.");
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                issues.Add("query_data result is not a valid JSON envelope: " + ex.Message);
+            }
+            return issues.ToArray();
+        }
+
+        private static string NormalizeSql(string sql)
+        {
+            string value = (sql ?? string.Empty).Replace("\r", " ").Replace("\n", " ").Replace("\t", " ").Trim().ToUpperInvariant();
+            while (value.Contains("  "))
+                value = value.Replace("  ", " ");
+            return " " + value.Trim() + " ";
+        }
+
+        private static bool ContainsOrderedColumn(string normalizedSql, string columnName, string direction)
+        {
+            int orderIndex = normalizedSql.IndexOf(" ORDER BY ", StringComparison.Ordinal);
+            if (orderIndex < 0)
+                return false;
+            string orderClause = normalizedSql.Substring(orderIndex);
+            string bare = columnName + " " + direction;
+            if (orderClause.Contains(bare))
+                return true;
+
+            string dottedSuffix = "." + columnName + " " + direction;
+            return orderClause.Contains(dottedSuffix);
+        }
+
+        private static string ExtractJoinClause(string normalizedSql, string tableName)
+        {
+            string marker = " JOIN " + tableName + " ";
+            int start = normalizedSql.IndexOf(marker, StringComparison.Ordinal);
+            if (start < 0)
+                return null;
+
+            int end = normalizedSql.Length;
+            int nextJoin = normalizedSql.IndexOf(" JOIN ", start + marker.Length, StringComparison.Ordinal);
+            int where = normalizedSql.IndexOf(" WHERE ", start + marker.Length, StringComparison.Ordinal);
+            int order = normalizedSql.IndexOf(" ORDER BY ", start + marker.Length, StringComparison.Ordinal);
+            if (nextJoin >= 0 && nextJoin < end) end = nextJoin;
+            if (where >= 0 && where < end) end = where;
+            if (order >= 0 && order < end) end = order;
+            return normalizedSql.Substring(start, end - start);
+        }
+
+        private static JToken FindPropertyValue(JObject row, string propertyName)
+        {
+            if (row == null || string.IsNullOrWhiteSpace(propertyName))
+                return null;
+            JProperty property = row.Properties().FirstOrDefault(x => string.Equals(x.Name, propertyName, StringComparison.OrdinalIgnoreCase));
+            return property == null ? null : property.Value;
+        }
+
         private static bool LooksLikeQueryError(string queryResult)
         {
             string value = (queryResult ?? string.Empty).TrimStart();
@@ -181,8 +343,6 @@ namespace S1Jarvis.Core
             }
             catch
             {
-                // If the result is not the standard query_data JSON envelope, retain
-                // the original payload and let the downstream contract validator act.
                 return queryResult;
             }
         }
@@ -201,6 +361,13 @@ namespace S1Jarvis.Core
                    value.Contains("τελευταια εγγραφη") ||
                    value.Contains("latest") ||
                    value.Contains("most recent");
+        }
+
+        private static bool IsLatestDocumentQuestion(string question)
+        {
+            string value = (question ?? string.Empty).Trim().ToLowerInvariant();
+            return IsSingularLatestQuestion(question) &&
+                   (value.Contains("παραστατικ") || value.Contains("document") || value.Contains("voucher"));
         }
 
         private static string BuildDeterministicSummary(string question, string queryResult)
