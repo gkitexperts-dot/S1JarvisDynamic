@@ -197,7 +197,6 @@ namespace S1Jarvis.Core
     /// </summary>
     internal static class JarvisShadowSemanticClient
     {
-        private const string Model = "claude-opus-5";
         private const string StructuredToolName = "emit_intent_objects";
         private const int MaxTokens = 6000;
 
@@ -211,7 +210,6 @@ namespace S1Jarvis.Core
 
             var requestBody = new JObject
             {
-                ["model"] = Model,
                 ["max_tokens"] = MaxTokens,
                 ["output_config"] = new JObject { ["effort"] = "low" },
                 ["system"] = new JArray
@@ -242,10 +240,10 @@ namespace S1Jarvis.Core
 
             string providerRequestJson = requestBody.ToString(Formatting.None);
 
-            // Atlas is an already configured read/planning-capable route in the
-            // current runtime. The synthetic tool itself is never executed.
+            // Decomposition is a Jarvis responsibility. The desktop selects only
+            // the logical agent; Verilic resolves provider/model for that agent.
             var proxyResp = await new S1Jarvis.Access.Verilic.VerilicAiMessagesClient()
-                .SendAsync(xSupport, "Atlas", providerRequestJson, cancellationToken)
+                .SendAsync(xSupport, "Jarvis", providerRequestJson, cancellationToken)
                 .ConfigureAwait(false);
 
             if (!proxyResp.Success)
@@ -265,8 +263,6 @@ namespace S1Jarvis.Core
                 return structuredJson;
             }
 
-            // Diagnostic compatibility fallback only. It does not weaken the
-            // structured contract, but preserves visibility for older adapters.
             string raw = ExtractTextFromNormalizedResponse(proxyResp.RawResponseJson);
             if (string.IsNullOrWhiteSpace(raw))
                 raw = (proxyResp.ResponseText ?? string.Empty).Trim();
