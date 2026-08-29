@@ -264,8 +264,16 @@ namespace S1Jarvis.Core
             };
 
             string anthropicJson = requestBody.ToString(Formatting.None);
+
+            // The decomposer is a Jarvis-level planning call, not an Atlas
+            // reporting call. The compatibility overload infers an execution
+            // agent from request structure; a no-tools request can therefore be
+            // classified as Atlas/final-role and optimized as ordinary chat.
+            // Route this planning call explicitly through the provider-neutral
+            // Jarvis role while Verilic still selects/translates the configured
+            // provider and model.
             var proxyResp = await new S1Jarvis.Access.Verilic.VerilicAiMessagesClient()
-                .SendAsync(xSupport, anthropicJson, cancellationToken)
+                .SendAsync(xSupport, "Jarvis", anthropicJson, cancellationToken)
                 .ConfigureAwait(false);
 
             if (!proxyResp.Success)
@@ -274,21 +282,51 @@ namespace S1Jarvis.Core
                         ? "AI credits exhausted during shadow decomposition."
                         : (proxyResp.ErrorMessage ?? "Shadow semantic call failed."));
 
-            JObject anthropicResponse = JObject.Parse(proxyResp.RawResponseJson);
-            string stopReason = anthropicResponse["stop_reason"] == null
+            string raw = ExtractTextFromNormalizedResponse(proxyResp.RawResponseJson);
+
+            // Verilic also exposes provider-neutral ResponseText. Some provider
+            // adapters legitimately return useful text there even when the raw
+            // Anthropic-compatible content array has no text block. Do not turn
+            // such a successful call into an artificial empty decomposition.
+            if (string.IsNullOrWhiteSpace(raw))
+                raw = (proxyResp.ResponseText ?? string.Empty).Trim();
+
+            if (string.IsNullOrWhiteSpace(raw))
+            {
+                DebugLog.Log(
+                    "[ORCH-SHADOW] decomposer successful but returned no text; " +
+                    "runtimeAgent=" + (proxyResp.RuntimeAgent ?? string.Empty) +
+                    " provider=" + (proxyResp.RuntimeProvider ?? string.Empty) +
+                    " model=" + (proxyResp.RuntimeModel ?? string.Empty) +
+                    " rawChars=" + (proxyResp.RawResponseJson ?? string.Empty).Length.ToString());
+            }
+
+            return ExtractJsonObject(raw);
+        }
+
+        private static string ExtractTextFromNormalizedResponse(string responseJson)
+        {
+            if (string.IsNullOrWhiteSpace(responseJson))
+                return string.Empty;
+
+            JObject response = JObject.Parse(responseJson);
+            string stopReason = response["stop_reason"] == null
                 ? string.Empty
-                : anthropicResponse["stop_reason"].ToString();
+                : response["stop_reason"].ToString();
             if (string.Equals(stopReason, "refusal", StringComparison.OrdinalIgnoreCase))
                 throw new InvalidOperationException("Shadow semantic decomposer refused the request.");
 
-            JArray content = anthropicResponse["content"] as JArray ?? new JArray();
-            JToken text = content.FirstOrDefault(x =>
-                string.Equals((string)x["type"], "text", StringComparison.OrdinalIgnoreCase));
-            string raw = text == null || text["text"] == null
-                ? string.Empty
-                : text["text"].ToString().Trim();
+            JArray content = response["content"] as JArray ?? new JArray();
+            IEnumerable<string> textParts = content
+                .OfType<JObject>()
+                .Where(x => string.Equals(
+                    (string)x["type"],
+                    "text",
+                    StringComparison.OrdinalIgnoreCase))
+                .Select(x => x["text"] == null ? string.Empty : x["text"].ToString())
+                .Where(x => !string.IsNullOrWhiteSpace(x));
 
-            return ExtractJsonObject(raw);
+            return string.Join("\n", textParts).Trim();
         }
 
         private static string ExtractJsonObject(string text)
