@@ -26,9 +26,6 @@ namespace S1Jarvis.Core
     // ══════════════════════════════════════════════════════════════════════
     public class JarvisAgentClient
     {
-        // Claude Opus 5, thinking ON BY DEFAULT (δεν το απενεργοποιούμε -
-        // βλ. σχόλιο στο AskAsync για τους λόγους).
-        private const string Model = "claude-opus-5";
         // ΔΙΟΡΘΩΘΗΚΕ 19/08 - 8000 ήταν πολύ σφιχτό για tool calls με μεγάλο
         // περιεχόμενο (π.χ. send_email attachmentContent με 148 γραμμές
         // πελατών) - ζωντανό bug: η απάντηση έκοβε στη μέση
@@ -106,7 +103,7 @@ namespace S1Jarvis.Core
         // onFilterEmailInbox/onFilterCalendar - ΝΕΟ 17/08, ρητό αίτημα
         // χρήστη ("οι πληροφορίες για φιλτράρισμα θέλω να γίνονται στο
         // main παράθυρο, στο chat box θέλω να μένει ΜΟΝΟ chat") - καλούνται
-        // όταν ο Claude χρησιμοποιήσει filter_email_inbox/filter_calendar
+        // όταν το active model χρησιμοποιήσει filter_email_inbox/filter_calendar
         // (βλ. JarvisEmailAccess) - κάνουν το ΠΡΑΓΜΑΤΙΚΟ postMessage στο
         // index.html που ενημερώνει/ξανα-φορτώνει το ΚΥΡΙΟ παράθυρο.
         // Action<string,string,string> = (date, searchText, insight) - ΝΕΟ
@@ -327,7 +324,7 @@ namespace S1Jarvis.Core
                 : traderMode ? "Compass"
                 : emailMode ? "Echo"
                 : "Atlas";
-            string resolvedModel = ResolveAgentModel(xSupport, activeAgentName);
+            string resolvedModel = ResolveAgentModel(activeAgentName);
 
             try
             {
@@ -518,8 +515,8 @@ namespace S1Jarvis.Core
                         return "Δεν μπορώ να απαντήσω σε αυτό το ερώτημα.";
 
                     // ΣΗΜΑΝΤΙΚΟ: περνάμε πίσω ΟΛΟΚΛΗΡΟ το content array (όχι μόνο
-                    // το κείμενο/tool_use) - στο Claude Opus 5 το thinking είναι
-                    // on by default, και τα thinking blocks πρέπει να ταξιδεύουν
+                    // το κείμενο/tool_use) - αν ο provider επιστρέφει thinking blocks, αυτά είναι
+                    // μέρος του protocol και πρέπει να ταξιδεύουν
                     // αναλλοίωτα πίσω στο επόμενο turn, αλλιώς σκάει η κλήση.
                     history.Add(new JObject { ["role"] = "assistant", ["content"] = content });
 
@@ -644,8 +641,8 @@ namespace S1Jarvis.Core
             string.IsNullOrEmpty(s) || s.Length <= max ? s : s.Substring(0, max) + "…(κόπηκε)";
 
         // Φτιάχνει το σύντομο caption για το #orbCaption (index.html) -
-        // προτεραιότητα στο ΠΡΑΓΜΑΤΙΚΟ σκεπτικό του Claude (thinking block,
-        // on by default - βλ. σχόλιο στο AskAsync), αλλιώς fallback σε
+        // προτεραιότητα στο ΠΡΑΓΜΑΤΙΚΟ provider thinking block,
+        // όταν υπάρχει, αλλιώς fallback σε
         // γενικό μήνυμα ανά tool name. ΠΟΤΕ κενό - πάντα κάτι φιλικό.
         private static string BuildProgressCaption(JArray content)
         {
@@ -1180,25 +1177,17 @@ namespace S1Jarvis.Core
             return s;
         }
 
-        // ΝΕΟ 19/08 - βλ. σχόλιο στο AskAsync πάνω από το activeAgentName.
-        // ΈΝΑ ξεχωριστό ParamCode ανά agent domain (ParamValueString, ίδιο
-        // idiom με το 500027) - κενό/άγνωστο -> fallback στο σταθερό
-        // Model constant (claude-opus-5, ΙΔΙΟ με τη σημερινή συμπεριφορά).
-        private static string ResolveAgentModel(XSupport xSupport, string agentName)
+        // AI provider/model ownership belongs to Verilic startup Health.
+        // The open Jarvis session uses one immutable snapshot; no cccParams
+        // model override and no per-prompt routing/model lookup is allowed.
+        private static string ResolveAgentModel(string agentName)
         {
-            int paramCode;
-            switch (agentName)
-            {
-                case "Forge": paramCode = 500030; break;   // item creation
-                case "Compass": paramCode = 500031; break; // trader/ΑΦΜ creation
-                case "Echo": paramCode = 500032; break;     // email/επαφές/reminders
-                case "Sprint": paramCode = 500033; break;   // courier vouchers
-                case "Scout": paramCode = 500034; break;    // browser/scraping
-                case "Sage": paramCode = 500035; break;     // help
-                default: paramCode = 500029; break;         // Atlas - γενικό chat
-            }
-            string overrideModel = JarvisTools.GetOptionalParamString(xSupport, paramCode);
-            return string.IsNullOrWhiteSpace(overrideModel) ? Model : overrideModel;
+            string model = JarvisAgentRuntimeSnapshot.ResolveModel(agentName);
+            if (string.IsNullOrWhiteSpace(model))
+                throw new InvalidOperationException(
+                    "AI startup snapshot is unavailable for agent " +
+                    (agentName ?? "<null>") + ". Restart Jarvis after a successful Health check.");
+            return model;
         }
 
         private string BuildSystemPrompt(
@@ -2234,7 +2223,7 @@ namespace S1Jarvis.Core
         // proxy endpoint (/agent/vision) ΚΑΙ ΙΔΙΟ agentAccountRef με τον
         // Jarvis - ΚΑΜΙΑ ξεχωριστή AI agent (βλ. README Roadmap #6,
         // JarvisDocReader = feature-gate ΜΟΝΟ, ο Jarvis ΕΙΝΑΙ ήδη ο agent).
-        // Haiku (ΟΧΙ το βαρύ Opus 5 του κύριου loop πιο πάνω) - απλή οπτική
+        // Χρησιμοποιεί το configured Jarvis model του startup snapshot - απλή οπτική
         // εξαγωγή λίγων πεδίων, όχι πολύπλοκο reasoning· σημαντικό μιας και
         // τρέχει ΑΝΑ αρχείο μέσα σε sequential loop (βλ. index.html
         // drProcessBtn) - λιγότερο latency/κόστος ανά κλήση.
@@ -2274,7 +2263,7 @@ namespace S1Jarvis.Core
 
             var requestBody = new
             {
-                model = "claude-haiku-4-5",
+                model = ResolveAgentModel("Jarvis"),
                 max_tokens = 1024,
                 messages = new[]
                 {
@@ -2336,7 +2325,7 @@ namespace S1Jarvis.Core
         }
 
         // ── DR - Στάδιο 4: πλήρης εξαγωγή γραμμών ────────────────────────────
-        // Δεύτερη, ΠΙΟ ΒΑΘΙΑ AI κλήση (Opus, ΟΧΙ Haiku όπως το lightweight
+        // Δεύτερη, ΠΙΟ ΒΑΘΙΑ AI κλήση με το ίδιο configured Jarvis target όπως το lightweight
         // DetectDocumentIssuerAsync - χρειάζεται ακρίβεια σε ποσά/ΦΠΑ, όχι
         // απλή αναγνώριση) - ίδιο γενικό ("generic prompt") σχήμα με
         // S1DocReader's PromptBuilder.BuildGenericPrompt/GetJsonOutputInstructions
@@ -2394,7 +2383,7 @@ namespace S1Jarvis.Core
 
             var requestBody = new
             {
-                model = Model, // claude-opus-5 - ΟΧΙ Haiku, χρειάζεται ακρίβεια σε ποσά/γραμμές
+                model = ResolveAgentModel("Jarvis"),
                 max_tokens = 4000,
                 messages = new[]
                 {
