@@ -75,9 +75,18 @@ namespace S1Jarvis.UI
                 // snapshot, not a second Verilic routing/health fetch. Changes
                 // made in Verilic intentionally become effective only after the
                 // Jarvis shell is closed and opened again.
-                if (explicitCommand && JarvisAgentRuntimeSnapshot.IsInitialized)
+                if (explicitCommand)
                 {
-                    PostProviderHealthSnapshotCommandResult();
+                    if (JarvisAgentRuntimeSnapshot.IsInitialized)
+                    {
+                        PostProviderHealthSnapshotCommandResult();
+                    }
+                    else
+                    {
+                        PostProviderHealthCommandResult(
+                            "AI agent: το startup snapshot δεν είναι διαθέσιμο. Κλείσε και άνοιξε ξανά τον Jarvis.",
+                            "error");
+                    }
                     return;
                 }
 
