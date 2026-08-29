@@ -192,7 +192,7 @@ namespace S1Jarvis.Core
             var issues = new List<string>();
             string normalized = NormalizeSql(sql);
 
-            if (!normalized.StartsWith("SELECT ", StringComparison.Ordinal))
+            if (!normalized.StartsWith(" SELECT ", StringComparison.Ordinal))
                 issues.Add("Only SELECT is allowed.");
             if (normalized.Contains(" INSERT ") || normalized.Contains(" UPDATE ") || normalized.Contains(" DELETE ") ||
                 normalized.Contains(" MERGE ") || normalized.Contains(" DROP ") || normalized.Contains(" ALTER ") ||
