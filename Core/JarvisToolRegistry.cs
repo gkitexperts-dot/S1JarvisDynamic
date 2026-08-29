@@ -67,6 +67,32 @@ namespace S1Jarvis.Core
         public string FallbackPolicy { get; private set; }
     }
 
+    internal sealed class JarvisToolPrerequisiteDescriptor
+    {
+        public JarvisToolPrerequisiteDescriptor(
+            string toolName,
+            string[] hardInputs,
+            string[] resolutionInputs,
+            string[] upstreamTools,
+            string[] runtimeRequirements,
+            string[] produces)
+        {
+            ToolName = toolName ?? string.Empty;
+            HardInputs = hardInputs ?? new string[0];
+            ResolutionInputs = resolutionInputs ?? new string[0];
+            UpstreamTools = upstreamTools ?? new string[0];
+            RuntimeRequirements = runtimeRequirements ?? new string[0];
+            Produces = produces ?? new string[0];
+        }
+
+        public string ToolName { get; private set; }
+        public string[] HardInputs { get; private set; }
+        public string[] ResolutionInputs { get; private set; }
+        public string[] UpstreamTools { get; private set; }
+        public string[] RuntimeRequirements { get; private set; }
+        public string[] Produces { get; private set; }
+    }
+
     internal sealed class JarvisRoutingDescriptor
     {
         public JarvisRoutingDescriptor(string capability, string agent, string notes)
@@ -81,16 +107,6 @@ namespace S1Jarvis.Core
         public string Notes { get; private set; }
     }
 
-    /// <summary>
-    /// Canonical inventory metadata for Jarvis AI tools and internal routing.
-    ///
-    /// Phase 1 rule: this registry documents the current runtime architecture
-    /// but does not yet drive routing or optimizer behavior. That migration is
-    /// intentionally a separate step after the inventory has been reviewed.
-    ///
-    /// User-visible product identity remains Jarvis. Agent names below are
-    /// internal implementation roles only.
-    /// </summary>
     internal static class JarvisToolRegistry
     {
         private static readonly JarvisToolDescriptor[] Tools =
@@ -221,6 +237,40 @@ namespace S1Jarvis.Core
                 "Require all business keys/lines to be resolved and a successful Soft1 write before reporting creation.")
         };
 
+        private static readonly JarvisToolPrerequisiteDescriptor[] Prerequisites =
+        {
+            P("query_data", A("sql"), A(), A(), A("active_xsupport", "select_only_sql"), A("dataset", "resolved_ids")),
+            P("export_query_to_file", A("sql", "format", "filename"), A("validated_query"), A("query_data"), A("active_xsupport", "param_500011_optional"), A("path", "file_artifact")),
+            P("export_shown_table", A("visible_table", "format", "filename"), A("current_visible_table"), A(), A("jarvis_ui_table_state"), A("path", "file_artifact")),
+            P("open_document", A("sosource"), A("findoc_or_document_coordinates"), A("query_data", "create_order"), A("active_xsupport", "document_object_mapping", "param_500018_optional"), A("opened_document")),
+            P("get_conversion_targets", A("findoc"), A("source_document"), A("open_document", "query_data"), A("active_xsupport"), A("conversion_targets")),
+            P("get_item_template", A(), A("templateMtrl_optional"), A("query_data"), A("active_xsupport", "param_500026_optional"), A("suggestedCode", "copiedFields")),
+            P("create_item", A("code", "name", "mtrunit1", "vat", "mtracn", "mtrlotuse", "mtrsnuse"), A("copiedFields_optional"), A("get_item_template", "query_data"), A("active_xsupport", "param_500026_whitelist"), A("mtrl", "item_reference")),
+            P("find_trader_by_afm", A("afm"), A("sodType_optional"), A(), A("active_xsupport", "active_company"), A("trader_match", "trdrId")),
+            P("get_aade_data", A("afm"), A("sodType"), A(), A("active_xsupport", "aade_module"), A("resolved_aade_data", "suggestedCode")),
+            P("create_trader_from_aade", A("afm", "name", "code", "sodType"), A("resolved_aade_data"), A("get_aade_data", "find_trader_by_afm"), A("active_xsupport"), A("trdrId", "trader_reference")),
+            P("search_outlook_contacts", A("searchText"), A("recipient_or_attendee_identity"), A(), A("params_500019_500021", "graph_contacts_permission"), A("contact_candidates")),
+            P("show_contact_results", A("contacts"), A("resolved_contact_rows"), A("search_outlook_contacts", "query_data"), A("jarvis_contact_ui"), A("contact_projection")),
+            P("filter_email_inbox", A(), A("email_filter_state"), A(), A("params_500019_500021", "graph_mail_read", "param_500022_optional"), A("email_rows", "message_ids")),
+            P("read_email", A(), A("searchText_optional"), A("filter_email_inbox"), A("params_500019_500021", "graph_mail_read"), A("email_messages", "message_ids")),
+            P("download_email_attachment", A("messageId"), A("attachmentName_optional"), A("read_email", "filter_email_inbox"), A("graph_mail_read", "local_export_write"), A("attachment_paths")),
+            P("filter_calendar", A(), A("calendar_filter_state"), A(), A("params_500019_500021", "graph_calendar_read", "param_500023_optional"), A("calendar_entries")),
+            P("show_calendar_entries", A("date", "entries"), A("resolved_calendar_entries"), A("read_calendar", "filter_calendar"), A("jarvis_calendar_ui"), A("calendar_projection")),
+            P("read_calendar", A(), A("startDate_optional", "endDate_optional"), A(), A("params_500019_500021", "graph_calendar_read"), A("calendar_entries", "event_ids")),
+            P("create_outlook_event", A("subject", "start"), A("attendee_emails_optional", "end_optional"), A("search_outlook_contacts", "query_data"), A("params_500019_500021", "graph_calendars_readwrite"), A("eventId", "webLink")),
+            P("create_crm_task", A("title", "description", "fromDate"), A("actorUserId_or_actorUserIds", "trdr_tsodType_pair_optional"), A("query_data", "find_trader_by_afm"), A("active_xsupport", "param_500012_required", "params_500013_500014_optional"), A("soaction_ids", "crm_task_reference")),
+            P("send_email", A("to", "subject", "body"), A("resolved_recipient", "attachment_optional"), A("search_outlook_contacts", "query_data", "export_shown_table", "export_query_to_file", "download_email_attachment"), A("params_500019_500021", "graph_mail_send"), A("email_send_result")),
+            P("reply_email", A("messageId", "body"), A("source_message"), A("read_email", "filter_email_inbox"), A("params_500019_500021", "graph_mail_send"), A("email_reply_result")),
+            P("show_courier_documents", A("entries"), A("eligible_documents"), A("query_data"), A("jarvis_courier_ui", "active_company"), A("courier_documents", "findoc_ids")),
+            P("get_courier_voucher_data", A("findocId"), A("eligible_document"), A("show_courier_documents", "query_data", "open_document"), A("active_xsupport", "courier_integration", "param_500002_optional"), A("voucher_data", "providers")),
+            P("create_courier_voucher", A("documentNumber", "providerCode", "receiverName", "receiverAddress", "receiverZipCode", "pieces", "weight"), A("voucher_request_data"), A("get_courier_voucher_data"), A("active_xsupport", "courier_provider_configuration"), A("shipmentNumber", "pdfLink", "voucher_reference")),
+            P("cancel_courier_voucher", A("findocId", "providerName", "shipmentNumber"), A("existing_voucher"), A("get_courier_voucher_data", "query_data"), A("active_xsupport", "courier_provider_configuration"), A("courier_cancel_result")),
+            P("open_url", A("url"), A("navigation_target"), A(), A("browser_surface"), A("loaded_url")),
+            P("read_page_content", A(), A("loaded_page"), A("open_url"), A("browser_surface", "param_500025_optional"), A("page_content")),
+            P("extract_page_tables", A(), A("loaded_page_with_tables"), A("open_url", "read_page_content"), A("browser_surface"), A("web_tables")),
+            P("create_order", A("sosource", "series", "trdrId", "lines", "sourceInstruction", "confidence"), A("resolved_trader", "resolved_local_item_ids"), A("find_trader_by_afm", "query_data"), A("active_xsupport", "supported_sosource", "valid_series", "param_500016_threshold", "param_500017_log_series", "param_500018_optional"), A("findocId", "document_reference", "promptLogSoactionId"))
+        };
+
         private static readonly JarvisRoutingDescriptor[] Routing =
         {
             R("Reporting", "Atlas", "Read/reporting and generic Soft1 data analysis."),
@@ -245,6 +295,11 @@ namespace S1Jarvis.Core
             get { return Tools; }
         }
 
+        internal static IReadOnlyList<JarvisToolPrerequisiteDescriptor> AllPrerequisites
+        {
+            get { return Prerequisites; }
+        }
+
         internal static IReadOnlyList<JarvisRoutingDescriptor> AllRoutes
         {
             get { return Routing; }
@@ -254,6 +309,12 @@ namespace S1Jarvis.Core
         {
             if (string.IsNullOrWhiteSpace(toolName)) return null;
             return Tools.FirstOrDefault(x => string.Equals(x.Name, toolName.Trim(), StringComparison.OrdinalIgnoreCase));
+        }
+
+        internal static JarvisToolPrerequisiteDescriptor FindPrerequisites(string toolName)
+        {
+            if (string.IsNullOrWhiteSpace(toolName)) return null;
+            return Prerequisites.FirstOrDefault(x => string.Equals(x.ToolName, toolName.Trim(), StringComparison.OrdinalIgnoreCase));
         }
 
         internal static IEnumerable<JarvisToolDescriptor> ForAgent(string agentName)
@@ -284,6 +345,10 @@ namespace S1Jarvis.Core
                 if (group.Count() > 1)
                     issues.Add("Duplicate tool registration: " + group.Key);
 
+            foreach (IGrouping<string, JarvisToolPrerequisiteDescriptor> group in Prerequisites.GroupBy(x => x.ToolName, StringComparer.OrdinalIgnoreCase))
+                if (group.Count() > 1)
+                    issues.Add("Duplicate tool prerequisite registration: " + group.Key);
+
             foreach (JarvisToolDescriptor tool in Tools)
             {
                 if (string.IsNullOrWhiteSpace(tool.OwnerAgent))
@@ -294,6 +359,18 @@ namespace S1Jarvis.Core
                     issues.Add("Tool without capability: " + tool.Name);
                 if (tool.Operation == JarvisToolOperation.Write && !tool.RequiresConfirmation)
                     issues.Add("Write tool without confirmation policy: " + tool.Name);
+                if (FindPrerequisites(tool.Name) == null)
+                    issues.Add("Tool without prerequisite map: " + tool.Name);
+            }
+
+            foreach (JarvisToolPrerequisiteDescriptor prerequisite in Prerequisites)
+            {
+                if (Find(prerequisite.ToolName) == null)
+                    issues.Add("Prerequisite map references unknown tool: " + prerequisite.ToolName);
+
+                foreach (string upstreamTool in prerequisite.UpstreamTools)
+                    if (Find(upstreamTool) == null)
+                        issues.Add("Prerequisite map references unknown upstream tool: " + prerequisite.ToolName + " -> " + upstreamTool);
             }
 
             foreach (JarvisRoutingDescriptor route in Routing)
@@ -318,6 +395,18 @@ namespace S1Jarvis.Core
         {
             return new JarvisToolDescriptor(name, domain, owner, operation, confirmation, uiEffect,
                 agents, capabilities, modes, durable, fallback);
+        }
+
+        private static JarvisToolPrerequisiteDescriptor P(
+            string toolName,
+            string[] hardInputs,
+            string[] resolutionInputs,
+            string[] upstreamTools,
+            string[] runtimeRequirements,
+            string[] produces)
+        {
+            return new JarvisToolPrerequisiteDescriptor(
+                toolName, hardInputs, resolutionInputs, upstreamTools, runtimeRequirements, produces);
         }
 
         private static JarvisRoutingDescriptor R(string capability, string agent, string notes)
