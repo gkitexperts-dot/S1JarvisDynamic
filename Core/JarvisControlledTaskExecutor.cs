@@ -79,6 +79,7 @@ namespace S1Jarvis.Core
                 if (string.IsNullOrWhiteSpace(summary))
                     throw new InvalidOperationException("Atlas ReportData structured result is missing summary.");
 
+                result.Outputs["dataset"] = new JValue(queryResult ?? string.Empty);
                 result.Outputs["summary"] = new JValue(summary.Trim());
                 result.Success = true;
                 return result;
