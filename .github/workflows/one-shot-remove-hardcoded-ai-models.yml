@@ -1,0 +1,114 @@
+name: one-shot-remove-hardcoded-ai-models
+
+on:
+  push:
+    branches:
+      - feature/jarvis-orchestration
+    paths:
+      - .github/workflows/one-shot-remove-hardcoded-ai-models.yml
+
+permissions:
+  contents: write
+
+jobs:
+  cleanup:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: feature/jarvis-orchestration
+
+      - name: Remove legacy model ownership from JarvisAgentClient
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+
+          p = Path('Core/JarvisAgentClient.cs')
+          s = p.read_text(encoding='utf-8')
+          original = s
+
+          # No desktop-owned default model.
+          s = re.sub(
+              r'\n\s*// Claude Opus 5, thinking ON BY DEFAULT \(δεν το απενεργοποιούμε -\n\s*// βλ\. σχόλιο στο AskAsync για τους λόγους\)\.\n\s*private const string Model = "claude-opus-5";\n',
+              '\n', s, count=1)
+
+          # Main chat resolves its model only from the immutable startup snapshot.
+          s = s.replace(
+              'string resolvedModel = ResolveAgentModel(xSupport, activeAgentName);',
+              'string resolvedModel = ResolveAgentModel(activeAgentName);')
+
+          old_method = '''        // ΝΕΟ 19/08 - βλ. σχόλιο στο AskAsync πάνω από το activeAgentName.\n        // ΈΝΑ ξεχωριστό ParamCode ανά agent domain (ParamValueString, ίδιο\n        // idiom με το 500027) - κενό/άγνωστο -> fallback στο σταθερό\n        // Model constant (claude-opus-5, ΙΔΙΟ με τη σημερινή συμπεριφορά).\n        private static string ResolveAgentModel(XSupport xSupport, string agentName)\n        {\n            int paramCode;\n            switch (agentName)\n            {\n                case "Forge": paramCode = 500030; break;   // item creation\n                case "Compass": paramCode = 500031; break; // trader/ΑΦΜ creation\n                case "Echo": paramCode = 500032; break;     // email/επαφές/reminders\n                case "Sprint": paramCode = 500033; break;   // courier vouchers\n                case "Scout": paramCode = 500034; break;    // browser/scraping\n                case "Sage": paramCode = 500035; break;     // help\n                default: paramCode = 500029; break;         // Atlas - γενικό chat\n            }\n            string overrideModel = JarvisTools.GetOptionalParamString(xSupport, paramCode);\n            return string.IsNullOrWhiteSpace(overrideModel) ? Model : overrideModel;\n        }\n'''
+          new_method = '''        // AI provider/model ownership belongs to Verilic startup Health.\n        // The open Jarvis session uses one immutable snapshot; no cccParams\n        // model override and no per-prompt routing/model lookup is allowed.\n        private static string ResolveAgentModel(string agentName)\n        {\n            string model = JarvisAgentRuntimeSnapshot.ResolveModel(agentName);\n            if (string.IsNullOrWhiteSpace(model))\n                throw new InvalidOperationException(\n                    "AI startup snapshot is unavailable for agent " +\n                    (agentName ?? "<null>") + ". Restart Jarvis after a successful Health check.");\n            return model;\n        }\n'''
+          if old_method not in s:
+              raise SystemExit('Expected legacy ResolveAgentModel block not found')
+          s = s.replace(old_method, new_method, 1)
+
+          # Document Reader uses the Jarvis target captured at startup as well.
+          s = s.replace('model = "claude-haiku-4-5",', 'model = ResolveAgentModel("Jarvis"),')
+          s = re.sub(
+              r'model = Model,\s*//[^\n]*',
+              'model = ResolveAgentModel("Jarvis"),', s, count=1)
+
+          # Remove stale comments that prescribe specific model families.
+          s = s.replace(
+              '// Haiku (ΟΧΙ το βαρύ Opus 5 του κύριου loop πιο πάνω) - απλή οπτική\n',
+              '// Χρησιμοποιεί το configured Jarvis model του startup snapshot - απλή οπτική\n')
+          s = s.replace(
+              '// Δεύτερη, ΠΙΟ ΒΑΘΙΑ AI κλήση (Opus, ΟΧΙ Haiku όπως το lightweight\n',
+              '// Δεύτερη, ΠΙΟ ΒΑΘΙΑ AI κλήση με το ίδιο configured Jarvis target όπως το lightweight\n')
+          s = s.replace(
+              '// το Claude ΔΕΝ μπορεί να καλέσει query_data. Το nudge εδώ\n',
+              '// το model ΔΕΝ μπορεί να καλέσει query_data. Το nudge εδώ\n')
+          s = s.replace(
+              '// το κείμενο/tool_use) - στο Claude Opus 5 το thinking είναι\n',
+              '// το κείμενο/tool_use) - αν ο provider επιστρέφει thinking blocks, αυτά είναι\n')
+          s = s.replace(
+              '// on by default, και τα thinking blocks πρέπει να ταξιδεύουν\n',
+              '// μέρος του protocol και πρέπει να ταξιδεύουν\n')
+          s = s.replace(
+              '// το Claude προσπαθούσε να γράψει send_email με ΤΕΡΑΣΤΙΟ\n',
+              '// το model προσπαθούσε να γράψει send_email με ΤΕΡΑΣΤΙΟ\n')
+          s = s.replace(
+              '// προτεραιότητα στο ΠΡΑΓΜΑΤΙΚΟ σκεπτικό του Claude (thinking block,\n',
+              '// προτεραιότητα στο ΠΡΑΓΜΑΤΙΚΟ provider thinking block,\n')
+          s = s.replace(
+              '// on by default - βλ. σχόλιο στο AskAsync), αλλιώς fallback σε\n',
+              '// όταν υπάρχει, αλλιώς fallback σε\n')
+          s = s.replace(
+              '// όταν ο Claude χρησιμοποιήσει filter_email_inbox/filter_calendar\n',
+              '// όταν το active model χρησιμοποιήσει filter_email_inbox/filter_calendar\n')
+          s = s.replace(
+              '// Codex (DR)\n            // ΔΕΝ περνάει από εδώ - παραμένει hardcoded Haiku/Opus όπως\n            // ήδη ήταν (ήδη σωστά tuned, standalone μέθοδοι χωρίς\n            // xSupport διαθέσιμο σήμερα - βλ. README για πιθανή μελλοντική\n            // επέκταση).\n',
+              '// Το Document Reader ακολουθεί την ίδια startup snapshot πολιτική.\n')
+
+          # Actual runtime code must not contain known model IDs.
+          banned = ['claude-opus-5', 'claude-haiku-4-5', 'gemini-3.6-flash']
+          remaining = [x for x in banned if x in s]
+          if remaining:
+              raise SystemExit('Hardcoded model IDs remain in JarvisAgentClient: ' + ', '.join(remaining))
+
+          if s == original:
+              raise SystemExit('No changes made')
+          p.write_text(s, encoding='utf-8')
+          PY
+
+      - name: Verify no hardcoded runtime model ids remain in C# sources
+        shell: bash
+        run: |
+          if grep -RInE 'claude-opus-5|claude-haiku-4-5|gemini-3\.6-flash' --include='*.cs' .; then
+            echo 'Hardcoded AI model id remains in C# source.' >&2
+            exit 1
+          fi
+
+      - name: Commit cleanup and remove one-shot workflow
+        shell: bash
+        run: |
+          rm -f .github/workflows/one-shot-remove-hardcoded-ai-models.yml
+          git config user.name 'Jarvis Architecture Bot'
+          git config user.email 'jarvis-architecture@users.noreply.github.com'
+          git add Core/JarvisAgentClient.cs .github/workflows/one-shot-remove-hardcoded-ai-models.yml
+          git commit -m 'Remove legacy hardcoded AI model ownership'
+          git push origin HEAD:feature/jarvis-orchestration
