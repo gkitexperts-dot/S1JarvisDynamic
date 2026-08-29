@@ -64,11 +64,16 @@ namespace S1Jarvis.Core
                 if (LooksLikeQueryError(queryResult))
                     throw new InvalidOperationException("Atlas ReportData query failed: " + queryResult);
 
-                string summary = BuildDeterministicSummary(question, queryResult);
+                // Jarvis owns semantic cardinality validation. An executor may query a
+                // wider safe window, but a singular latest/most-recent request must not
+                // leak multiple rows into downstream tasks such as SendEmail.
+                string normalizedQueryResult = NormalizeQueryResultForQuestion(question, queryResult);
+
+                string summary = BuildDeterministicSummary(question, normalizedQueryResult);
                 if (string.IsNullOrWhiteSpace(summary))
                     throw new InvalidOperationException("Atlas ReportData could not normalize the query result into a summary.");
 
-                result.Outputs["dataset"] = new JValue(queryResult);
+                result.Outputs["dataset"] = new JValue(normalizedQueryResult);
                 result.Outputs["summary"] = new JValue(summary);
                 result.Success = true;
                 return result;
@@ -94,6 +99,7 @@ namespace S1Jarvis.Core
                         ["type"] = "text",
                         ["text"] = "Είσαι ο Atlas executor υπό τον έλεγχο του Jarvis. Εκτελείς μόνο το συγκεκριμένο ReportData task. " +
                                    "Επιτρέπεται αποκλειστικά query_data και αποκλειστικά SELECT. Κάνε ΕΝΑ στοχευμένο query που απαντά το business_question. " +
+                                   "Αν το business_question ζητά ΕΝΑ τελευταίο/πιο πρόσφατο αποτέλεσμα, χρησιμοποίησε TOP 1 και deterministic ORDER BY. " +
                                    "Για παραστατικά χρησιμοποίησε FINDOC: FINDOC, FINCODE, TRNDATE, SUMAMNT, SERIES, SOSOURCE, COMPANY, TRDR. " +
                                    "Για όνομα συναλλασσόμενου JOIN TRDR ON TRDR.TRDR=FINDOC.TRDR. " +
                                    "Για όνομα σειράς JOIN SERIES ON SERIES.COMPANY=FINDOC.COMPANY AND SERIES.SERIES=FINDOC.SERIES AND SERIES.SOSOURCE=FINDOC.SOSOURCE. " +
@@ -148,6 +154,53 @@ namespace S1Jarvis.Core
             string value = (queryResult ?? string.Empty).TrimStart();
             return value.StartsWith("Σφάλμα:", StringComparison.OrdinalIgnoreCase) ||
                    value.StartsWith("Error:", StringComparison.OrdinalIgnoreCase);
+        }
+
+        private static string NormalizeQueryResultForQuestion(string question, string queryResult)
+        {
+            if (!IsSingularLatestQuestion(question))
+                return queryResult;
+
+            try
+            {
+                JObject root = JObject.Parse(queryResult);
+                JArray rows = root["rows"] as JArray;
+                if (rows == null || rows.Count <= 1)
+                    return queryResult;
+
+                JToken first = rows[0];
+                var normalizedRows = new JArray();
+                if (first != null)
+                    normalizedRows.Add(first.DeepClone());
+
+                root["rows"] = normalizedRows;
+                root["rowCount"] = normalizedRows.Count;
+                root["totalRowCount"] = normalizedRows.Count;
+                root["truncated"] = false;
+                return root.ToString(Formatting.None);
+            }
+            catch
+            {
+                // If the result is not the standard query_data JSON envelope, retain
+                // the original payload and let the downstream contract validator act.
+                return queryResult;
+            }
+        }
+
+        private static bool IsSingularLatestQuestion(string question)
+        {
+            string value = (question ?? string.Empty).Trim().ToLowerInvariant();
+            if (value.Length == 0)
+                return false;
+
+            return value.Contains("πιο πρόσφατ") ||
+                   value.Contains("πιο προσφατ") ||
+                   value.Contains("τελευταίο") ||
+                   value.Contains("τελευταιο") ||
+                   value.Contains("τελευταία εγγραφή") ||
+                   value.Contains("τελευταια εγγραφη") ||
+                   value.Contains("latest") ||
+                   value.Contains("most recent");
         }
 
         private static string BuildDeterministicSummary(string question, string queryResult)
