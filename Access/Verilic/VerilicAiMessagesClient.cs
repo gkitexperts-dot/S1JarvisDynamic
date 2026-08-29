@@ -16,8 +16,10 @@ namespace S1Jarvis.Access.Verilic
 {
     /// <summary>
     /// Sends Jarvis provider requests through the signed Verilic messages
-    /// endpoint. Provider credentials, authoritative AgentAccountRef and the
-    /// configured model remain server-side.
+    /// endpoint. Provider credentials and authoritative AgentAccountRef remain
+    /// server-side. Effective agent models are loaded once by the startup Health
+    /// check into JarvisAgentRuntimeSnapshot and are reused for the entire open
+    /// Jarvis session; this client never performs per-prompt model discovery.
     ///
     /// The preferred overload accepts the logical Jarvis agent explicitly.
     /// The compatibility overload used by the mature Jarvis tool loop resolves
@@ -125,6 +127,23 @@ namespace S1Jarvis.Access.Verilic
             agentName = agentName.Trim();
             if (!AllowedAgents.Contains(agentName))
                 return Failure("routing_agent_invalid");
+
+            // NON-NEGOTIABLE routing invariant: the model comes only from the
+            // immutable startup Health snapshot. Any model value a caller may
+            // have placed in its JSON is overwritten here. No per-prompt route,
+            // schema or model lookup is permitted at this boundary.
+            try
+            {
+                providerRequestJson = JarvisAgentRuntimeSnapshot.ApplyModelToProviderRequest(
+                    agentName,
+                    providerRequestJson);
+            }
+            catch (Exception ex)
+            {
+                DebugLog.Log("[AI-STARTUP-SNAPSHOT] request blocked; agent=" +
+                    agentName + " reason=" + ex.Message);
+                return Failure("startup_agent_snapshot_missing");
+            }
 
             // Normalize company awareness at the final desktop -> Verilic boundary.
             // XSupport.ConnectionInfo.CompanyId is authoritative for the active
@@ -267,6 +286,36 @@ namespace S1Jarvis.Access.Verilic
                             result.UsageOutputTokens,
                             result.Success,
                             result.Success ? null : GetBaseReasonCode(result.ReasonCode));
+
+                        if (result.Success)
+                        {
+                            string runtimeIssue;
+                            string runtimeAgent = string.IsNullOrWhiteSpace(result.Agent)
+                                ? agentName
+                                : result.Agent;
+                            if (!JarvisAgentRuntimeSnapshot.MatchesRuntime(
+                                runtimeAgent,
+                                result.Provider,
+                                result.Model,
+                                out runtimeIssue))
+                            {
+                                DebugLog.Log("[AI-STARTUP-SNAPSHOT] runtime drift blocked; agent=" +
+                                    runtimeAgent + " reason=" + (runtimeIssue ?? "unknown"));
+                                return new AgentProxyResponse
+                                {
+                                    Success = false,
+                                    CreditsExhausted = false,
+                                    ErrorMessage = BuildSafeErrorMessage("startup_agent_snapshot_changed"),
+                                    RawResponseJson = string.Empty,
+                                    UsageInputTokens = result.UsageInputTokens,
+                                    UsageOutputTokens = result.UsageOutputTokens,
+                                    RuntimeAgent = result.Agent,
+                                    RuntimeProvider = result.Provider,
+                                    RuntimeModel = result.Model,
+                                    RuntimeRouting = result.Routing
+                                };
+                            }
+                        }
 
                         return new AgentProxyResponse
                         {
@@ -869,6 +918,10 @@ namespace S1Jarvis.Access.Verilic
                     return "Το AI agent account δεν ανήκει στον πελάτη της ενεργής άδειας.";
                 case "routing_agent_invalid":
                     return "Ο λογικός AI agent δεν είναι έγκυρος για αυτή τη δρομολόγηση.";
+                case "startup_agent_snapshot_missing":
+                    return "Το AI routing snapshot της εκκίνησης δεν είναι διαθέσιμο. Κλείσε και άνοιξε ξανά τον Jarvis.";
+                case "startup_agent_snapshot_changed":
+                    return "Το AI routing άλλαξε μετά την εκκίνηση. Κλείσε και άνοιξε ξανά τον Jarvis για να φορτωθεί το νέο schema.";
                 case "provider_upstream_error":
                     return "Ο AI provider επέστρεψε προσωρινό σφάλμα.";
                 default:
