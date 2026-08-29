@@ -7,6 +7,44 @@ using S1Jarvis.Core;
 namespace S1Jarvis.UI
 {
     /// <summary>
+    /// One-time bootstrap for the shadow Main Chat observer.
+    ///
+    /// JarvisShell already has a static constructor in the UAT partial, so this
+    /// helper deliberately avoids defining another static JarvisShell(). The
+    /// field initializer in JarvisShell triggers this registration once and the
+    /// helper guards against duplicate class-handler registration.
+    /// </summary>
+    internal static class JarvisOrchestrationShadowBootstrap
+    {
+        private static readonly object Sync = new object();
+        private static bool _registered;
+
+        internal static bool EnsureRegistered()
+        {
+            lock (Sync)
+            {
+                if (_registered)
+                    return true;
+
+                EventManager.RegisterClassHandler(
+                    typeof(JarvisShell),
+                    FrameworkElement.LoadedEvent,
+                    new RoutedEventHandler(OnLoaded));
+
+                _registered = true;
+                return true;
+            }
+        }
+
+        private static void OnLoaded(object sender, RoutedEventArgs e)
+        {
+            JarvisShell shell = sender as JarvisShell;
+            if (shell != null)
+                shell.InstallOrchestrationShadowHook();
+        }
+    }
+
+    /// <summary>
     /// Shadow-only Main Chat hook for the new orchestration path.
     ///
     /// This partial intentionally does not change CoreWebView2_WebMessageReceived
@@ -17,37 +55,31 @@ namespace S1Jarvis.UI
     /// </summary>
     public partial class JarvisShell
     {
+        // Field initializer is used instead of a second static JarvisShell()
+        // constructor. See JarvisShell.UatRunner.cs, which already owns the one
+        // static constructor allowed by C# for this partial type.
+        private readonly bool _orchestrationShadowBootstrapRegistered =
+            JarvisOrchestrationShadowBootstrap.EnsureRegistered();
+
         private bool _orchestrationShadowHookAttached;
+        private bool _orchestrationShadowHookInstalling;
 
-        static JarvisShell()
+        internal void InstallOrchestrationShadowHook()
         {
-            // Avoid editing the large mature JarvisShell.xaml.cs send pipeline.
-            // A class-level Loaded handler waits until CoreWebView2 initialization
-            // has completed, then attaches one observer handler.
-            EventManager.RegisterClassHandler(
-                typeof(JarvisShell),
-                FrameworkElement.LoadedEvent,
-                new RoutedEventHandler(OnOrchestrationShadowLoaded));
-        }
-
-        private static void OnOrchestrationShadowLoaded(object sender, RoutedEventArgs e)
-        {
-            JarvisShell shell = sender as JarvisShell;
-            if (shell == null || shell._orchestrationShadowHookAttached)
+            if (_orchestrationShadowHookAttached || _orchestrationShadowHookInstalling)
                 return;
 
-            // Fire-and-forget only for hook installation. The method contains
-            // its own catch-all and performs no business action.
-            shell.AttachOrchestrationShadowHandlerSafeAsync();
+            AttachOrchestrationShadowHandlerSafeAsync();
         }
 
         private async void AttachOrchestrationShadowHandlerSafeAsync()
         {
+            if (_orchestrationShadowHookAttached || _orchestrationShadowHookInstalling)
+                return;
+
+            _orchestrationShadowHookInstalling = true;
             try
             {
-                if (_orchestrationShadowHookAttached)
-                    return;
-
                 // JarvisShell_Loaded initializes CoreWebView2 asynchronously.
                 // Wait briefly for that existing initialization instead of
                 // creating another WebView environment or changing boot order.
@@ -70,6 +102,10 @@ namespace S1Jarvis.UI
             catch (Exception ex)
             {
                 DebugLog.Log("[ORCH-SHADOW] observer attach failed; legacy chat unaffected: " + ex);
+            }
+            finally
+            {
+                _orchestrationShadowHookInstalling = false;
             }
         }
 
