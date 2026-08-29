@@ -265,15 +265,15 @@ namespace S1Jarvis.Core
 
             string anthropicJson = requestBody.ToString(Formatting.None);
 
-            // The decomposer is a Jarvis-level planning call, not an Atlas
-            // reporting call. The compatibility overload infers an execution
-            // agent from request structure; a no-tools request can therefore be
-            // classified as Atlas/final-role and optimized as ordinary chat.
-            // Route this planning call explicitly through the provider-neutral
-            // Jarvis role while Verilic still selects/translates the configured
-            // provider and model.
+            // Use the same configured runtime routing path as the mature client.
+            // The logical Jarvis role is not guaranteed to have a dedicated model
+            // in every installation; forcing it caused provider_model_missing in
+            // shadow mode. This compatibility route still remains provider-neutral
+            // and no-tools, while Verilic selects an actually configured internal
+            // role/provider/model. The decomposer contract itself remains defined
+            // exclusively by the system prompt and registered TASK_CATALOG.
             var proxyResp = await new S1Jarvis.Access.Verilic.VerilicAiMessagesClient()
-                .SendAsync(xSupport, "Jarvis", anthropicJson, cancellationToken)
+                .SendAsync(xSupport, anthropicJson, cancellationToken)
                 .ConfigureAwait(false);
 
             if (!proxyResp.Success)
