@@ -134,8 +134,10 @@ namespace S1Jarvis.UI
 
                 // Do not await: the mature CoreWebView2_WebMessageReceived
                 // handler continues immediately into _agentClient.AskAsync.
-                // The coordinator is feature-gated and catches all failures.
-                JarvisOrchestrationShadowCoordinator.RunAndLogSafeAsync(
+                // The harness remains feature-gated via the planner, validates
+                // the initial Jarvis execution state, and never dispatches a
+                // business executor while shadow mode is active.
+                JarvisExecutionShadowHarness.RunAndLogSafeAsync(
                     _xSupport,
                     userText);
             }
