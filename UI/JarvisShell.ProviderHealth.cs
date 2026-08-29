@@ -44,6 +44,11 @@ namespace S1Jarvis.UI
                     webView.CoreWebView2 == null)
                     return;
 
+                // One Jarvis shell opening = one immutable AI routing snapshot.
+                // This is the ONLY normal runtime point that loads effective
+                // Agent/Provider/Model targets from Verilic. Later prompts reuse
+                // JarvisAgentRuntimeSnapshot and never refresh routing mid-session.
+                JarvisAgentRuntimeSnapshot.Reset();
                 await RefreshProviderHealthStatusAsync(false);
             }
             catch
@@ -66,6 +71,16 @@ namespace S1Jarvis.UI
 
             try
             {
+                // HEALTH after startup is a view of the immutable startup
+                // snapshot, not a second Verilic routing/health fetch. Changes
+                // made in Verilic intentionally become effective only after the
+                // Jarvis shell is closed and opened again.
+                if (explicitCommand && JarvisAgentRuntimeSnapshot.IsInitialized)
+                {
+                    PostProviderHealthSnapshotCommandResult();
+                    return;
+                }
+
                 if (string.IsNullOrWhiteSpace(_agentAccountRef))
                 {
                     message = "AI agent: δεν υπάρχει ενεργή άδεια/agent";
@@ -117,12 +132,28 @@ namespace S1Jarvis.UI
 
                 if (result.Ready)
                 {
-                    model = result.Model ?? model;
-                    string provider = string.IsNullOrWhiteSpace(result.Provider)
-                        ? "provider"
-                        : result.Provider;
-                    message = "AI provider: συνδεδεμένος · " + provider + " · " + model;
-                    state = "ready";
+                    string snapshotIssue;
+                    if (!JarvisAgentRuntimeSnapshot.TryInitialize(
+                        result.Targets,
+                        out snapshotIssue))
+                    {
+                        message = "AI provider: μη έγκυρο startup agent snapshot" +
+                            (string.IsNullOrWhiteSpace(snapshotIssue)
+                                ? string.Empty
+                                : " · " + snapshotIssue);
+                        state = "error";
+                        DebugLog.Log("[AI-STARTUP-SNAPSHOT] rejected: " +
+                            (snapshotIssue ?? "unknown"));
+                    }
+                    else
+                    {
+                        model = result.Model ?? model;
+                        string provider = string.IsNullOrWhiteSpace(result.Provider)
+                            ? "provider"
+                            : result.Provider;
+                        message = "AI provider: συνδεδεμένος · " + provider + " · " + model;
+                        state = "ready";
+                    }
                 }
                 else
                 {
@@ -132,7 +163,12 @@ namespace S1Jarvis.UI
 
                 await ShowProviderHealthStatusAsync(message, state);
                 if (explicitCommand)
-                    PostProviderHealthCommandResult(result, message, state);
+                {
+                    if (JarvisAgentRuntimeSnapshot.IsInitialized)
+                        PostProviderHealthSnapshotCommandResult();
+                    else
+                        PostProviderHealthCommandResult(result, message, state);
+                }
             }
             catch
             {
@@ -143,6 +179,42 @@ namespace S1Jarvis.UI
                 if (explicitCommand)
                     PostProviderHealthCommandResult(message, state);
             }
+        }
+
+        private void PostProviderHealthSnapshotCommandResult()
+        {
+            if (webView == null || webView.CoreWebView2 == null)
+                return;
+
+            var targets = JarvisAgentRuntimeSnapshot.GetAll();
+            if (targets == null || targets.Count == 0)
+            {
+                PostProviderHealthCommandResult(
+                    "AI agent: startup snapshot δεν είναι διαθέσιμο",
+                    "error");
+                return;
+            }
+
+            var text = new StringBuilder();
+            text.AppendLine("### AI HEALTH — STARTUP SNAPSHOT");
+            text.AppendLine();
+            text.AppendLine("| Agent | Status | Provider | Model | Routing |");
+            text.AppendLine("|---|---|---|---|---|");
+
+            foreach (JarvisAgentRuntimeTarget target in targets)
+            {
+                text.Append("| ").Append(target.Agent ?? "—")
+                    .Append(" | ✓ Connected")
+                    .Append(" | ").Append(string.IsNullOrWhiteSpace(target.Provider) ? "—" : target.Provider)
+                    .Append(" | ").Append(string.IsNullOrWhiteSpace(target.Model) ? "—" : target.Model)
+                    .Append(" | ").Append(target.Inherited ? "Inherited" : "Dedicated")
+                    .AppendLine(" |");
+            }
+
+            text.AppendLine();
+            text.Append("_Το routing/model snapshot φορτώθηκε στην εκκίνηση του Jarvis. " +
+                        "Αλλαγές στο Verilic εφαρμόζονται στην επόμενη εκκίνηση._");
+            webView.CoreWebView2.PostWebMessageAsString(text.ToString().TrimEnd());
         }
 
         private void PostProviderHealthCommandResult(
@@ -169,12 +241,12 @@ namespace S1Jarvis.UI
             {
                 string status = target.Ready ? "✓ Connected" : "✖ " + FriendlyTargetReason(target.ReasonCode);
                 string provider = string.IsNullOrWhiteSpace(target.Provider) ? "—" : target.Provider;
-                string model = string.IsNullOrWhiteSpace(target.Model) ? "—" : target.Model;
+                string targetModel = string.IsNullOrWhiteSpace(target.Model) ? "—" : target.Model;
                 string routing = target.Inherited ? "Inherited" : "Dedicated";
                 text.Append("| ").Append(target.Agent ?? "—")
                     .Append(" | ").Append(status)
                     .Append(" | ").Append(provider)
-                    .Append(" | ").Append(model)
+                    .Append(" | ").Append(targetModel)
                     .Append(" | ").Append(routing)
                     .AppendLine(" |");
             }
