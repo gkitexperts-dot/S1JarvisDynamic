@@ -2,7 +2,7 @@
 
 Status: Phase 1 inventory baseline — 28/08/2026
 
-`Core/JarvisToolRegistry.cs` is the machine-readable tool inventory source of truth. This document is the human-readable architecture map for **tools, routing and runtime parameters**. During Phase 1 the registry is descriptive only: existing routing/optimizer behavior is not changed yet.
+`Core/JarvisToolRegistry.cs` is the machine-readable tool inventory source of truth. This document is the human-readable architecture map for **tools, routing, prerequisites and runtime parameters**. During Phase 1 the registry is descriptive only: existing routing/optimizer behavior is not changed yet.
 
 ## Architecture contract
 
@@ -10,7 +10,7 @@ The user-facing product identity is always **Jarvis**. Names such as Atlas, Forg
 
 The intended architecture chain is:
 
-`User intent -> Capability -> internal subAgent -> allowed tools -> result/UI effect`
+`User intent -> Capability -> internal subAgent -> allowed tools -> prerequisites -> result/UI effect`
 
 Three concepts are deliberately kept separate:
 
@@ -72,6 +72,143 @@ Three concepts are deliberately kept separate:
 | `create_order` | Orders | Scout | Write | Yes | Soft1 object | OrderWrite, BrowserAssistedAction |
 
 Total baseline registrations: **30 tools**.
+
+## Tool prerequisites map
+
+The prerequisite map is separate from routing ownership. A tool can belong to the correct agent/capability and still be **not executable yet** because required business identifiers, upstream outputs, confirmation or runtime configuration are missing.
+
+Prerequisites are classified as:
+
+- **Hard input prerequisite** — concrete data required by the tool contract. Missing means the tool cannot execute.
+- **Resolution prerequisite** — a business reference must first be resolved to a stable id/value, often by another tool. The planner/executor must not guess it.
+- **Confirmation prerequisite** — required before state-changing/external actions.
+- **Runtime/config prerequisite** — Soft1 session, Graph permissions, cccParams, current page/UI state or other host capability required for execution.
+- **Upstream producer** — common tool(s) that can satisfy the prerequisite. This is guidance for orchestration; it is not a rule that every call must always run that producer if the value is already known from user/context.
+
+| Tool | Hard / resolved prerequisites | Common upstream producer(s) | Confirmation | Runtime / config prerequisites | Main produced value for downstream use |
+|---|---|---|---|---|---|
+| `query_data` | Valid SELECT SQL representing the requested business question | Planner/agent builds SQL from user intent and Soft1 knowledge | No | Active `XSupport`/company context; SELECT-only validator | Dataset, row metadata, resolved business ids/values |
+| `export_query_to_file` | Valid SELECT SQL, output `format`, `filename` | Usually `query_data` preview or an already validated equivalent query | No | Active Soft1 DB context; Param `500011` controls max rows | File path/artifact |
+| `export_shown_table` | A concrete table already visible in Jarvis plus requested format/file metadata | Previous reporting/UI projection result | No | Visible-table state must still exist in current Jarvis UI/session | File path/artifact |
+| `open_document` | Resolved document identity: `FINDOC` or enough stable document coordinates for the tool to resolve it | `query_data`, domain lookup, previous create result | No | Active Soft1 `XSupport`; valid object/SOSOURCE mapping; optional Param `500018` form override | Opened/resolved document reference |
+| `get_conversion_targets` | Resolved source `FINDOC` | `open_document` resolution or `query_data` | No | Active Soft1 document context | Valid conversion target set |
+| `get_item_template` | Resolved template item `MTRL` id | `query_data` item lookup | No | Active Soft1 context; Param `500026` whitelist/fallback | Template fields + suggested item code |
+| `create_item` | Final item fields required by runtime; template-derived fields when template flow is used | `get_item_template`, `query_data`, optional Internet research for descriptive enrichment | **Yes** | Active Soft1 context; server-side Param `500026` whitelist | Created item reference / `MTRL` |
+| `find_trader_by_afm` | AFM and, when ambiguity matters, intended trader role/SODTYPE | User input, `query_data`, extracted business identity | No | Active Soft1 company context | Existing trader reference / match state |
+| `get_aade_data` | AFM; intended `sodType` when known | User input or resolved business identity | No | Active Soft1 `GsisCmpAfmData`/AADE capability | Resolved AADE business data + suggested code |
+| `create_trader_from_aade` | `afm`, `name`, `code`, `sodType`; optional address/city/DOY/ZIP/job type from resolved AADE data | `get_aade_data`; normally duplicate check via `find_trader_by_afm` | **Yes** | Active Soft1 context; only supported trader SODTYPE values | Created trader reference / `TRDR` |
+| `search_outlook_contacts` | Search text/name to resolve | User intent, unresolved recipient/attendee name | No | Graph configuration `500019`–`500021`; Contacts permission/access policy | Contact candidates with email/phone |
+| `show_contact_results` | Already resolved contact result rows | `query_data` PRSN lookup and/or `search_outlook_contacts` | No | Jarvis contact modal/UI available | UI projection only; selected/resolved contact may feed later write |
+| `filter_email_inbox` | Filter criteria/date/search state as applicable | User intent / Email curtain state | No | Graph config `500019`–`500021`; Mail.Read; inbox UI; Param `500022` limit | Matching email rows with message ids |
+| `read_email` | Mailbox context; optional count/search text; a specific downstream action needs the returned message `id` | User request or `filter_email_inbox` selection | No | Graph config `500019`–`500021`; Mail.Read | Email message data including `id`, attachment flags/content summary |
+| `download_email_attachment` | Resolved `messageId`; optional exact `attachmentName` | `read_email` or `filter_email_inbox` result | No | Graph Mail.Read; local export directory write access | Local attachment file path(s) |
+| `filter_calendar` | Date/filter/search criteria for calendar UI | User request / Calendar curtain state | No | Graph calendar access; calendar UI; Param `500023` limit | Filtered calendar entries |
+| `show_calendar_entries` | Concrete resolved entries + target date | `read_calendar`, Soft1 calendar query/merge | No | Calendar UI available | UI projection of calendar entries |
+| `read_calendar` | Date range or defaults sufficient to define range | User request | No | Graph config `500019`–`500021`; Calendars.Read/Application access | Calendar event rows/ids |
+| `create_outlook_event` | `subject`, `start`; optional/resolved `end`, location, body, reminder, all-day flag; attendee names must be resolved to email addresses before call | `search_outlook_contacts`/PRSN lookup for attendees; user supplies event facts | **Yes when state-changing policy requires it; mandatory for invitations/attendees** | Graph config `500019`–`500021`; Calendars.ReadWrite; current mailbox | Created Outlook event `id`/webLink (and future Teams join data when supported) |
+| `create_crm_task` | Subject plus any business fields required by the CRM flow; trader/assignee/date references must be resolved when supplied | `find_trader_by_afm`, `query_data`, Email/Calendar read when task originates from those contexts | **Yes** | Active Soft1 context; Param `500012` SERIES required; `500013/500014` defaults as applicable | Created SOACTION/CRM task reference |
+| `send_email` | Resolved `to`, `subject`, `body`; optional `cc`; attachment requires either valid local path or content+filename | `search_outlook_contacts`/PRSN for recipient; `export_shown_table`, `export_query_to_file`, `download_email_attachment` or previous artifact for attachment | **Yes** | Graph config `500019`–`500021`; Mail.Send; valid current mailbox | Send success + attachment state |
+| `reply_email` | Resolved source `messageId` and reply `body`; optional `cc` | `read_email` / `filter_email_inbox` | **Yes** | Graph config `500019`–`500021`; Mail.Send | Reply success |
+| `show_courier_documents` | Concrete eligible document rows / filter scope | `query_data` or courier domain lookup | No | Courier UI and current Soft1 company context | Courier document candidates |
+| `get_courier_voucher_data` | Resolved document/FINDOC for which voucher/provider state is requested | `show_courier_documents`, `open_document`, `query_data` | No | Active Soft1/courier integration; Param `500002` mapping fallback when relevant | Persisted voucher/provider data |
+| `create_courier_voucher` | Resolved eligible document, courier provider and required shipment data | `get_courier_voucher_data`, `show_courier_documents` | **Yes** | Courier provider configuration/integration available; active Soft1 context | Voucher reference/artifact |
+| `cancel_courier_voucher` | Existing resolved voucher identity/provider | `get_courier_voucher_data` | **Yes** | Courier provider integration available; voucher must still be cancellable | Cancellation result |
+| `open_url` | Absolute/valid target URL or clearly resolved navigation target | User request or research planner | No | Browser/WebView surface available | Loaded-page context/URL |
+| `read_page_content` | A page must already be loaded/resolved in browser context | `open_url` | No | Browser page available; Param `500025` max chars | Page text/content for reasoning |
+| `extract_page_tables` | A page containing candidate tables must already be loaded | `open_url`; often `read_page_content` confirms relevance first | No | Browser page/DOM available | Extracted web table data |
+| `create_order` | Resolved trader/customer/supplier reference as required by target document, valid SOSOURCE/SERIES, resolved local item ids and order lines (qty/price/etc.), plus any required delivery/header data | `find_trader_by_afm`, `query_data`/item lookup, optional Internet research or prior workflow result | **Yes** | Active Soft1 context; valid document object/series; Param `500017` prompt-log SERIES where current flow requires it; `500018` only affects native form behavior | Created order/document reference (`FINDOC`/`FINCODE` when returned) |
+
+### Prerequisite graph — common chains
+
+The most important reusable dependency chains are:
+
+```text
+Reporting / Export
+user question
+  -> query_data
+  -> dataset
+  -> export_query_to_file OR export_shown_table
+  -> file_artifact
+
+Trader creation
+AFM
+  -> find_trader_by_afm
+  -> if missing: get_aade_data
+  -> resolved AADE data
+  -> explicit confirmation
+  -> create_trader_from_aade
+  -> trader_reference
+
+Item creation
+item/template request
+  -> query_data (resolve template MTRL when applicable)
+  -> get_item_template
+  -> completed item fields
+  -> explicit confirmation
+  -> create_item
+  -> item_reference
+
+Email send
+recipient name
+  -> PRSN query_data and/or search_outlook_contacts
+  -> resolved email address
+  -> compose to + subject + body (+ optional artifact)
+  -> explicit confirmation
+  -> send_email
+  -> email_send_result
+
+Email reply
+email filter/read
+  -> read_email / filter_email_inbox
+  -> messageId
+  -> reply body
+  -> explicit confirmation
+  -> reply_email
+
+Calendar event
+calendar intent
+  -> resolve subject/start
+  -> attendee names? search_outlook_contacts / PRSN
+  -> resolved attendee emails
+  -> confirmation when required
+  -> create_outlook_event
+  -> calendar_event
+
+Courier
+resolve eligible document
+  -> show_courier_documents / query_data
+  -> get_courier_voucher_data
+  -> provider + shipment state
+  -> explicit confirmation
+  -> create_courier_voucher OR cancel_courier_voucher
+
+Browser research
+research target
+  -> open_url
+  -> read_page_content
+  -> optional extract_page_tables
+  -> research result
+
+Order creation
+order intent
+  -> resolve trader
+  -> resolve local item ids
+  -> resolve series/SOSOURCE and line values
+  -> explicit confirmation
+  -> create_order
+  -> document/order reference
+```
+
+### Planner rule for prerequisites
+
+The semantic planner must distinguish **missing prerequisite data** from **missing prerequisite tool execution**:
+
+- If the user/context already provides a stable required value, do not create a redundant lookup task.
+- If a value is only a human-friendly reference (name, description, document number) and the write tool needs an id/business key, resolve it first.
+- Never invent `TRDR`, `MTRL`, `FINDOC`, message ids, event ids, voucher ids, SERIES/SOSOURCE or recipient addresses.
+- A write task may contain helper reads internally only when they are strictly prerequisites of that single business outcome; independent read intents remain separate tasks.
+- Confirmation is a gate, not a data producer. It must occur after the final write preview is fully resolved and before the irreversible/external call.
+- Tool outputs that are used downstream must become named task outputs/bindings in `JarvisTaskRegistry` rather than being passed implicitly through model memory.
 
 # Runtime Parameters Inventory (`cccParams`)
 
@@ -266,6 +403,8 @@ Every current and future tool registration must define:
 - `DurableResult`
 - `FallbackPolicy`
 
+Prerequisites are currently documented in this file while the routing contracts are being audited. A later hardening step should move stable prerequisite metadata into a machine-readable registry structure so the planner/executor can validate it automatically.
+
 ## New-tool rule
 
 A new AI tool is not considered architecturally complete until all of the following happen in the same change:
@@ -276,9 +415,10 @@ A new AI tool is not considered architecturally complete until all of the follow
 4. Assign at least one semantic capability.
 5. Declare read/write and confirmation policy.
 6. Declare UI side effect and durable-result behavior.
-7. Declare allowed agents/modes only where required by the current runtime.
-8. Run inventory validation and resolve unexpected duplicate/orphan registrations.
-9. Update this document only if the architecture/routing map changes; individual tool rows should eventually be generated from the registry rather than maintained manually.
+7. **Document hard inputs, resolution prerequisites, upstream producers and runtime/config prerequisites in the Tool prerequisites map.**
+8. Declare allowed agents/modes only where required by the current runtime.
+9. Run inventory validation and resolve unexpected duplicate/orphan registrations.
+10. Update this document whenever the tool contract/prerequisites or architecture/routing map changes; individual rows should eventually be generated from machine-readable metadata rather than maintained manually.
 
 ## Validation policy
 
@@ -296,7 +436,9 @@ The next inventory-hardening step is to compare the registry automatically again
 - runtime tool exists but registry entry is missing;
 - registry entry exists but runtime tool was removed/renamed;
 - optimizer references an unregistered tool;
-- routing references an unknown capability/agent.
+- routing references an unknown capability/agent;
+- prerequisite requires an output that no registered task/tool can produce;
+- prerequisite references an id/value that is neither supplied by the user/context nor bound from an upstream task output.
 
 ## Phase boundaries
 
@@ -306,6 +448,7 @@ The next inventory-hardening step is to compare the registry automatically again
 - Current 30-tool baseline mapped.
 - Current subAgent ownership mapped.
 - Current capability/routing map documented.
+- **Prerequisites for all 30 tools documented.**
 - Current `cccParams` inventory audited and documented.
 - No routing behavior changed.
 
@@ -315,6 +458,7 @@ The next inventory-hardening step is to compare the registry automatically again
 - Make capability-to-agent routing derive from the registry.
 - Remove duplicate hardcoded tool ownership/sets where safe.
 - Add automatic runtime/build consistency checks.
+- Promote stable prerequisite metadata from documentation into a machine-readable tool/task contract used by the planner/executor.
 - Consider moving parameter metadata into a machine-readable `JarvisParameterRegistry` using the same architecture pattern.
 
 ### Later training/common-knowledge phase
