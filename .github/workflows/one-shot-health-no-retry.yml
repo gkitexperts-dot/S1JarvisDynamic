@@ -1,0 +1,25 @@
+name: health-no-retry-cleanup
+on:
+  push:
+    branches: [feature/jarvis-orchestration]
+    paths: [.github/workflows/one-shot-health-no-retry.yml]
+permissions:
+  contents: write
+jobs:
+  cleanup:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feature/jarvis-orchestration
+          fetch-depth: 0
+      - run: python3 scripts/one_shot_health_no_retry.py
+      - run: python3 scripts/verify_ai_routing_policy.py
+      - run: |
+          rm -f scripts/one_shot_health_no_retry.py
+          rm -f .github/workflows/one-shot-health-no-retry.yml
+          git config user.name "Jarvis Architecture Bot"
+          git config user.email "jarvis-architecture@users.noreply.github.com"
+          git add -A
+          git commit -m "Keep Health startup-only after shell load"
+          git push origin HEAD:feature/jarvis-orchestration
