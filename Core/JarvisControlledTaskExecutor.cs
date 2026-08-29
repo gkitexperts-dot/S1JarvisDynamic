@@ -20,7 +20,6 @@ namespace S1Jarvis.Core
     /// </summary>
     internal static class JarvisControlledTaskExecutor
     {
-        private const string Model = "claude-opus-5";
         private const int MaxTokens = 6000;
         private const int MaxPlanningAttempts = 2;
 
@@ -127,7 +126,6 @@ namespace S1Jarvis.Core
 
             return new JObject
             {
-                ["model"] = Model,
                 ["max_tokens"] = MaxTokens,
                 ["output_config"] = new JObject { ["effort"] = "low" },
                 ["system"] = new JArray
