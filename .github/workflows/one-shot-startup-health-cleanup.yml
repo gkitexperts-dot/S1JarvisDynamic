@@ -1,0 +1,24 @@
+name: startup-health-cleanup
+on:
+  push:
+    branches: [feature/jarvis-orchestration]
+    paths: [.github/workflows/one-shot-startup-health-cleanup.yml]
+permissions:
+  contents: write
+jobs:
+  cleanup:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feature/jarvis-orchestration
+          fetch-depth: 0
+      - run: python3 scripts/one_shot_startup_health_cleanup.py
+      - run: |
+          rm -f scripts/one_shot_startup_health_cleanup.py
+          rm -f .github/workflows/one-shot-startup-health-cleanup.yml
+          git config user.name "Jarvis Architecture Bot"
+          git config user.email "jarvis-architecture@users.noreply.github.com"
+          git add -A
+          git commit -m "Use one startup Health agent schema snapshot"
+          git push origin HEAD:feature/jarvis-orchestration
