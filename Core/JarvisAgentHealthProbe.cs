@@ -255,6 +255,25 @@ namespace S1Jarvis.Core
                         IReadOnlyList<JarvisAgentHealthTargetResult> targets =
                             ConvertTargets(health.Targets);
 
+                        // Preserve the authoritative server failure before validating
+                        // success-only execution material. Failed provisioning responses
+                        // are allowed to omit Model/Provider/ApiKey; masking their reason
+                        // as provider_model_missing made diagnostics impossible.
+                        if (!health.Ready)
+                        {
+                            return JarvisAgentHealthResult.Failure(
+                                health.ReasonCode.Trim(),
+                                string.Equals(
+                                    health.ReasonCode.Trim(),
+                                    "provider_credits_exhausted",
+                                    StringComparison.Ordinal),
+                                health.Provider,
+                                returnedModel,
+                                targets,
+                                health.DiagnosticCode,
+                                health.DiagnosticMessage);
+                        }
+
                         if (string.IsNullOrWhiteSpace(returnedModel))
                             return JarvisAgentHealthResult.Failure(
                                 "provider_model_missing",
@@ -276,23 +295,10 @@ namespace S1Jarvis.Core
                                 diagnosticCode: health.DiagnosticCode,
                                 diagnosticMessage: health.DiagnosticMessage);
 
-                        if (health.Ready)
-                            return JarvisAgentHealthResult.Success(
-                                health.Provider,
-                                returnedModel,
-                                targets);
-
-                        return JarvisAgentHealthResult.Failure(
-                            health.ReasonCode.Trim(),
-                            string.Equals(
-                                health.ReasonCode.Trim(),
-                                "provider_credits_exhausted",
-                                StringComparison.Ordinal),
+                        return JarvisAgentHealthResult.Success(
                             health.Provider,
                             returnedModel,
-                            targets,
-                            health.DiagnosticCode,
-                            health.DiagnosticMessage);
+                            targets);
                     }
                 }
             }
