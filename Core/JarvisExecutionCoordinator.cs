@@ -19,12 +19,7 @@ namespace S1Jarvis.Core
 
     internal sealed class JarvisTaskExecutionResult
     {
-        public JarvisTaskExecutionResult()
-        {
-            Outputs = new JObject();
-            Issues = new List<string>();
-        }
-
+        public JarvisTaskExecutionResult() { Outputs = new JObject(); Issues = new List<string>(); }
         public string ObjectId { get; set; }
         public string TaskType { get; set; }
         public string OwnerAgent { get; set; }
@@ -37,12 +32,9 @@ namespace S1Jarvis.Core
     {
         public JarvisExecutionStepSnapshot()
         {
-            DependsOn = new List<string>();
-            BoundInputs = new List<string>();
-            MaterializedInputs = new JObject();
-            ValidationIssues = new List<string>();
+            DependsOn = new List<string>(); BoundInputs = new List<string>(); OwnerAgentInputs = new List<string>();
+            MaterializedInputs = new JObject(); ValidationIssues = new List<string>();
         }
-
         public int Wave { get; set; }
         public int Ordinal { get; set; }
         public string ObjectId { get; set; }
@@ -53,18 +45,14 @@ namespace S1Jarvis.Core
         public bool ConfirmationGranted { get; set; }
         public List<string> DependsOn { get; private set; }
         public List<string> BoundInputs { get; private set; }
+        public List<string> OwnerAgentInputs { get; private set; }
         public JObject MaterializedInputs { get; private set; }
         public List<string> ValidationIssues { get; private set; }
     }
 
     internal sealed class JarvisExecutionControlSnapshot
     {
-        public JarvisExecutionControlSnapshot()
-        {
-            Steps = new List<JarvisExecutionStepSnapshot>();
-            ValidationIssues = new List<string>();
-        }
-
+        public JarvisExecutionControlSnapshot() { Steps = new List<JarvisExecutionStepSnapshot>(); ValidationIssues = new List<string>(); }
         public List<JarvisExecutionStepSnapshot> Steps { get; private set; }
         public List<string> ValidationIssues { get; private set; }
         public bool IsValid { get { return ValidationIssues.Count == 0 && Steps.All(x => x.ValidationIssues.Count == 0); } }
@@ -86,8 +74,7 @@ namespace S1Jarvis.Core
 
         internal JarvisExecutionCoordinator(JarvisDependencyGraph graph, JarvisExecutionPlanPreview preview)
         {
-            _graph = graph;
-            _preview = preview;
+            _graph = graph; _preview = preview;
             _results = new Dictionary<string, JarvisTaskExecutionResult>(StringComparer.OrdinalIgnoreCase);
             _confirmed = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             _running = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
@@ -98,8 +85,7 @@ namespace S1Jarvis.Core
             var snapshot = new JarvisExecutionControlSnapshot();
             ValidateControlPlane(snapshot.ValidationIssues);
             if (snapshot.ValidationIssues.Count > 0) return snapshot;
-            foreach (JarvisExecutionPlanEntry entry in _preview.Entries.OrderBy(x => x.Ordinal))
-                snapshot.Steps.Add(BuildStepSnapshot(entry));
+            foreach (JarvisExecutionPlanEntry entry in _preview.Entries.OrderBy(x => x.Ordinal)) snapshot.Steps.Add(BuildStepSnapshot(entry));
             return snapshot;
         }
 
@@ -107,8 +93,7 @@ namespace S1Jarvis.Core
         {
             JarvisExecutionControlSnapshot snapshot = Inspect();
             if (!snapshot.IsValid) return new string[0];
-            return snapshot.Steps.Where(x => x.State == JarvisExecutionStepState.ReadyForDispatch)
-                .OrderBy(x => x.Ordinal).Select(x => x.ObjectId).ToArray();
+            return snapshot.Steps.Where(x => x.State == JarvisExecutionStepState.ReadyForDispatch).OrderBy(x => x.Ordinal).Select(x => x.ObjectId).ToArray();
         }
 
         internal bool TryGetDispatchInputs(string objectId, out JObject inputs, out string[] issues)
@@ -127,20 +112,29 @@ namespace S1Jarvis.Core
                     localIssues.Add("Execution object has no authoritative task node: " + entry.ObjectId);
                 else
                 {
+                    // Internal execution context. This is consumed by controlled
+                    // executors only and is never forwarded as a native tool arg.
+                    inputs["__intent_fragment"] = node.IntentFragment ?? string.Empty;
+
                     foreach (JarvisPrerequisiteResolutionItem prerequisite in node.Prerequisites.Where(x => x != null))
                     {
                         if (prerequisite.Kind == JarvisPrerequisiteResolutionKind.ResolvedFromIntent ||
                             prerequisite.Kind == JarvisPrerequisiteResolutionKind.ResolvedFromRouting)
                         {
-                            if (prerequisite.Value != null)
-                                inputs[prerequisite.InputName] = prerequisite.Value.DeepClone();
+                            if (prerequisite.Value != null) inputs[prerequisite.InputName] = prerequisite.Value.DeepClone();
                         }
                         else if (prerequisite.Kind == JarvisPrerequisiteResolutionKind.DependencyPending)
                         {
                             MaterializeBoundInput(entry, prerequisite.InputName, inputs, localIssues);
                         }
-                        else if (prerequisite.Kind == JarvisPrerequisiteResolutionKind.LookupPlanned)
-                            localIssues.Add("Lookup prerequisite remains unresolved for " + entry.ObjectId + "." + prerequisite.InputName + ".");
+                        else if (prerequisite.Kind == JarvisPrerequisiteResolutionKind.LookupPlanned ||
+                                 prerequisite.Kind == JarvisPrerequisiteResolutionKind.OwnerAgentPending)
+                        {
+                            // Validated execution work belonging to the registered
+                            // owner agent. The controlled executor receives the
+                            // atomic fragment and ONLY the registered task/lookup
+                            // tools, then Jarvis validates the returned result.
+                        }
                         else if (prerequisite.Kind == JarvisPrerequisiteResolutionKind.NeedsUserInput)
                             localIssues.Add("User input remains unresolved for " + entry.ObjectId + "." + prerequisite.InputName + ".");
                         else if (prerequisite.Kind == JarvisPrerequisiteResolutionKind.Invalid)
@@ -148,8 +142,14 @@ namespace S1Jarvis.Core
                     }
 
                     foreach (string required in node.Descriptor.RequiredInputs ?? new string[0])
-                        if (inputs[required] == null)
+                    {
+                        if (inputs[required] != null) continue;
+                        JarvisPrerequisiteResolutionItem prerequisite = node.Prerequisites.FirstOrDefault(x => x != null && string.Equals(x.InputName, required, StringComparison.OrdinalIgnoreCase));
+                        bool ownerWillMaterialize = prerequisite != null &&
+                            (prerequisite.Kind == JarvisPrerequisiteResolutionKind.OwnerAgentPending || prerequisite.Kind == JarvisPrerequisiteResolutionKind.LookupPlanned);
+                        if (!ownerWillMaterialize)
                             localIssues.Add("Required dispatch input is not materialized: " + entry.ObjectId + "." + required + ".");
+                    }
                 }
             }
             issues = localIssues.Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
@@ -165,14 +165,11 @@ namespace S1Jarvis.Core
             else if (!DependenciesSucceeded(entry)) localIssues.Add("Confirmation cannot unlock a task before all dependencies succeed: " + entry.ObjectId);
             else
             {
-                JObject ignored;
-                string[] materializationIssues;
-                if (!TryGetDispatchInputs(entry.ObjectId, out ignored, out materializationIssues))
-                    localIssues.AddRange(materializationIssues);
+                JObject ignored; string[] materializationIssues;
+                if (!TryGetDispatchInputs(entry.ObjectId, out ignored, out materializationIssues)) localIssues.AddRange(materializationIssues);
             }
             if (localIssues.Count == 0) _confirmed.Add(entry.ObjectId);
-            issues = localIssues.ToArray();
-            return issues.Length == 0;
+            issues = localIssues.ToArray(); return issues.Length == 0;
         }
 
         internal bool TryBeginDispatch(string objectId, out string[] issues)
@@ -181,67 +178,43 @@ namespace S1Jarvis.Core
             JarvisExecutionPlanEntry entry = FindEntry(objectId);
             ValidateBeforeDispatch(entry, localIssues);
             if (localIssues.Count == 0) _running.Add(entry.ObjectId);
-            issues = localIssues.ToArray();
-            return issues.Length == 0;
+            issues = localIssues.ToArray(); return issues.Length == 0;
         }
 
         internal bool TryAcceptResult(JarvisTaskExecutionResult result, out string[] issues)
         {
             var localIssues = new List<string>();
             ValidateAfterExecution(result, localIssues);
-            if (localIssues.Count == 0)
-            {
-                _running.Remove(result.ObjectId);
-                _results[result.ObjectId] = result;
-            }
-            issues = localIssues.ToArray();
-            return issues.Length == 0;
+            if (localIssues.Count == 0) { _running.Remove(result.ObjectId); _results[result.ObjectId] = result; }
+            issues = localIssues.ToArray(); return issues.Length == 0;
         }
 
         private JarvisExecutionStepSnapshot BuildStepSnapshot(JarvisExecutionPlanEntry entry)
         {
             var step = new JarvisExecutionStepSnapshot
             {
-                Wave = entry.Wave, Ordinal = entry.Ordinal, ObjectId = entry.ObjectId,
-                TaskType = entry.TaskType, OwnerAgent = entry.OwnerAgent,
-                RequiresConfirmation = entry.RequiresConfirmation,
+                Wave = entry.Wave, Ordinal = entry.Ordinal, ObjectId = entry.ObjectId, TaskType = entry.TaskType,
+                OwnerAgent = entry.OwnerAgent, RequiresConfirmation = entry.RequiresConfirmation,
                 ConfirmationGranted = _confirmed.Contains(entry.ObjectId)
             };
-            step.DependsOn.AddRange(entry.DependsOnObjectIds);
-            step.BoundInputs.AddRange(entry.BoundInputs);
+            step.DependsOn.AddRange(entry.DependsOnObjectIds); step.BoundInputs.AddRange(entry.BoundInputs); step.OwnerAgentInputs.AddRange(entry.OwnerAgentInputs);
 
             JarvisTaskExecutionResult result;
-            if (_results.TryGetValue(entry.ObjectId, out result))
-            {
-                step.State = result.Success ? JarvisExecutionStepState.Succeeded : JarvisExecutionStepState.Failed;
-                return step;
-            }
+            if (_results.TryGetValue(entry.ObjectId, out result)) { step.State = result.Success ? JarvisExecutionStepState.Succeeded : JarvisExecutionStepState.Failed; return step; }
             if (_running.Contains(entry.ObjectId)) { step.State = JarvisExecutionStepState.Running; return step; }
             if (DependencyFailed(entry)) { step.State = JarvisExecutionStepState.Blocked; step.ValidationIssues.Add("A required upstream task failed."); return step; }
             if (!DependenciesSucceeded(entry)) { step.State = JarvisExecutionStepState.WaitingForDependencies; return step; }
 
-            JObject inputs;
-            string[] inputIssues;
-            if (!TryGetDispatchInputs(entry.ObjectId, out inputs, out inputIssues))
-            {
-                step.State = JarvisExecutionStepState.Blocked;
-                step.ValidationIssues.AddRange(inputIssues);
-                return step;
-            }
-            foreach (JProperty property in inputs.Properties())
-                step.MaterializedInputs[property.Name] = property.Value.DeepClone();
+            JObject inputs; string[] inputIssues;
+            if (!TryGetDispatchInputs(entry.ObjectId, out inputs, out inputIssues)) { step.State = JarvisExecutionStepState.Blocked; step.ValidationIssues.AddRange(inputIssues); return step; }
+            foreach (JProperty property in inputs.Properties()) step.MaterializedInputs[property.Name] = property.Value.DeepClone();
 
-            if (entry.RequiresConfirmation && !_confirmed.Contains(entry.ObjectId))
-            {
-                step.State = JarvisExecutionStepState.WaitingForConfirmation;
-                return step;
-            }
+            if (entry.RequiresConfirmation && !_confirmed.Contains(entry.ObjectId)) { step.State = JarvisExecutionStepState.WaitingForConfirmation; return step; }
 
             var dispatchIssues = new List<string>();
             ValidateBeforeDispatch(entry, dispatchIssues);
             if (dispatchIssues.Count > 0) { step.State = JarvisExecutionStepState.Blocked; step.ValidationIssues.AddRange(dispatchIssues); return step; }
-            step.State = JarvisExecutionStepState.ReadyForDispatch;
-            return step;
+            step.State = JarvisExecutionStepState.ReadyForDispatch; return step;
         }
 
         private void ValidateControlPlane(List<string> issues)
@@ -266,8 +239,7 @@ namespace S1Jarvis.Core
                 if (!string.Equals(registered.TaskType, node.TaskType, StringComparison.OrdinalIgnoreCase)) issues.Add("Task contract mismatch for " + entry.ObjectId + ".");
             }
             if (!DependenciesSucceeded(entry)) issues.Add("Dependencies are not complete for " + entry.ObjectId + ".");
-            JObject ignored;
-            string[] materializationIssues;
+            JObject ignored; string[] materializationIssues;
             if (!TryGetDispatchInputs(entry.ObjectId, out ignored, out materializationIssues)) issues.AddRange(materializationIssues);
             if (entry.RequiresConfirmation && !_confirmed.Contains(entry.ObjectId)) issues.Add("Confirmation is required before dispatch of " + entry.ObjectId + ".");
             if (_running.Contains(entry.ObjectId)) issues.Add("Execution object is already running: " + entry.ObjectId);
@@ -287,26 +259,18 @@ namespace S1Jarvis.Core
             if (result.Success)
             {
                 foreach (string outputName in node.Descriptor.Produces ?? new string[0])
-                    if (result.Outputs == null || result.Outputs[outputName] == null)
-                        issues.Add("Successful executor result is missing registered output '" + outputName + "' for " + entry.ObjectId + ".");
+                    if (result.Outputs == null || result.Outputs[outputName] == null) issues.Add("Successful executor result is missing registered output '" + outputName + "' for " + entry.ObjectId + ".");
             }
-            else if (result.Issues == null || result.Issues.Count == 0)
-                issues.Add("Failed executor result must contain a diagnostic issue for " + entry.ObjectId + ".");
+            else if (result.Issues == null || result.Issues.Count == 0) issues.Add("Failed executor result must contain a diagnostic issue for " + entry.ObjectId + ".");
         }
 
         private void MaterializeBoundInput(JarvisExecutionPlanEntry entry, string inputName, JObject inputs, List<string> issues)
         {
-            JarvisDependencyBinding[] bindings = _graph.Bindings.Where(x => x != null &&
-                string.Equals(x.TargetObjectId, entry.ObjectId, StringComparison.OrdinalIgnoreCase) &&
-                string.Equals(x.TargetInput, inputName, StringComparison.OrdinalIgnoreCase)).ToArray();
+            JarvisDependencyBinding[] bindings = _graph.Bindings.Where(x => x != null && string.Equals(x.TargetObjectId, entry.ObjectId, StringComparison.OrdinalIgnoreCase) && string.Equals(x.TargetInput, inputName, StringComparison.OrdinalIgnoreCase)).ToArray();
             if (bindings.Length != 1) { issues.Add("Jarvis requires exactly one dependency binding for " + entry.ObjectId + "." + inputName + "."); return; }
             JarvisDependencyBinding binding = bindings[0];
             JarvisTaskExecutionResult sourceResult;
-            if (!_results.TryGetValue(binding.SourceObjectId, out sourceResult) || !sourceResult.Success)
-            {
-                issues.Add("Bound input is waiting for validated upstream result: " + entry.ObjectId + "." + inputName + ".");
-                return;
-            }
+            if (!_results.TryGetValue(binding.SourceObjectId, out sourceResult) || !sourceResult.Success) { issues.Add("Bound input is waiting for validated upstream result: " + entry.ObjectId + "." + inputName + "."); return; }
             JToken value = sourceResult.Outputs == null ? null : sourceResult.Outputs[binding.SourceOutput];
             if (value == null) { issues.Add("Validated upstream result does not contain bound output '" + binding.SourceOutput + "' for " + entry.ObjectId + "." + inputName + "."); return; }
             inputs[inputName] = value.DeepClone();
@@ -314,30 +278,19 @@ namespace S1Jarvis.Core
 
         private bool DependenciesSucceeded(JarvisExecutionPlanEntry entry)
         {
-            foreach (string dependencyId in entry.DependsOnObjectIds)
-            {
-                JarvisTaskExecutionResult result;
-                if (!_results.TryGetValue(dependencyId, out result) || !result.Success) return false;
-            }
+            foreach (string dependencyId in entry.DependsOnObjectIds) { JarvisTaskExecutionResult result; if (!_results.TryGetValue(dependencyId, out result) || !result.Success) return false; }
             return true;
         }
-
         private bool DependencyFailed(JarvisExecutionPlanEntry entry)
         {
-            foreach (string dependencyId in entry.DependsOnObjectIds)
-            {
-                JarvisTaskExecutionResult result;
-                if (_results.TryGetValue(dependencyId, out result) && !result.Success) return true;
-            }
+            foreach (string dependencyId in entry.DependsOnObjectIds) { JarvisTaskExecutionResult result; if (_results.TryGetValue(dependencyId, out result) && !result.Success) return true; }
             return false;
         }
-
         private JarvisExecutionPlanEntry FindEntry(string objectId)
         {
             if (_preview == null || string.IsNullOrWhiteSpace(objectId)) return null;
             return _preview.Entries.FirstOrDefault(x => x != null && string.Equals(x.ObjectId, objectId, StringComparison.OrdinalIgnoreCase));
         }
-
         private JarvisValidatedTaskNode FindNode(string objectId)
         {
             if (_graph == null || string.IsNullOrWhiteSpace(objectId)) return null;
