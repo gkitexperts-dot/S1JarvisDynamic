@@ -149,7 +149,7 @@ namespace S1Jarvis.Core
             if (localIssues.Count == 0)
             {
                 string[] confirmationIssues;
-                if (!current.GrantConfirmation(currentObjectId, out confirmationIssues))
+                if (!current.GrantExplicitConfirmation(currentObjectId, out confirmationIssues))
                     localIssues.AddRange(confirmationIssues ?? new string[0]);
             }
 
