@@ -8,7 +8,7 @@ namespace S1Jarvis.Core
 {
     /// <summary>
     /// Deterministic presentation implementation for GLOBAL.ADDRESSABLE_RESULT_LINK.
-    /// The behavioral policy itself lives in the central Policies Inventory.
+    /// The behavioral policy and URI templates live in the central Policies Inventory.
     /// This component only materializes links from authoritative executor/dataset outputs.
     /// </summary>
     internal static class JarvisResultLinkMaterializer
@@ -52,21 +52,21 @@ namespace S1Jarvis.Core
                 int sosource = ReadInt(row, "SOSOURCE");
                 int findoc = ReadInt(row, "FINDOC");
                 if (sosource > 0 && findoc > 0)
-                    return "[" + display + "](doc:" + sosource + ":" + findoc + ")";
+                    return "[" + display + "](" + BuildDocumentUri(sosource, findoc) + ")";
             }
 
             if (column == "SOACTION" || column == "SOACTIONID")
             {
                 int soaction = ReadInt(row, columnName);
                 if (soaction > 0)
-                    return "[" + display + "](doc:2021:" + soaction + ")";
+                    return "[" + display + "](" + BuildCrmTaskUri(soaction) + ")";
             }
 
             if (column == "MTRL")
             {
                 int mtrl = ReadInt(row, columnName);
                 if (mtrl > 0)
-                    return "[" + display + "](item:" + mtrl + ")";
+                    return "[" + display + "](" + BuildItemUri(mtrl) + ")";
             }
 
             if (column == "PATH" || column == "FILE_PATH")
@@ -104,7 +104,7 @@ namespace S1Jarvis.Core
             {
                 int id;
                 if (idToken == null || !int.TryParse(idToken.ToString(), out id) || id <= 0) continue;
-                links.Add("[Άνοιγμα εργασίας " + id + "](doc:2021:" + id + ")");
+                links.Add("[Άνοιγμα εργασίας " + id + "](" + BuildCrmTaskUri(id) + ")");
             }
         }
 
@@ -113,7 +113,7 @@ namespace S1Jarvis.Core
             int sosource = ReadInt(outputs, "sosource");
             int findoc = ReadInt(outputs, "findoc");
             if (sosource > 0 && findoc > 0)
-                links.Add("[Άνοιγμα παραστατικού " + findoc + "](doc:" + sosource + ":" + findoc + ")");
+                links.Add("[Άνοιγμα παραστατικού " + findoc + "](" + BuildDocumentUri(sosource, findoc) + ")");
         }
 
         private static void AddTraderLink(JObject outputs, List<string> links)
@@ -128,7 +128,7 @@ namespace S1Jarvis.Core
         {
             int mtrl = ReadInt(outputs, "mtrl");
             if (mtrl > 0)
-                links.Add("[Άνοιγμα είδους " + mtrl + "](item:" + mtrl + ")");
+                links.Add("[Άνοιγμα είδους " + mtrl + "](" + BuildItemUri(mtrl) + ")");
         }
 
         private static void AddExternalLink(JObject outputs, string property, string label, List<string> links)
@@ -180,6 +180,25 @@ namespace S1Jarvis.Core
 
             JObject obj = artifact as JObject;
             if (obj != null) AddFileLink(obj, "path", links);
+        }
+
+        private static string BuildCrmTaskUri(int soactionId)
+        {
+            return JarvisPolicySettings.Presentation.CrmTaskUriTemplate
+                .Replace("{soactionId}", soactionId.ToString(System.Globalization.CultureInfo.InvariantCulture));
+        }
+
+        private static string BuildDocumentUri(int sosource, int findoc)
+        {
+            return JarvisPolicySettings.Presentation.DocumentUriTemplate
+                .Replace("{sosource}", sosource.ToString(System.Globalization.CultureInfo.InvariantCulture))
+                .Replace("{findoc}", findoc.ToString(System.Globalization.CultureInfo.InvariantCulture));
+        }
+
+        private static string BuildItemUri(int mtrl)
+        {
+            return JarvisPolicySettings.Presentation.ItemUriTemplate
+                .Replace("{mtrl}", mtrl.ToString(System.Globalization.CultureInfo.InvariantCulture));
         }
 
         private static string EscapeMarkdownLabel(string value)
