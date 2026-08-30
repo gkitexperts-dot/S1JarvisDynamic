@@ -10,10 +10,11 @@ using S1Jarvis.Access.Verilic;
 namespace S1Jarvis.Core
 {
     /// <summary>
-    /// Controlled execution for the currently promoted Echo write tasks.
-    /// Jarvis owns graph state/confirmation. Echo only materializes the native
-    /// tool arguments from the atomic task fragment and the scoped tool contract.
-    /// No agent-to-agent calls are possible here.
+    /// Controlled execution for promoted Echo write tasks.
+    /// Jarvis owns graph state, prerequisites and confirmation. Echo may only
+    /// materialize one native call for the already-authorized atomic task.
+    /// The proposed call is validated against JarvisToolRegistry BEFORE the
+    /// real tool is executed. No agent-to-agent calls and no retry loops live here.
     /// </summary>
     internal static class JarvisControlledEchoTaskExecutor
     {
@@ -29,110 +30,77 @@ namespace S1Jarvis.Core
                     ? xSupport.ConnectionInfo.UserId
                     : 0;
 
-                var history = new JArray(new JObject
+                var request = new JObject
                 {
-                    ["role"] = "user",
-                    ["content"] = fragment
-                });
+                    ["max_tokens"] = 3000,
+                    ["system"] = new JArray(new JObject
+                    {
+                        ["type"] = "text",
+                        ["text"] =
+                            "Εκτελείς ΕΝΑ atomic Jarvis task: CreateCrmTask. " +
+                            "Δεν αποφασίζεις capabilities, prerequisites ή άλλα tasks. " +
+                            "Πρότεινε ακριβώς ΜΙΑ κλήση create_crm_task από το atomic intent και το runtime context. " +
+                            "Δεν επιτρέπεται lookup/retry loop σε αυτό το execution layer. " +
+                            "Τρέχουσα τοπική ημερομηνία/ώρα Jarvis=" + runtimeNow + ". " +
+                            "Ο τρέχων Soft1 userId είναι " + currentUserId.ToString() + ". " +
+                            "Αν η οδηγία αναθέτει την εργασία στον ίδιο τον χειριστή (π.χ. 'βάλε μου'), actorUserId=" + currentUserId.ToString() + ". " +
+                            "Μετέτρεψε φυσική ημερομηνία/ώρα σε ISO. " +
+                            "Ο Jarvis θα ελέγξει deterministic την προτεινόμενη κλήση με το authoritative tool prerequisite contract πριν εκτελεστεί."
+                    }),
+                    ["tools"] = JArray.FromObject(new object[] { JarvisTools.CreateCrmTaskToolDefinition }),
+                    ["tool_choice"] = new JObject { ["type"] = "tool", ["name"] = "create_crm_task" },
+                    ["messages"] = new JArray(new JObject
+                    {
+                        ["role"] = "user",
+                        ["content"] = fragment
+                    })
+                };
 
-                for (int iteration = 0; iteration < 4; iteration++)
+                AgentProxyResponse proxy = await new VerilicAiMessagesClient()
+                    .SendAsync(xSupport, "Echo", request.ToString(Formatting.None), CancellationToken.None)
+                    .ConfigureAwait(false);
+                if (proxy == null || !proxy.Success)
                 {
-                    var request = new JObject
-                    {
-                        ["max_tokens"] = 4000,
-                        ["system"] = new JArray(new JObject
-                        {
-                            ["type"] = "text",
-                            ["text"] =
-                                "Εκτελείς ΕΝΑ atomic Jarvis task: CreateCrmTask. " +
-                                "Δεν αποφασίζεις capabilities ή άλλα tasks. Χρησιμοποίησε μόνο τα attached tools. " +
-                                "Τρέχουσα τοπική ημερομηνία/ώρα Jarvis=" + runtimeNow + ". " +
-                                "Ο τρέχων Soft1 userId είναι " + currentUserId.ToString() + ". " +
-                                "Αν η οδηγία λέει 'μου/σε μένα', actorUserId=" + currentUserId.ToString() + ". " +
-                                "Μετέτρεψε φυσική ημερομηνία/ώρα σε ISO σε σχέση με την παραπάνω runtime ημερομηνία. " +
-                                "Αν χρειάζεται άλλος Soft1 χρήστης, βρες τον με query_data στον USERS πριν το create_crm_task. " +
-                                "Μόλις έχεις title, description, fromDate και actorUserId, κάλεσε create_crm_task."
-                        }),
-                        ["tools"] = JArray.FromObject(new object[]
-                        {
-                            JarvisTools.QueryDataToolDefinition,
-                            JarvisTools.CreateCrmTaskToolDefinition
-                        }),
-                        ["messages"] = history
-                    };
-
-                    AgentProxyResponse proxy = await new VerilicAiMessagesClient()
-                        .SendAsync(xSupport, "Echo", request.ToString(Formatting.None), CancellationToken.None)
-                        .ConfigureAwait(false);
-                    if (proxy == null || !proxy.Success)
-                    {
-                        result.Issues.Add(proxy == null ? "Echo returned no response." : proxy.ErrorMessage ?? "Echo execution failed.");
-                        return result;
-                    }
-
-                    JObject response = JObject.Parse(proxy.RawResponseJson ?? "{}");
-                    JArray content = response["content"] as JArray ?? new JArray();
-                    string stop = (string)response["stop_reason"] ?? string.Empty;
-                    history.Add(new JObject { ["role"] = "assistant", ["content"] = content.DeepClone() });
-
-                    if (!string.Equals(stop, "tool_use", StringComparison.OrdinalIgnoreCase))
-                    {
-                        result.Issues.Add("Echo did not materialize the registered CreateCrmTask tool call.");
-                        return result;
-                    }
-
-                    var toolResults = new JArray();
-                    foreach (JObject block in content.OfType<JObject>().Where(x => string.Equals((string)x["type"], "tool_use", StringComparison.OrdinalIgnoreCase)))
-                    {
-                        string id = (string)block["id"] ?? string.Empty;
-                        string name = (string)block["name"] ?? string.Empty;
-                        JObject input = block["input"] as JObject ?? new JObject();
-                        if (string.Equals(name, "query_data", StringComparison.OrdinalIgnoreCase))
-                        {
-                            string sql = input["sql"] == null ? string.Empty : input["sql"].ToString();
-                            string toolResult;
-                            bool isError = false;
-                            try { toolResult = JarvisTools.ExecuteQueryData(xSupport, sql); }
-                            catch (Exception ex) { toolResult = "Σφάλμα: " + ex.Message; isError = true; }
-                            toolResults.Add(ToolResult(id, toolResult, isError));
-                            continue;
-                        }
-                        if (!string.Equals(name, "create_crm_task", StringComparison.OrdinalIgnoreCase))
-                        {
-                            result.Issues.Add("Echo attempted an unscoped tool: " + name);
-                            return result;
-                        }
-
-                        string raw = JarvisTools.ExecuteCreateCrmTask(xSupport, input);
-                        JObject parsed = TryObject(raw);
-                        if (parsed == null || (bool?)parsed["success"] != true)
-                        {
-                            result.Issues.Add("create_crm_task failed: " + raw);
-                            return result;
-                        }
-
-                        JArray ids = new JArray();
-                        JArray rows = parsed["results"] as JArray;
-                        if (rows != null)
-                            foreach (JObject row in rows.OfType<JObject>())
-                                if (row["soactionId"] != null) ids.Add(row["soactionId"].DeepClone());
-                        if (ids.Count == 0 && parsed["soactionId"] != null) ids.Add(parsed["soactionId"].DeepClone());
-
-                        result.Outputs["crm_task_reference"] = parsed.DeepClone();
-                        result.Outputs["soaction_ids"] = ids;
-                        result.Success = true;
-                        return result;
-                    }
-
-                    if (toolResults.Count == 0)
-                    {
-                        result.Issues.Add("Echo returned tool_use without an executable scoped tool.");
-                        return result;
-                    }
-                    history.Add(new JObject { ["role"] = "user", ["content"] = toolResults });
+                    result.Issues.Add(proxy == null ? "Echo returned no response." : proxy.ErrorMessage ?? "Echo execution failed.");
+                    return result;
                 }
 
-                result.Issues.Add("CreateCrmTask exceeded controlled tool iterations.");
+                JObject response = JObject.Parse(proxy.RawResponseJson ?? "{}");
+                JObject call = (response["content"] as JArray)?.OfType<JObject>()
+                    .FirstOrDefault(x => string.Equals((string)x["type"], "tool_use", StringComparison.OrdinalIgnoreCase) &&
+                                         string.Equals((string)x["name"], "create_crm_task", StringComparison.OrdinalIgnoreCase));
+                if (call == null)
+                {
+                    result.Issues.Add("Echo did not materialize create_crm_task.");
+                    return result;
+                }
+
+                JObject input = call["input"] as JObject ?? new JObject();
+                string[] contractIssues = JarvisToolContractValidator.ValidateProposedInput("create_crm_task", input);
+                if (contractIssues.Length > 0)
+                {
+                    result.Issues.Add("NEEDS_USER_INPUT: " + string.Join(" | ", contractIssues));
+                    return result;
+                }
+
+                string raw = JarvisTools.ExecuteCreateCrmTask(xSupport, input);
+                JObject parsed = TryObject(raw);
+                if (parsed == null || (bool?)parsed["success"] != true)
+                {
+                    result.Issues.Add("create_crm_task failed: " + raw);
+                    return result;
+                }
+
+                JArray ids = new JArray();
+                JArray rows = parsed["results"] as JArray;
+                if (rows != null)
+                    foreach (JObject row in rows.OfType<JObject>())
+                        if (row["soactionId"] != null) ids.Add(row["soactionId"].DeepClone());
+                if (ids.Count == 0 && parsed["soactionId"] != null) ids.Add(parsed["soactionId"].DeepClone());
+
+                result.Outputs["crm_task_reference"] = parsed.DeepClone();
+                result.Outputs["soaction_ids"] = ids;
+                result.Success = true;
                 return result;
             }
             catch (Exception ex)
@@ -158,12 +126,12 @@ namespace S1Jarvis.Core
                         ["type"] = "text",
                         ["text"] =
                             "Εκτελείς ΕΝΑ atomic Jarvis task: CreateCalendarEvent. " +
-                            "Δεν αποφασίζεις capabilities ή άλλα tasks. Χρησιμοποίησε μόνο το attached create_outlook_event. " +
+                            "Δεν αποφασίζεις capabilities, prerequisites ή άλλα tasks. " +
+                            "Πρότεινε ακριβώς ΜΙΑ κλήση create_outlook_event. " +
                             "Τρέχουσα τοπική ημερομηνία/ώρα Jarvis=" + runtimeNow + ". " +
-                            "Μετέτρεψε φυσική ημερομηνία/ώρα σε ISO σε σχέση με την παραπάνω runtime ημερομηνία. " +
-                            "Αν δεν δίνεται διάρκεια, χρησιμοποίησε 30 λεπτά. " +
+                            "Μετέτρεψε φυσική ημερομηνία/ώρα σε ISO. Αν δεν δίνεται διάρκεια, χρησιμοποίησε 30 λεπτά. " +
                             "Η αναφορά προσώπου μέσα στην περιγραφή ΔΕΝ σημαίνει attendee εκτός αν ο χρήστης ζήτησε ρητά πρόσκληση. " +
-                            "Κάλεσε create_outlook_event ακριβώς μία φορά."
+                            "Ο Jarvis θα ελέγξει deterministic την προτεινόμενη κλήση με το authoritative tool prerequisite contract πριν εκτελεστεί."
                     }),
                     ["tools"] = JArray.FromObject(new object[] { JarvisEmailAccess.CreateOutlookEventToolDefinition }),
                     ["tool_choice"] = new JObject { ["type"] = "tool", ["name"] = "create_outlook_event" },
@@ -190,6 +158,13 @@ namespace S1Jarvis.Core
                 }
 
                 JObject input = call["input"] as JObject ?? new JObject();
+                string[] contractIssues = JarvisToolContractValidator.ValidateProposedInput("create_outlook_event", input);
+                if (contractIssues.Length > 0)
+                {
+                    result.Issues.Add("NEEDS_USER_INPUT: " + string.Join(" | ", contractIssues));
+                    return result;
+                }
+
                 string raw = await JarvisEmailAccess.ExecuteCreateOutlookEvent(xSupport, input).ConfigureAwait(false);
                 JObject parsed = TryObject(raw);
                 if (parsed == null || (bool?)parsed["success"] != true)
@@ -229,17 +204,6 @@ namespace S1Jarvis.Core
                 TaskType = taskType,
                 OwnerAgent = owner,
                 Success = false
-            };
-        }
-
-        private static JObject ToolResult(string id, string content, bool isError)
-        {
-            return new JObject
-            {
-                ["type"] = "tool_result",
-                ["tool_use_id"] = id ?? string.Empty,
-                ["content"] = content ?? string.Empty,
-                ["is_error"] = isError
             };
         }
 
