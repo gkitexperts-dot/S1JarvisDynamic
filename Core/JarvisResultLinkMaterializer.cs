@@ -90,8 +90,9 @@ namespace S1Jarvis.Core
 
         /// <summary>
         /// Adds verified canonical links without duplicating a target already
-        /// present in model-authored text. The caller still sends the combined
-        /// text through JarvisPresentationGateway.FinalizeFreeform afterwards.
+        /// present as an actual Markdown link in model-authored text. A raw target
+        /// appearing in prose/backticks is not addressable and must never suppress
+        /// the verified canonical link.
         /// </summary>
         internal static string AppendMissingVerifiedLinks(string text, IEnumerable<string> verifiedLinks)
         {
@@ -102,8 +103,7 @@ namespace S1Jarvis.Core
             foreach (string link in verifiedLinks.Where(x => !string.IsNullOrWhiteSpace(x)).Distinct(StringComparer.OrdinalIgnoreCase))
             {
                 string target = ReadMarkdownTarget(link);
-                if (!string.IsNullOrWhiteSpace(target) &&
-                    value.IndexOf(target, StringComparison.OrdinalIgnoreCase) >= 0)
+                if (!string.IsNullOrWhiteSpace(target) && ContainsMarkdownTarget(value, target))
                     continue;
                 missing.Add(link.Trim());
             }
@@ -361,6 +361,13 @@ namespace S1Jarvis.Core
             int close = value.LastIndexOf(')');
             if (close <= open + 2) return string.Empty;
             return value.Substring(open + 2, close - open - 2).Trim();
+        }
+
+        private static bool ContainsMarkdownTarget(string text, string target)
+        {
+            if (string.IsNullOrWhiteSpace(text) || string.IsNullOrWhiteSpace(target)) return false;
+            string marker = "](" + target.Trim() + ")";
+            return text.IndexOf(marker, StringComparison.OrdinalIgnoreCase) >= 0;
         }
 
         private static int ReadInt(JObject outputs, string property)
