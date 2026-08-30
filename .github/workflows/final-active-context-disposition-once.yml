@@ -1,0 +1,28 @@
+name: Final active context disposition once
+
+on:
+  push:
+    branches:
+      - feature/jarvis-orchestration
+    paths:
+      - .final-active-context-disposition-trigger
+
+permissions:
+  contents: write
+
+jobs:
+  migrate:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feature/jarvis-orchestration
+      - run: python3 scripts/final_active_context_disposition.py
+      - shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add Core/JarvisIntentOrchestration.cs Core/JarvisExecutionShadowHarness.cs Core/JarvisPolicyRegistry.cs
+          git commit -m "Add semantic active-context disposition"
+          git push origin HEAD:feature/jarvis-orchestration
