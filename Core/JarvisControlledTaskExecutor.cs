@@ -24,8 +24,9 @@ namespace S1Jarvis.Core
                 if (xSupport == null) throw new ArgumentNullException("xSupport");
                 if (dispatchInputs == null || dispatchInputs["business_question"] == null) throw new InvalidOperationException("ReportData dispatch is missing business_question.");
                 string question = dispatchInputs["business_question"].ToString();
+                string policyContext = ReadRequiredInternalContext(dispatchInputs, "__policy_context");
                 DebugLog.Log("[ORCH-SQL] plan_begin object=" + (objectId ?? string.Empty) + " question=" + OneLine(question));
-                string sql = await PlanAndValidateSqlAsync(xSupport, question, cancellationToken).ConfigureAwait(false);
+                string sql = await PlanAndValidateSqlAsync(xSupport, question, policyContext, cancellationToken).ConfigureAwait(false);
                 DebugLog.Log("[ORCH-SQL] execute object=" + (objectId ?? string.Empty) + " sql=" + OneLine(sql));
                 string queryResult = JarvisTools.ExecuteQueryData(xSupport, sql);
                 DebugLog.Log("[ORCH-SQL] result object=" + (objectId ?? string.Empty) + " " + DescribeQueryResult(queryResult));
@@ -54,13 +55,13 @@ namespace S1Jarvis.Core
             }
         }
 
-        private static async Task<string> PlanAndValidateSqlAsync(XSupport xSupport, string question, CancellationToken cancellationToken)
+        private static async Task<string> PlanAndValidateSqlAsync(XSupport xSupport, string question, string policyContext, CancellationToken cancellationToken)
         {
             string previousSql = null;
             string previousDiagnostic = null;
             for (int attempt = 1; attempt <= MaxPlanningAttempts; attempt++)
             {
-                JObject request = BuildQueryRequest(question, previousSql, previousDiagnostic, attempt);
+                JObject request = BuildQueryRequest(question, policyContext, previousSql, previousDiagnostic, attempt);
                 S1Jarvis.Core.AgentProxyResponse response = await new S1Jarvis.Access.Verilic.VerilicAiMessagesClient().SendAsync(xSupport, "Atlas", request.ToString(Formatting.None), cancellationToken).ConfigureAwait(false);
                 EnsureSuccess(response, "Atlas ReportData query planning failed.");
                 JObject queryUse = FindToolUse(response.RawResponseJson, "query_data");
@@ -82,12 +83,9 @@ namespace S1Jarvis.Core
             throw new InvalidOperationException("Jarvis semantic SQL validation failed after retry. Last SQL=" + (previousSql ?? "<none>") + " Diagnostic=" + (previousDiagnostic ?? "<none>"));
         }
 
-        private static JObject BuildQueryRequest(string question, string previousSql, string previousDiagnostic, int attempt)
+        private static JObject BuildQueryRequest(string question, string policyContext, string previousSql, string previousDiagnostic, int attempt)
         {
             string knowledgeContext = JarvisBusinessEntityCatalog.BuildAgentContext().ToString(Formatting.None);
-            string policyContext = JarvisPolicyRegistry.BuildTrainingContext(
-                "Atlas", "ReportData", new[] { "Reporting", "Traders" }, new[] { "query_data" });
-
             string userContent = "business_question: " + (question ?? string.Empty) +
                                  "\n\nauthoritative_knowledge_context: " + knowledgeContext;
             if (attempt > 1)
@@ -109,7 +107,7 @@ namespace S1Jarvis.Core
                         ["text"] =
                             "Εκτελείς το registered atomic task ReportData ως Atlas με scoped tool query_data. " +
                             "Το authoritative_knowledge_context περιέχει business/schema knowledge και το JARVIS_POLICY_CONTEXT περιέχει τους behavioral κανόνες. " +
-                            "Εφάρμοσέ τα υποχρεωτικά και επέστρεψε το required tool call.\n\n" + policyContext
+                            "Εφάρμοσέ τα υποχρεωτικά και επέστρεψε το required tool call.\n\n" + (policyContext ?? string.Empty)
                     }
                 },
                 ["tools"] = new JArray(BuildQueryDataTool()),
@@ -342,6 +340,14 @@ namespace S1Jarvis.Core
                 return "chars=" + queryResult.Length + " rowCount=" + rowCount + " columns=[" + string.Join(",", columns) + "]" + " preview=" + OneLine(Truncate(queryResult, 1200));
             }
             catch { return "chars=" + queryResult.Length + " rowCount=<unparsed> columns=[] preview=" + OneLine(Truncate(queryResult, 1200)); }
+        }
+
+        private static string ReadRequiredInternalContext(JObject inputs, string name)
+        {
+            string value = inputs == null || inputs[name] == null ? string.Empty : inputs[name].ToString();
+            if (string.IsNullOrWhiteSpace(value))
+                throw new InvalidOperationException("Jarvis dispatch is missing required internal context: " + name);
+            return value;
         }
 
         private static string OneLine(string value) { return (value ?? string.Empty).Replace("\r", " ").Replace("\n", " ").Replace("\t", " ").Trim(); }
