@@ -12,9 +12,8 @@ namespace S1Jarvis.Core
     /// <summary>
     /// Controlled execution for promoted Echo write tasks.
     /// Jarvis owns graph state, prerequisites and confirmation. Echo may only
-    /// materialize one native call for the already-authorized atomic task.
-    /// The proposed call is validated against JarvisToolRegistry BEFORE the
-    /// real tool is executed. No agent-to-agent calls and no retry loops live here.
+    /// materialize the registered terminal tool for the assigned atomic task.
+    /// Behavioral policy is resolved exclusively from JarvisPolicyRegistry.
     /// </summary>
     internal static class JarvisControlledEchoTaskExecutor
     {
@@ -29,6 +28,8 @@ namespace S1Jarvis.Core
                 int currentUserId = xSupport != null && xSupport.ConnectionInfo != null
                     ? xSupport.ConnectionInfo.UserId
                     : 0;
+                string policies = JarvisPolicyRegistry.BuildTrainingContext(
+                    "Echo", "CreateCrmTask", new[] { "CRM" }, new[] { "create_crm_task" });
 
                 var request = new JObject
                 {
@@ -37,14 +38,9 @@ namespace S1Jarvis.Core
                     {
                         ["type"] = "text",
                         ["text"] =
-                            "Εκτελείς ΕΝΑ atomic Jarvis task: CreateCrmTask. " +
-                            "Δεν αποφασίζεις capabilities, prerequisites ή άλλα tasks. " +
-                            "Πρότεινε ακριβώς ΜΙΑ κλήση create_crm_task από το atomic intent και το runtime context. " +
-                            "Δεν επιτρέπεται lookup/retry loop σε αυτό το execution layer. " +
-                            "Τρέχουσα τοπική ημερομηνία/ώρα Jarvis=" + runtimeNow + ". " +
-                            "Ο τρέχων Soft1 userId είναι " + currentUserId.ToString() + ". " +
-                            "Μετέτρεψε φυσική ημερομηνία/ώρα σε ISO. " +
-                            "Ο Jarvis θα συμπληρώσει deterministic όσα resolution prerequisites έχουν ήδη λυθεί και θα ελέγξει την προτεινόμενη κλήση με το authoritative tool prerequisite contract πριν εκτελεστεί."
+                            "Εκτελείς το registered atomic task CreateCrmTask με terminal tool create_crm_task. " +
+                            "Runtime context: localNow=" + runtimeNow + "; currentSoft1UserId=" + currentUserId.ToString() + ". " +
+                            "Εφάρμοσε υποχρεωτικά το JARVIS_POLICY_CONTEXT.\n\n" + policies
                     }),
                     ["tools"] = JArray.FromObject(new object[] { JarvisTools.CreateCrmTaskToolDefinition }),
                     ["tool_choice"] = new JObject { ["type"] = "tool", ["name"] = "create_crm_task" },
@@ -75,16 +71,7 @@ namespace S1Jarvis.Core
                 }
 
                 JObject input = call["input"] as JObject ?? new JObject();
-                JObject resolutionContext = new JObject();
-                if (dispatchInputs != null)
-                {
-                    foreach (JProperty property in dispatchInputs.Properties())
-                    {
-                        if (!property.Name.StartsWith("__", StringComparison.Ordinal))
-                            resolutionContext[property.Name] = property.Value.DeepClone();
-                    }
-                }
-
+                JObject resolutionContext = BuildResolutionContext(dispatchInputs);
                 JarvisToolContractValidator.ApplyResolutionEvidence("create_crm_task", input, resolutionContext);
 
                 string[] resolutionIssues = JarvisToolContractValidator.ValidateResolutionEvidence("create_crm_task", resolutionContext);
@@ -136,6 +123,9 @@ namespace S1Jarvis.Core
             {
                 string fragment = ReadFragment(dispatchInputs);
                 string runtimeNow = DateTime.Now.ToString("yyyy-MM-ddTHH:mm:ss");
+                string policies = JarvisPolicyRegistry.BuildTrainingContext(
+                    "Echo", "CreateCalendarEvent", new[] { "Calendar" }, new[] { "create_outlook_event" });
+
                 var request = new JObject
                 {
                     ["max_tokens"] = 3000,
@@ -143,13 +133,9 @@ namespace S1Jarvis.Core
                     {
                         ["type"] = "text",
                         ["text"] =
-                            "Εκτελείς ΕΝΑ atomic Jarvis task: CreateCalendarEvent. " +
-                            "Δεν αποφασίζεις capabilities, prerequisites ή άλλα tasks. " +
-                            "Πρότεινε ακριβώς ΜΙΑ κλήση create_outlook_event. " +
-                            "Τρέχουσα τοπική ημερομηνία/ώρα Jarvis=" + runtimeNow + ". " +
-                            "Μετέτρεψε φυσική ημερομηνία/ώρα σε ISO. Αν δεν δίνεται διάρκεια, χρησιμοποίησε 30 λεπτά. " +
-                            "Η αναφορά προσώπου μέσα στην περιγραφή ΔΕΝ σημαίνει attendee εκτός αν ο χρήστης ζήτησε ρητά πρόσκληση. " +
-                            "Ο Jarvis θα συμπληρώσει deterministic όσα resolution prerequisites έχουν ήδη λυθεί και θα ελέγξει την προτεινόμενη κλήση με το authoritative tool prerequisite contract πριν εκτελεστεί."
+                            "Εκτελείς το registered atomic task CreateCalendarEvent με terminal tool create_outlook_event. " +
+                            "Runtime context: localNow=" + runtimeNow + ". " +
+                            "Εφάρμοσε υποχρεωτικά το JARVIS_POLICY_CONTEXT.\n\n" + policies
                     }),
                     ["tools"] = JArray.FromObject(new object[] { JarvisEmailAccess.CreateOutlookEventToolDefinition }),
                     ["tool_choice"] = new JObject { ["type"] = "tool", ["name"] = "create_outlook_event" },
@@ -176,16 +162,7 @@ namespace S1Jarvis.Core
                 }
 
                 JObject input = call["input"] as JObject ?? new JObject();
-                JObject resolutionContext = new JObject();
-                if (dispatchInputs != null)
-                {
-                    foreach (JProperty property in dispatchInputs.Properties())
-                    {
-                        if (!property.Name.StartsWith("__", StringComparison.Ordinal))
-                            resolutionContext[property.Name] = property.Value.DeepClone();
-                    }
-                }
-
+                JObject resolutionContext = BuildResolutionContext(dispatchInputs);
                 JarvisToolContractValidator.ApplyResolutionEvidence("create_outlook_event", input, resolutionContext);
 
                 string[] resolutionIssues = JarvisToolContractValidator.ValidateResolutionEvidence("create_outlook_event", resolutionContext);
@@ -221,6 +198,18 @@ namespace S1Jarvis.Core
                 result.Issues.Add("CreateCalendarEvent controlled executor failed: " + ex.Message);
                 return result;
             }
+        }
+
+        private static JObject BuildResolutionContext(JObject dispatchInputs)
+        {
+            var resolutionContext = new JObject();
+            if (dispatchInputs == null) return resolutionContext;
+            foreach (JProperty property in dispatchInputs.Properties())
+            {
+                if (!property.Name.StartsWith("__", StringComparison.Ordinal))
+                    resolutionContext[property.Name] = property.Value.DeepClone();
+            }
+            return resolutionContext;
         }
 
         private static string ReadFragment(JObject inputs)
