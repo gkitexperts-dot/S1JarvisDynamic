@@ -87,10 +87,22 @@ namespace S1Jarvis.Core
                 JObject queryInput = queryUse["input"] as JObject;
                 string sql = queryInput == null ? null : (string)queryInput["sql"];
                 if (string.IsNullOrWhiteSpace(sql)) throw new InvalidOperationException("Atlas ReportData returned query_data without SQL.");
-                DebugLog.Log("[ORCH-SQL] candidate attempt=" + attempt + " sql=" + OneLine(sql));
 
-                var issues = new List<string>(ValidateSqlForQuestion(question, sql, operatorScope, resultMode, currentUserId));
                 string normalizedScope = NormalizeDocumentScope(documentScope);
+                var issues = new List<string>();
+                if (!string.IsNullOrWhiteSpace(normalizedScope) && normalizedScope != "documents" && normalizedScope != "movements")
+                {
+                    string constrainedSql;
+                    string scopeIssue;
+                    if (TryApplyDocumentScopePredicate(sql, normalizedScope, out constrainedSql, out scopeIssue))
+                        sql = constrainedSql;
+                    else if (!string.IsNullOrWhiteSpace(scopeIssue))
+                        issues.Add(scopeIssue);
+                }
+
+                DebugLog.Log("[ORCH-SQL] candidate attempt=" + attempt + " sql=" + OneLine(sql));
+                issues.AddRange(ValidateSqlForQuestion(question, sql, operatorScope, resultMode, currentUserId));
+
                 if (issues.Count == 0 && !string.IsNullOrWhiteSpace(normalizedScope) && normalizedScope != "documents" && normalizedScope != "movements")
                 {
                     string previewSql = BuildValidationSql(sql);
@@ -144,7 +156,7 @@ namespace S1Jarvis.Core
                             "Εκτελείς το registered atomic task ReportData ως Atlas με scoped tool query_data. " +
                             "Το JARVIS_KNOWLEDGE_CONTEXT περιέχει authoritative business/schema facts και το JARVIS_POLICY_CONTEXT τους behavioral κανόνες. " +
                             "Το envelope ορίζει μόνο το atomic protocol και το required tool call. " +
-                            "Για document rows, projection identity FINDOC+SOSOURCE είναι υποχρεωτική ώστε το central presentation policy να μπορεί να δημιουργήσει authoritative links.\n\n" +
+                            "Για κάθε FINDOC document query είναι υποχρεωτικά JOIN SERIES και JOIN FPRMS με τα authoritative keys του knowledge catalog, projection FINDOC+SOSOURCE, και human-readable metadata από SERIES/FPRMS για classification.\n\n" +
                             (policyContext ?? string.Empty)
                     }
                 },
@@ -194,7 +206,32 @@ namespace S1Jarvis.Core
                 if (!SelectClauseContainsColumn(normalized, "SOSOURCE")) issues.Add("Document intent must project document identity SOSOURCE for authoritative row links.");
                 if (!SelectClauseContainsColumn(normalized, "FINCODE")) issues.Add("Document intent must project FINCODE.");
                 if (!SelectClauseContainsColumn(normalized, "TRNDATE")) issues.Add("Document intent must project TRNDATE.");
+
+                string seriesJoin = ExtractJoinClause(normalized, "SERIES");
+                if (seriesJoin == null)
+                {
+                    issues.Add("Every FINDOC document SELECT must JOIN SERIES for authoritative series metadata.");
+                }
+                else
+                {
+                    if (!seriesJoin.Contains("COMPANY")) issues.Add("SERIES join must include COMPANY.");
+                    if (!seriesJoin.Contains("SOSOURCE")) issues.Add("SERIES join must include SOSOURCE.");
+                    if (!seriesJoin.Contains("SERIES")) issues.Add("SERIES join must include SERIES key.");
+                }
+
+                string fprmsJoin = ExtractJoinClause(normalized, "FPRMS");
+                if (fprmsJoin == null)
+                {
+                    issues.Add("Every FINDOC document SELECT must JOIN FPRMS for authoritative movement/parameter metadata.");
+                }
+                else
+                {
+                    if (!fprmsJoin.Contains("COMPANY")) issues.Add("FPRMS join must include COMPANY.");
+                    if (!fprmsJoin.Contains("SOSOURCE")) issues.Add("FPRMS join must include SOSOURCE.");
+                    if (!fprmsJoin.Contains("FPRMS")) issues.Add("FPRMS join must include FPRMS key.");
+                }
             }
+
             bool currentOperatorScope = string.Equals(operatorScope, "current_operator", StringComparison.OrdinalIgnoreCase);
             if (currentOperatorScope)
             {
@@ -212,13 +249,6 @@ namespace S1Jarvis.Core
                 }
                 else if (!ContainsOrderedColumn(normalized, "TRNDATE", "DESC")) issues.Add("Latest business document requires TRNDATE DESC.");
                 if (!ContainsOrderedColumn(normalized, "FINDOC", "DESC")) issues.Add("Latest-document intent requires FINDOC DESC as deterministic tie-breaker.");
-            }
-            string seriesJoin = ExtractJoinClause(normalized, "SERIES");
-            if (seriesJoin != null)
-            {
-                if (!seriesJoin.Contains("COMPANY")) issues.Add("SERIES join must include COMPANY.");
-                if (!seriesJoin.Contains("SOSOURCE")) issues.Add("SERIES join must include SOSOURCE.");
-                if (!seriesJoin.Contains("SERIES")) issues.Add("SERIES join must include SERIES key.");
             }
             return issues.Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
         }
@@ -292,16 +322,21 @@ namespace S1Jarvis.Core
 
         private static string ExtractJoinClause(string normalizedSql, string tableName)
         {
-            string marker = " JOIN " + tableName + " ";
-            int start = normalizedSql.IndexOf(marker, StringComparison.Ordinal);
-            if (start < 0) return null;
+            Match table = Regex.Match(
+                normalizedSql ?? string.Empty,
+                @"\bJOIN\s+" + Regex.Escape(tableName ?? string.Empty) + @"\b",
+                RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+            if (!table.Success) return null;
+            int start = table.Index;
             int end = normalizedSql.Length;
-            int nextJoin = normalizedSql.IndexOf(" JOIN ", start + marker.Length, StringComparison.Ordinal);
-            int where = normalizedSql.IndexOf(" WHERE ", start + marker.Length, StringComparison.Ordinal);
-            int order = normalizedSql.IndexOf(" ORDER BY ", start + marker.Length, StringComparison.Ordinal);
+            int nextJoin = normalizedSql.IndexOf(" JOIN ", start + table.Length, StringComparison.Ordinal);
+            int where = normalizedSql.IndexOf(" WHERE ", start + table.Length, StringComparison.Ordinal);
+            int order = normalizedSql.IndexOf(" ORDER BY ", start + table.Length, StringComparison.Ordinal);
+            int group = normalizedSql.IndexOf(" GROUP BY ", start + table.Length, StringComparison.Ordinal);
             if (nextJoin >= 0 && nextJoin < end) end = nextJoin;
             if (where >= 0 && where < end) end = where;
             if (order >= 0 && order < end) end = order;
+            if (group >= 0 && group < end) end = group;
             return normalizedSql.Substring(start, end - start);
         }
 
@@ -310,6 +345,67 @@ namespace S1Jarvis.Core
             if (row == null || string.IsNullOrWhiteSpace(propertyName)) return null;
             JProperty property = row.Properties().FirstOrDefault(x => string.Equals(x.Name, propertyName, StringComparison.OrdinalIgnoreCase));
             return property == null ? null : property.Value;
+        }
+
+        private static bool TryApplyDocumentScopePredicate(string sql, string documentScope, out string constrainedSql, out string issue)
+        {
+            constrainedSql = sql ?? string.Empty;
+            issue = string.Empty;
+            if (string.IsNullOrWhiteSpace(constrainedSql))
+            {
+                issue = "Structured document_scope cannot be enforced on empty SQL.";
+                return false;
+            }
+
+            string seriesAlias;
+            string fprmsAlias;
+            if (!TryReadJoinAlias(constrainedSql, "SERIES", out seriesAlias))
+            {
+                issue = "Specific document_scope requires JOIN SERIES before category enforcement.";
+                return false;
+            }
+            if (!TryReadJoinAlias(constrainedSql, "FPRMS", out fprmsAlias))
+            {
+                issue = "Specific document_scope requires JOIN FPRMS before category enforcement.";
+                return false;
+            }
+
+            string predicate;
+            if (!JarvisDocumentScopeValidator.TryBuildDocumentSqlPredicate(documentScope, seriesAlias, fprmsAlias, out predicate) || string.IsNullOrWhiteSpace(predicate))
+            {
+                issue = "No deterministic SERIES/FPRMS predicate is registered for document_scope='" + documentScope + "'.";
+                return false;
+            }
+
+            int insertion = FindClauseInsertionPoint(constrainedSql);
+            string head = insertion < constrainedSql.Length ? constrainedSql.Substring(0, insertion).TrimEnd() : constrainedSql.TrimEnd();
+            string tail = insertion < constrainedSql.Length ? constrainedSql.Substring(insertion) : string.Empty;
+            bool hasWhere = Regex.IsMatch(head, @"\bWHERE\b", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+            constrainedSql = head + (hasWhere ? " AND (" : " WHERE (") + predicate + ")" + tail;
+            return true;
+        }
+
+        private static bool TryReadJoinAlias(string sql, string tableName, out string alias)
+        {
+            alias = string.Empty;
+            Match match = Regex.Match(
+                sql ?? string.Empty,
+                @"\bJOIN\s+" + Regex.Escape(tableName ?? string.Empty) + @"(?:\s+AS)?\s+(?<alias>[A-Z_][A-Z0-9_]*)\b",
+                RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+            if (!match.Success) return false;
+            alias = match.Groups["alias"].Value;
+            return !string.IsNullOrWhiteSpace(alias);
+        }
+
+        private static int FindClauseInsertionPoint(string sql)
+        {
+            int result = (sql ?? string.Empty).Length;
+            foreach (string marker in new[] { " GROUP BY ", " HAVING ", " ORDER BY ", ";" })
+            {
+                int index = (sql ?? string.Empty).IndexOf(marker, StringComparison.OrdinalIgnoreCase);
+                if (index >= 0 && index < result) result = index;
+            }
+            return result;
         }
 
         private static string BuildValidationSql(string sql)
