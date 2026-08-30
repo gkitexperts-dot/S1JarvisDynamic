@@ -8,9 +8,10 @@ using Newtonsoft.Json.Linq;
 namespace S1Jarvis.Core
 {
     /// <summary>
-    /// Deterministic validation for structured document scopes emitted by semantic
-    /// decomposition. It validates returned document-type metadata; it does not
-    /// infer business scope from arbitrary user wording.
+    /// Deterministic enforcement for structured document scopes emitted by semantic
+    /// decomposition. It owns the canonical classification semantics used both to
+    /// constrain SQL on authoritative SERIES metadata and to validate returned rows.
+    /// It never infers scope from arbitrary model output.
     /// </summary>
     internal static class JarvisDocumentScopeValidator
     {
@@ -25,6 +26,50 @@ namespace S1Jarvis.Core
             if (v.Contains("πιστω") || v.Contains("credit note") || v.Contains("credit memo")) categories.Add("credit");
             if (v.Contains("δελτιο αποστο") || v.Contains("delivery note")) categories.Add("delivery");
             return categories.Count == 1 ? categories.First() : string.Empty;
+        }
+
+        /// <summary>
+        /// Builds the deterministic SQL predicate for a canonical document_scope
+        /// against authoritative SERIES.NAME metadata. SOSOURCE alone is not a
+        /// document category and must never be used as the category discriminator.
+        /// </summary>
+        internal static bool TryBuildSeriesSqlPredicate(string documentScope, string seriesExpression, out string predicate)
+        {
+            predicate = string.Empty;
+            string scope = NormalizeScope(documentScope);
+            string s = (seriesExpression ?? string.Empty).Trim();
+            if (string.IsNullOrWhiteSpace(scope) || scope == "documents" || scope == "movements" || string.IsNullOrWhiteSpace(s))
+                return false;
+
+            string credit = "(" + s + ".NAME LIKE N'%Πιστω%' OR " + s + ".NAME LIKE N'%Credit%')";
+            string order = "(" + s + ".NAME LIKE N'%Παραγγελ%' OR " + s + ".NAME LIKE N'%Order%')";
+            string quotation = "(" + s + ".NAME LIKE N'%Προσφορ%' OR " + s + ".NAME LIKE N'%Quotation%' OR " + s + ".NAME LIKE N'%Quote%')";
+            string invoice = "(" + s + ".NAME LIKE N'%Τιμολ%' OR " + s + ".NAME LIKE N'%Invoice%')";
+            string delivery = "(" + s + ".NAME LIKE N'%Δελτίο Αποστο%' OR " + s + ".NAME LIKE N'%Δελτιο Αποστο%' OR " + s + ".NAME LIKE N'%Delivery Note%')";
+
+            switch (scope)
+            {
+                case "credit":
+                    predicate = credit;
+                    return true;
+                case "order":
+                    predicate = order + " AND NOT " + credit;
+                    return true;
+                case "quotation":
+                    predicate = quotation + " AND NOT " + credit;
+                    return true;
+                case "invoice":
+                    // Credit notes often contain the word "invoice" in their label.
+                    // Credit therefore has precedence. Combined Invoice + Delivery
+                    // series remain invoices, matching the canonical presentation rule.
+                    predicate = invoice + " AND NOT " + credit + " AND NOT " + order + " AND NOT " + quotation;
+                    return true;
+                case "delivery":
+                    predicate = delivery + " AND NOT " + credit + " AND NOT " + order + " AND NOT " + quotation + " AND NOT " + invoice;
+                    return true;
+                default:
+                    return false;
+            }
         }
 
         internal static string[] Validate(string documentScope, string datasetJson)
@@ -106,8 +151,11 @@ namespace S1Jarvis.Core
             if (v.Contains("πιστω") || v.Contains("credit")) return "credit";
             if (v.Contains("παραγγελ") || v.Contains("order")) return "order";
             if (v.Contains("προσφορ") || v.Contains("quotation") || v.Contains("quote")) return "quotation";
-            if (v.Contains("δελτιο αποστο") || v.Contains("delivery note")) return "delivery";
+            // Invoice intentionally precedes delivery. A combined "Τιμολόγιο -
+            // Δ.Αποστολής" is an invoice for an explicit invoice request, while a
+            // credit invoice was already captured by the higher-priority credit rule.
             if (v.Contains("τιμολογ") || v.Contains("invoice")) return "invoice";
+            if (v.Contains("δελτιο αποστο") || v.Contains("delivery note")) return "delivery";
             return string.Empty;
         }
 
