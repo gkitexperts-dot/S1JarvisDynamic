@@ -166,6 +166,7 @@ namespace S1Jarvis.Core
                 policyContext,
                 operatorScope,
                 resultMode,
+                documentScope,
                 currentUserId,
                 cancellationToken).ConfigureAwait(false);
         }
