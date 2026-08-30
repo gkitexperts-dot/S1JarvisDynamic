@@ -225,6 +225,8 @@ namespace S1Jarvis.Core
                 double score = intentObject.RoutingDecision != null && intentObject.RoutingDecision.Winner != null ? intentObject.RoutingDecision.Winner.Score : 0.0;
                 return ResolvedRoutingValue(inputName, new JValue(score), "Confidence comes from the validated routing decision, not from user input.");
             }
+            if (string.Equals(descriptor.TaskType, "CreateCrmTask", StringComparison.OrdinalIgnoreCase) && string.Equals(inputName, "assignee", StringComparison.OrdinalIgnoreCase))
+                return ResolvedRoutingValue(inputName, new JValue("__CURRENT_OPERATOR__"), "CRM.DEFAULT_ASSIGNEE_CURRENT_OPERATOR: no explicit different assignee was supplied, so the authenticated session operator is authoritative.");
             if (string.Equals(descriptor.TaskType, "SendEmail", StringComparison.OrdinalIgnoreCase) && string.Equals(inputName, "subject", StringComparison.OrdinalIgnoreCase))
                 return ResolvedRoutingValue(inputName, new JValue("S1 Jarvis"), "No explicit subject was supplied; the email task uses the neutral Jarvis subject rather than requiring redundant user input.");
             if (IsIntentTextContract(descriptor.TaskType, inputName))

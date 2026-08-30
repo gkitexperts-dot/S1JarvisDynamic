@@ -88,6 +88,15 @@ namespace S1Jarvis.Core
             P("GLOBAL.NO_INVENTED_FACTS", JarvisPolicyScope.Global, JarvisPolicyEnforcement.Both,
                 "Μην επινοείς ids, emails, dates, schema fields, entity identities, recipients, document state ή business facts. Αν η πληροφορία δεν είναι resolved από input, knowledge ή tool evidence, ζήτησε clarification ή επέστρεψε controlled failure.", priority: 985),
 
+            P("GLOBAL.AUTHENTICATED_SESSION_OPERATOR", JarvisPolicyScope.Global, JarvisPolicyEnforcement.Both,
+                "Κατά την ενεργοποίηση του Jarvis, ο authenticated Soft1 user και company καταγράφονται ως authoritative session identity. Αυτός ο user είναι ο current operator/interlocutor για όλη τη συνεδρία. First-person/self references δεν ζητούν ξανά ταυτότητα από τον χειριστή και δεν επιτρέπεται model guess ή αλλαγή identity χωρίς νέο authenticated session.", priority: 982),
+
+            P("CRM.DEFAULT_ASSIGNEE_CURRENT_OPERATOR", JarvisPolicyScope.Task, JarvisPolicyEnforcement.Both,
+                "CreateCrmTask χωρίς ρητά διαφορετικό assignee ανατίθεται στον authenticated current operator της session. Το orchestration materializes __CURRENT_OPERATOR__ και deterministic actorUserId evidence από τη session identity πριν από tool validation. Αν ο χρήστης ορίσει ρητά άλλον assignee, απαιτείται κανονικό identity resolution και δεν γίνεται silent fallback στον current operator.", agents: A("Jarvis", "Echo"), tasks: A("CreateCrmTask"), domains: A("CRM"), tools: A("create_crm_task"), priority: 981),
+
+            P("DOCUMENT.EXPLICIT_SCOPE_IS_BINDING", JarvisPolicyScope.Validation, JarvisPolicyEnforcement.Both,
+                "Όταν το user request δηλώνει ρητά μία semantic document category (π.χ. invoice/order/quotation/credit/delivery), το canonical document_scope είναι binding constraint για κάθε σχετικό ReportData/ExportData node. Η κατηγορία δεν επιτρέπεται να χαθεί κατά decomposition/composition και το returned dataset πρέπει να απορρίπτεται fail-closed αν περιέχει άλλη document category.", agents: A("Jarvis", "Atlas"), tasks: A("ReportData", "ExportData"), domains: A("Reporting", "Soft1Documents"), priority: 980),
+
             P("GLOBAL.RESULTS_RETURN_TO_JARVIS", JarvisPolicyScope.Orchestration, JarvisPolicyEnforcement.Both,
                 "Κάθε agent επιστρέφει αποτέλεσμα μόνο στον Jarvis. Ο Jarvis το επικυρώνει, το αποθηκεύει και υλοποιεί deterministic dependency bindings πριν επιτρέψει downstream task.", priority: 980),
 

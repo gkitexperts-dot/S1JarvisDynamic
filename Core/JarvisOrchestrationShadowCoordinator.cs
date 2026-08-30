@@ -30,6 +30,7 @@ namespace S1Jarvis.Core
         internal static async Task<JarvisShadowOrchestrationResult> RunAsync(
             XSupport xSupport,
             string userPrompt,
+            JarvisRuntimeContext runtimeContext = null,
             CancellationToken cancellationToken = default(CancellationToken))
         {
             var result = new JarvisShadowOrchestrationResult();
@@ -40,7 +41,7 @@ namespace S1Jarvis.Core
             try
             {
                 string decomposerJson = await JarvisShadowSemanticClient.DecomposeAsync(
-                    xSupport, userPrompt, cancellationToken);
+                    xSupport, userPrompt, runtimeContext, cancellationToken);
 
                 JarvisIntentObjectSet objectSet;
                 string[] parseIssues;
@@ -203,6 +204,7 @@ namespace S1Jarvis.Core
         internal static async Task<string> DecomposeAsync(
             XSupport xSupport,
             string userPrompt,
+            JarvisRuntimeContext runtimeContext,
             CancellationToken cancellationToken)
         {
             if (xSupport == null)
@@ -233,7 +235,7 @@ namespace S1Jarvis.Core
                     new JObject
                     {
                         ["role"] = "user",
-                        ["content"] = JarvisIntentOrchestration.BuildDecomposerUserPayload(userPrompt, JarvisRuntimeContext.Capture(xSupport))
+                        ["content"] = JarvisIntentOrchestration.BuildDecomposerUserPayload(userPrompt, runtimeContext ?? JarvisRuntimeContext.Capture(xSupport))
                     }
                 }
             };

@@ -26,7 +26,9 @@ namespace S1Jarvis.UI
         private static void OnLoaded(object sender, RoutedEventArgs e)
         {
             JarvisShell shell = sender as JarvisShell;
-            if (shell != null) shell.InstallOrchestrationShadowHook();
+            if (shell == null) return;
+            shell.InitializeJarvisSessionIdentity();
+            shell.InstallOrchestrationShadowHook();
         }
     }
 
@@ -36,12 +38,20 @@ namespace S1Jarvis.UI
         private readonly JarvisPendingConfirmationSession _orchestrationPendingConfirmation = new JarvisPendingConfirmationSession();
         private readonly JarvisDatasetSession _orchestrationDatasetSession = new JarvisDatasetSession();
         private readonly JarvisActiveOrchestrationContext _orchestrationActiveContext = new JarvisActiveOrchestrationContext();
+        private JarvisRuntimeContext _orchestrationSessionContext;
 
         private bool _orchestrationShadowHookAttached;
         private bool _orchestrationShadowHookInstalling;
 
+        internal void InitializeJarvisSessionIdentity()
+        {
+            if (_orchestrationSessionContext != null) return;
+            _orchestrationSessionContext = JarvisRuntimeContext.StartSession(_xSupport);
+        }
+
         internal void InstallOrchestrationShadowHook()
         {
+            if (_orchestrationSessionContext == null) InitializeJarvisSessionIdentity();
             if (_orchestrationShadowHookAttached || _orchestrationShadowHookInstalling) return;
             AttachOrchestrationShadowHandlerSafeAsync();
         }
@@ -146,7 +156,7 @@ namespace S1Jarvis.UI
                 }
 
                 JarvisControlledPilotOutcome pilot = await JarvisExecutionShadowHarness.TryRunControlledPilotAsync(
-                    _xSupport, userText, _orchestrationPendingConfirmation, _orchestrationDatasetSession, _orchestrationActiveContext);
+                    _xSupport, userText, _orchestrationPendingConfirmation, _orchestrationDatasetSession, _orchestrationActiveContext, _orchestrationSessionContext);
                 if (pilot != null && pilot.Handled)
                 {
                     if (!string.IsNullOrWhiteSpace(pilot.UserMessage))

@@ -14,6 +14,19 @@ namespace S1Jarvis.Core
     /// </summary>
     internal static class JarvisDocumentScopeValidator
     {
+        internal static string InferExplicitScope(string text)
+        {
+            string v = NormalizeText(text);
+            if (string.IsNullOrWhiteSpace(v)) return string.Empty;
+            var categories = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            if (v.Contains("τιμολογ") || v.Contains("invoice")) categories.Add("invoice");
+            if (v.Contains("παραγγελ") || v.Contains(" purchase order") || v.Contains(" sales order")) categories.Add("order");
+            if (v.Contains("προσφορ") || v.Contains("quotation") || v.Contains("quote")) categories.Add("quotation");
+            if (v.Contains("πιστω") || v.Contains("credit note") || v.Contains("credit memo")) categories.Add("credit");
+            if (v.Contains("δελτιο αποστο") || v.Contains("delivery note")) categories.Add("delivery");
+            return categories.Count == 1 ? categories.First() : string.Empty;
+        }
+
         internal static string[] Validate(string documentScope, string datasetJson)
         {
             string scope = NormalizeScope(documentScope);

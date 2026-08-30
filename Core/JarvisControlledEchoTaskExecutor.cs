@@ -24,10 +24,9 @@ namespace S1Jarvis.Core
             {
                 string fragment = ReadRequiredInternalContext(dispatchInputs, "__intent_fragment", "Atomic intent fragment is missing.");
                 string policies = ReadRequiredInternalContext(dispatchInputs, "__policy_context", "Jarvis dispatch policy context is missing.");
-                string runtimeNow = DateTime.Now.ToString("yyyy-MM-ddTHH:mm:ss");
-                int currentUserId = xSupport != null && xSupport.ConnectionInfo != null
-                    ? xSupport.ConnectionInfo.UserId
-                    : 0;
+                JarvisRuntimeContext sessionContext = JarvisRuntimeContext.Capture(xSupport);
+                string runtimeNow = sessionContext.LocalNow.ToString("yyyy-MM-ddTHH:mm:ss");
+                int currentUserId = sessionContext.CurrentUserId;
 
                 var request = new JObject
                 {
@@ -71,6 +70,7 @@ namespace S1Jarvis.Core
 
                 JObject input = call["input"] as JObject ?? new JObject();
                 JObject resolutionContext = BuildResolutionContext(dispatchInputs);
+                EnsureCurrentOperatorActorEvidence(resolutionContext, input, sessionContext);
                 JarvisToolContractValidator.ApplyResolutionEvidence("create_crm_task", input, resolutionContext);
 
                 string[] resolutionIssues = JarvisToolContractValidator.ValidateResolutionEvidence("create_crm_task", resolutionContext);
@@ -213,6 +213,22 @@ namespace S1Jarvis.Core
                 result.Issues.Add("CreateCalendarEvent controlled executor failed: " + ex.Message);
                 return result;
             }
+        }
+
+        private static void EnsureCurrentOperatorActorEvidence(JObject resolutionContext, JObject input, JarvisRuntimeContext sessionContext)
+        {
+            if (resolutionContext == null || sessionContext == null || sessionContext.CurrentUserId <= 0) return;
+            if (HasValue(resolutionContext["actorUserId"]) || HasValue(resolutionContext["actorUserIds"])) return;
+
+            JToken assignee = resolutionContext["assignee"];
+            bool defaultSelf = !HasValue(assignee) || string.Equals(assignee.ToString(), "__CURRENT_OPERATOR__", StringComparison.Ordinal);
+            int numericAssignee;
+            if (!defaultSelf && int.TryParse(assignee.ToString(), out numericAssignee))
+                defaultSelf = numericAssignee == sessionContext.CurrentUserId;
+            if (!defaultSelf) return;
+
+            resolutionContext["actorUserId"] = sessionContext.CurrentUserId;
+            if (input != null) input["actorUserId"] = sessionContext.CurrentUserId;
         }
 
         private static bool HasValue(JToken value)

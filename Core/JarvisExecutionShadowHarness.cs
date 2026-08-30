@@ -32,13 +32,15 @@ namespace S1Jarvis.Core
 
         internal static async Task<JarvisControlledPilotOutcome> TryRunControlledPilotAsync(
             XSupport xSupport, string userPrompt, JarvisPendingConfirmationSession pendingSession,
-            JarvisDatasetSession datasetSession = null, JarvisActiveOrchestrationContext activeContext = null)
+            JarvisDatasetSession datasetSession = null, JarvisActiveOrchestrationContext activeContext = null,
+            JarvisRuntimeContext runtimeContext = null)
         {
             var outcome = new JarvisControlledPilotOutcome { Handled = false, Completed = false };
             try
             {
+                runtimeContext = runtimeContext ?? JarvisRuntimeContext.Capture(xSupport);
                 string planningPrompt = activeContext == null ? userPrompt : activeContext.PreparePrompt(userPrompt);
-                JarvisShadowOrchestrationResult planning = await JarvisOrchestrationShadowCoordinator.RunAsync(xSupport, planningPrompt);
+                JarvisShadowOrchestrationResult planning = await JarvisOrchestrationShadowCoordinator.RunAsync(xSupport, planningPrompt, runtimeContext);
                 bool replaceActiveRun = planning != null && planning.IntentObjects != null &&
                     planning.IntentObjects.ActiveContextDisposition == JarvisActiveContextDisposition.Replace;
                 if (!IsSupportedControlledPlan(planning))
@@ -61,7 +63,7 @@ namespace S1Jarvis.Core
                     return outcome;
                 }
                 ResolveDeterministicSendRecipient(planning);
-                ResolveDeterministicRuntimeContext(planning, xSupport);
+                ResolveDeterministicRuntimeContext(planning, runtimeContext);
                 if (activeContext != null) activeContext.CapturePlanning(planning);
 
                 // A supported re-plan without SendEmail supersedes any previously
@@ -104,10 +106,10 @@ namespace S1Jarvis.Core
                         return outcome;
                     }
 
-                    JarvisRuntimeContext runtimeContext = JarvisRuntimeContext.Capture(xSupport);
+                    JarvisRuntimeContext reportRuntimeContext = runtimeContext;
                     string existingPolicyContext = reportInputs["__policy_context"] == null ? string.Empty : reportInputs["__policy_context"].ToString();
-                    reportInputs["__policy_context"] = existingPolicyContext + "\n" + runtimeContext.BuildEnvelope();
-                    reportInputs["__current_user_id"] = runtimeContext.CurrentUserId;
+                    reportInputs["__policy_context"] = existingPolicyContext + "\n" + reportRuntimeContext.BuildEnvelope();
+                    reportInputs["__current_user_id"] = reportRuntimeContext.CurrentUserId;
 
                     string[] beginIssues;
                     if (!coordinator.TryBeginDispatch(reportStep.ObjectId, out beginIssues))
@@ -187,7 +189,7 @@ namespace S1Jarvis.Core
                     }
                     else
                     {
-                        JarvisRuntimeContext exportRuntime = JarvisRuntimeContext.Capture(xSupport);
+                        JarvisRuntimeContext exportRuntime = runtimeContext;
                         string exportPolicyContext = exportInputs["__policy_context"] == null ? string.Empty : exportInputs["__policy_context"].ToString();
                         exportInputs["__policy_context"] = exportPolicyContext + "\n" + exportRuntime.BuildEnvelope();
                         exportInputs["__current_user_id"] = exportRuntime.CurrentUserId;
@@ -483,10 +485,10 @@ namespace S1Jarvis.Core
             item.Reason = "Literal email recipient extracted deterministically from the atomic SendEmail intent fragment.";
         }
 
-        private static void ResolveDeterministicRuntimeContext(JarvisShadowOrchestrationResult planning, XSupport xSupport)
+        private static void ResolveDeterministicRuntimeContext(JarvisShadowOrchestrationResult planning, JarvisRuntimeContext runtimeContext)
         {
-            if (planning == null || planning.Graph == null || xSupport == null || xSupport.ConnectionInfo == null) return;
-            int currentUserId = xSupport.ConnectionInfo.UserId;
+            if (planning == null || planning.Graph == null || runtimeContext == null) return;
+            int currentUserId = runtimeContext.CurrentUserId;
             if (currentUserId <= 0) return;
 
             foreach (JarvisValidatedTaskNode node in planning.Graph.Nodes.Where(x => x != null && x.Descriptor != null))
@@ -562,21 +564,21 @@ namespace S1Jarvis.Core
         {
             JToken ids = result == null || result.Outputs == null ? null : result.Outputs["soaction_ids"];
             string status = ids == null ? "✓ Η εργασία CRM στο Soft1 δημιουργήθηκε." : "✓ Η εργασία CRM στο Soft1 δημιουργήθηκε (ID: " + ids.ToString(Formatting.None) + ").";
-            string[] links = JarvisResultLinkPolicy.BuildMarkdownLinks(result);
+            string[] links = JarvisResultLinkMaterializer.BuildMarkdownLinks(result);
             return links.Length == 0 ? status : status + " " + string.Join(" ", links);
         }
 
         private static string BuildCalendarStatus(JarvisTaskExecutionResult result)
         {
             string status = "✓ Το προσωπικό Outlook calendar event δημιουργήθηκε.";
-            string[] links = JarvisResultLinkPolicy.BuildMarkdownLinks(result);
+            string[] links = JarvisResultLinkMaterializer.BuildMarkdownLinks(result);
             return links.Length == 0 ? status : status + " " + string.Join(" ", links);
         }
 
         private static string BuildExportStatus(JarvisTaskExecutionResult result)
         {
             string status = "✓ Το αρχείο εξαγωγής δημιουργήθηκε.";
-            string[] links = JarvisResultLinkPolicy.BuildMarkdownLinks(result);
+            string[] links = JarvisResultLinkMaterializer.BuildMarkdownLinks(result);
             return links.Length == 0 ? status : status + " " + string.Join(" ", links);
         }
 

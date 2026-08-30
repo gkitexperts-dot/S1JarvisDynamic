@@ -141,8 +141,27 @@ namespace S1Jarvis.Core
                 objectSet.Objects.Add(intentObject);
             }
             if (objectSet.Objects.Count == 0) errors.Add("Intent decomposer produced no usable intent objects.");
+            ApplyBindingSemanticConstraints(objectSet);
             issues = errors.Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
             return issues.Length == 0;
+        }
+
+        private static void ApplyBindingSemanticConstraints(JarvisIntentObjectSet objectSet)
+        {
+            if (objectSet == null) return;
+            string originalScope = JarvisDocumentScopeValidator.InferExplicitScope(objectSet.OriginalPrompt);
+            foreach (JarvisIntentObject item in objectSet.Objects.Where(x => x != null))
+            {
+                bool isReportOrExport = item.CandidateScores.Any(x => x != null &&
+                    (string.Equals(x.TaskType, "ReportData", StringComparison.OrdinalIgnoreCase) ||
+                     string.Equals(x.TaskType, "ExportData", StringComparison.OrdinalIgnoreCase)));
+                if (!isReportOrExport || item.InputHints.ContainsKey("document_scope")) continue;
+
+                string scope = JarvisDocumentScopeValidator.InferExplicitScope(item.IntentFragment);
+                if (string.IsNullOrWhiteSpace(scope)) scope = originalScope;
+                if (!string.IsNullOrWhiteSpace(scope))
+                    item.InputHints["document_scope"] = new JValue(scope);
+            }
         }
 
         internal static void ApplyDynamicPass(JarvisIntentObject intentObject, IEnumerable<JarvisRoutingKnowledgeRecord> knowledge, int currentCompany)
