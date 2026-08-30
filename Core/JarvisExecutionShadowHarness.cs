@@ -182,6 +182,10 @@ namespace S1Jarvis.Core
                     }
                     else
                     {
+                        JarvisRuntimeContext exportRuntime = JarvisRuntimeContext.Capture(xSupport);
+                        string exportPolicyContext = exportInputs["__policy_context"] == null ? string.Empty : exportInputs["__policy_context"].ToString();
+                        exportInputs["__policy_context"] = exportPolicyContext + "\n" + exportRuntime.BuildEnvelope();
+                        exportInputs["__current_user_id"] = exportRuntime.CurrentUserId;
                         string[] exportBeginIssues;
                         if (!coordinator.TryBeginDispatch(exportStep.ObjectId, out exportBeginIssues))
                         {
@@ -189,7 +193,7 @@ namespace S1Jarvis.Core
                         }
                         else
                         {
-                            JarvisTaskExecutionResult exportResult = JarvisControlledExportTaskExecutor.Execute(xSupport, exportStep.ObjectId, exportInputs);
+                            JarvisTaskExecutionResult exportResult = await JarvisControlledExportTaskExecutor.ExecuteAsync(xSupport, exportStep.ObjectId, exportInputs);
                             string[] exportAcceptIssues;
                             if (!coordinator.TryAcceptResult(exportResult, out exportAcceptIssues))
                                 deferredIssues.Add(BuildFailureMessage("Ο Jarvis απέρριψε το αποτέλεσμα της εξαγωγής.", exportAcceptIssues));

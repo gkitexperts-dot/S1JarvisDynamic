@@ -1,6 +1,8 @@
 using System;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
+using System.Threading;
+using System.Threading.Tasks;
 using Softone;
 
 namespace S1Jarvis.Core
@@ -12,10 +14,11 @@ namespace S1Jarvis.Core
     /// </summary>
     internal static class JarvisControlledExportTaskExecutor
     {
-        internal static JarvisTaskExecutionResult Execute(
+        internal static async Task<JarvisTaskExecutionResult> ExecuteAsync(
             XSupport xSupport,
             string objectId,
-            JObject dispatchInputs)
+            JObject dispatchInputs,
+            CancellationToken cancellationToken = default(CancellationToken))
         {
             var result = new JarvisTaskExecutionResult
             {
@@ -35,7 +38,17 @@ namespace S1Jarvis.Core
                 if (string.IsNullOrWhiteSpace(sql) && source != null)
                     sql = ReadString(source, "querySql");
                 if (string.IsNullOrWhiteSpace(sql))
-                    throw new InvalidOperationException("ExportData has no authoritative SELECT provenance from its upstream result.");
+                {
+                    string exportRequest = ReadString(dispatchInputs, "export_request");
+                    if (string.IsNullOrWhiteSpace(exportRequest))
+                        throw new InvalidOperationException("ExportData has neither upstream query provenance nor export_request.");
+                    string policyContext = ReadString(dispatchInputs, "__policy_context");
+                    string operatorScope = ReadString(dispatchInputs, "operator_scope");
+                    string resultMode = ReadString(dispatchInputs, "result_mode");
+                    int currentUserId = dispatchInputs["__current_user_id"] == null ? 0 : (int)dispatchInputs["__current_user_id"];
+                    sql = await JarvisControlledTaskExecutor.PlanValidatedSqlForExportAsync(
+                        xSupport, exportRequest, policyContext, operatorScope, resultMode, currentUserId, cancellationToken).ConfigureAwait(false);
+                }
 
                 string format = ReadString(dispatchInputs, "format");
                 if (string.IsNullOrWhiteSpace(format)) format = "xlsx";

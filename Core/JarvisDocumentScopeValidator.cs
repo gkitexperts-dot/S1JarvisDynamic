@@ -28,12 +28,17 @@ namespace S1Jarvis.Core
             var violations = new List<string>();
             foreach (JObject row in rows.OfType<JObject>())
             {
-                string typeText = ReadDocumentTypeText(row);
-                if (string.IsNullOrWhiteSpace(typeText)) continue;
-                string category = Classify(typeText);
-                if (string.IsNullOrWhiteSpace(category)) continue;
-                if (!string.Equals(category, scope, StringComparison.OrdinalIgnoreCase))
-                    violations.Add(typeText.Trim());
+                foreach (string typeText in ReadDocumentTypeTexts(row))
+                {
+                    string category = Classify(typeText);
+                    if (string.IsNullOrWhiteSpace(category)) continue;
+                    if (!string.Equals(category, scope, StringComparison.OrdinalIgnoreCase))
+                    {
+                        violations.Add(typeText.Trim());
+                        break;
+                    }
+                    break;
+                }
             }
 
             if (violations.Count == 0) return new string[0];
@@ -56,9 +61,9 @@ namespace S1Jarvis.Core
             return string.Empty;
         }
 
-        private static string ReadDocumentTypeText(JObject row)
+        private static IEnumerable<string> ReadDocumentTypeTexts(JObject row)
         {
-            if (row == null) return string.Empty;
+            if (row == null) yield break;
             foreach (JProperty property in row.Properties())
             {
                 string name = (property.Name ?? string.Empty).ToLowerInvariant();
@@ -66,9 +71,9 @@ namespace S1Jarvis.Core
                     continue;
                 if (property.Value == null || property.Value.Type == JTokenType.Null) continue;
                 string value = property.Value.ToString();
-                if (!string.IsNullOrWhiteSpace(value)) return value;
+                if (!string.IsNullOrWhiteSpace(value) && !string.IsNullOrWhiteSpace(Classify(value)))
+                    yield return value;
             }
-            return string.Empty;
         }
 
         private static string Classify(string value)

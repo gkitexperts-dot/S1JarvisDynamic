@@ -87,14 +87,27 @@ namespace S1Jarvis.Core
             {
                 JToken supplied;
                 if (!intentObject.InputHints.TryGetValue(optionalInput, out supplied) || !HasValue(supplied)) continue;
-                node.Prerequisites.Add(new JarvisPrerequisiteResolutionItem
+                if (IsSemanticDependencyMarker(descriptor.TaskType, optionalInput, supplied))
                 {
-                    InputName = optionalInput,
-                    Required = false,
-                    Kind = JarvisPrerequisiteResolutionKind.ResolvedFromIntent,
-                    Value = supplied.DeepClone(),
-                    Reason = "Optional structured semantic input is explicitly present in this intent object."
-                });
+                    node.Prerequisites.Add(new JarvisPrerequisiteResolutionItem
+                    {
+                        InputName = optionalInput,
+                        Required = false,
+                        Kind = JarvisPrerequisiteResolutionKind.DependencyPending,
+                        Reason = "Structured semantic marker requires an explicit registered upstream binding."
+                    });
+                }
+                else
+                {
+                    node.Prerequisites.Add(new JarvisPrerequisiteResolutionItem
+                    {
+                        InputName = optionalInput,
+                        Required = false,
+                        Kind = JarvisPrerequisiteResolutionKind.ResolvedFromIntent,
+                        Value = supplied.DeepClone(),
+                        Reason = "Optional structured semantic input is explicitly present in this intent object."
+                    });
+                }
             }
             return node;
         }
@@ -157,6 +170,20 @@ namespace S1Jarvis.Core
             return new JarvisPrerequisiteResolutionItem { InputName = inputName, Required = true, Kind = JarvisPrerequisiteResolutionKind.NeedsUserInput, Reason = "Required business input is not present and no safe lookup/dependency/owner-agent path is registered." };
         }
 
+        private static bool IsSemanticDependencyMarker(string taskType, string inputName, JToken value)
+        {
+            if (value == null || value.Type != JTokenType.String) return false;
+            string marker = value.ToString();
+            if (string.Equals(taskType, "ExportData", StringComparison.OrdinalIgnoreCase) &&
+                string.Equals(inputName, "source_result", StringComparison.OrdinalIgnoreCase))
+                return string.Equals(marker, "__UPSTREAM_REPORT__", StringComparison.Ordinal);
+            if (string.Equals(taskType, "SendEmail", StringComparison.OrdinalIgnoreCase) &&
+                (string.Equals(inputName, "artifact_reference", StringComparison.OrdinalIgnoreCase) ||
+                 string.Equals(inputName, "attachmentFilePath", StringComparison.OrdinalIgnoreCase)))
+                return string.Equals(marker, "__UPSTREAM_EXPORT__", StringComparison.Ordinal);
+            return false;
+        }
+
         private static bool IsCompositionDependency(string taskType, string inputName)
         {
             return string.Equals(taskType, "SendEmail", StringComparison.OrdinalIgnoreCase) &&
@@ -210,7 +237,7 @@ namespace S1Jarvis.Core
             string key = (taskType ?? string.Empty) + ":" + (inputName ?? string.Empty);
             switch (key.ToLowerInvariant())
             {
-                case "reportdata:business_question": case "findtrader:trader_identity": case "readinbox:email_request": case "readcalendar:calendar_request": case "courierdocuments:courier_request": case "internetresearch:research_question": case "helplookup:help_question": return true;
+                case "reportdata:business_question": case "exportdata:export_request": case "findtrader:trader_identity": case "readinbox:email_request": case "readcalendar:calendar_request": case "courierdocuments:courier_request": case "internetresearch:research_question": case "helplookup:help_question": return true;
                 default: return false;
             }
         }

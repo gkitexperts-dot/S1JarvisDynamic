@@ -155,10 +155,13 @@ namespace S1Jarvis.Core
                 "JARVIS_RUNTIME_CONTEXT contains authenticated Soft1 session facts such as currentUserId/currentCompanyId/localDateTime. When a required fact is present there, do not ask the operator to identify himself or restate it. Self/current-operator references resolve against that context.", priority: 923),
 
             P("DECOMPOSER.STRUCTURED_SEMANTIC_SCOPE", JarvisPolicyScope.Task, JarvisPolicyEnforcement.Both,
-                "For reporting/export intents emit canonical structured inputs when semantically present: entity_role=Customer|Supplier|Debtor|Creditor only when the role is explicit/resolved; document_scope=invoice|order|quotation|credit|delivery|documents|movements; operator_scope=current_operator when the request concerns the authenticated operator. Do not invent entity_role when the same identity may exist in multiple roles.", agents: A("Jarvis"), tasks: A("__decomposition"), priority: 922),
+                "For reporting/export intents emit canonical structured inputs when semantically present: entity_role=Customer|Supplier|Debtor|Creditor only when the role is explicit/resolved; document_scope=invoice|order|quotation|credit|delivery|documents|movements; operator_scope=current_operator when the request concerns the authenticated operator; result_mode=latest when one most-recent business row is requested. Do not invent entity_role when the same identity may exist in multiple roles.", agents: A("Jarvis"), tasks: A("__decomposition"), priority: 922),
+
+            P("DECOMPOSER.EXPLICIT_UPSTREAM_BINDINGS", JarvisPolicyScope.Orchestration, JarvisPolicyEnforcement.Both,
+                "Cross-task composition must be explicit in structured inputs. If an ExportData object semantically exports the result requested by a ReportData object in the same instruction, emit source_result=__UPSTREAM_REPORT__. If a SendEmail object explicitly attaches the file produced by an ExportData object, emit artifact_reference=__UPSTREAM_EXPORT__. Never emit these markers merely because those task types coexist; they represent a real semantic dependency.", agents: A("Jarvis"), tasks: A("__decomposition"), priority: 921),
 
             P("DECOMPOSER.CURRENT_OPERATOR_MARKER", JarvisPolicyScope.Task, JarvisPolicyEnforcement.Both,
-                "For CRM assignment semantically referring to the authenticated operator himself, emit assignee=__CURRENT_OPERATOR__. Runtime resolves this marker deterministically to currentUserId; never ask for the operator name when currentUserId is available.", agents: A("Jarvis"), tasks: A("__decomposition"), priority: 921),
+                "For CRM assignment semantically referring to the authenticated operator himself, emit assignee=__CURRENT_OPERATOR__. Runtime resolves this marker deterministically to currentUserId; never ask for the operator name when currentUserId is available.", agents: A("Jarvis"), tasks: A("__decomposition"), priority: 920),
 
             // ── Decomposition / planning ─────────────────────────────────────
             P("DECOMPOSER.ATOMIC_OUTCOME", JarvisPolicyScope.Task, JarvisPolicyEnforcement.Training,

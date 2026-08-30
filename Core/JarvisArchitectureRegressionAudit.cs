@@ -91,6 +91,10 @@ namespace S1Jarvis.Core
             if (report == null || !(report.Produces ?? new string[0]).Contains("query_sql", StringComparer.OrdinalIgnoreCase))
                 issues.Add("Export regression: ReportData must expose query_sql provenance.");
             if (export == null) issues.Add("Export regression: ExportData task is missing.");
+            else if (!(export.RequiredInputs ?? new string[0]).Contains("export_request", StringComparer.OrdinalIgnoreCase))
+                issues.Add("Export regression: ExportData must be autonomous through export_request.");
+            else if ((export.RequiredInputs ?? new string[0]).Contains("source_result", StringComparer.OrdinalIgnoreCase))
+                issues.Add("Export regression: source_result must be optional/upstream-bound, not mandatory.");
             bool binding = JarvisDependencyBinder.AllRules.Any(x =>
                 string.Equals(x.SourceTaskType, "ReportData", StringComparison.OrdinalIgnoreCase) &&
                 string.Equals(x.TargetTaskType, "ExportData", StringComparison.OrdinalIgnoreCase) &&
