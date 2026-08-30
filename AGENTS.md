@@ -78,6 +78,38 @@ This file is a persistent engineering contract for anyone (human or AI) changing
    - Jarvis validates each result before storing it, materializes registered dependencies, and decides the next dispatch.
    - Legacy conversational fallback must not become the authority for whether a registered task/capability exists.
 
+## Business entity semantics — NON-NEGOTIABLE
+
+1. **Business entity identities, roles and Soft1 discriminators are authoritative runtime metadata, not model knowledge.**
+   - Models may interpret the user's natural-language reference to an entity, but they MUST NOT invent Soft1 `SODTYPE`, `SOSOURCE`, Designer object names, primary-key semantics, role mappings, or equivalent business discriminators.
+   - `Core/JarvisBusinessEntityCatalog.cs` is the shared authoritative catalog for confirmed business-entity semantics used by orchestration and deterministic resolvers. Existing specialist resolvers may consume this catalog but must not keep divergent private copies of the same mapping.
+   - Only mappings confirmed in the repository/business rules may be registered. Unknown values remain unknown; fail closed instead of guessing.
+
+2. **Entity resolution precedes use of an entity as authoritative business scope.**
+   - A fuzzy name/code search may be used to discover candidates, but a fuzzy candidate set is not itself a verified entity identity.
+   - When a task requires one specific business entity, Jarvis must resolve or validate the entity role/identity before accepting the downstream business result as belonging to that entity.
+   - If multiple distinct entities remain plausible and the task cannot deterministically disambiguate them from explicit user facts, ask the operator for clarification rather than silently merging them or choosing one.
+
+3. **Agents receive entity semantics from the authoritative catalog.**
+   - Planner/executor prompts may include a compact serialized entity catalog or resolved entity evidence.
+   - They must follow that evidence exactly and may not replace it with pretrained assumptions about Soft1 or another ERP.
+   - Deterministic validation must reject proposed calls/SQL that use unregistered entity discriminators.
+
+## User-facing result references — NON-NEGOTIABLE
+
+1. **Addressable successful results must expose their authoritative clickable reference.**
+   - When a successful task creates, resolves, exports or retrieves an addressable Soft1 object, document, item, trader, file, Outlook object, courier artifact or other external object, the final Jarvis response must include a clickable link/reference whenever the executor returned enough authoritative navigation metadata.
+   - A bare numeric ID is not the preferred final presentation when a verified navigation reference is available.
+
+2. **Links are derived only from authoritative outputs and registered UI schemes.**
+   - `Core/JarvisResultLinkPolicy.cs` is the shared presentation policy for converting verified task outputs into links already understood by the Jarvis UI (`doc:`, `trader:`, `item:`, local file paths, or returned HTTP/HTTPS URLs).
+   - Never invent a URL, object name, SOSOURCE, file path, or navigation target from prose or from an ID alone when the corresponding mapping is not registered.
+   - If the executor did not return sufficient authoritative navigation data, show the verified ID/reference without fabricating a link.
+
+3. **Link presentation never changes execution truth.**
+   - The result-link layer is presentation-only. It must not execute tools, resolve missing entities, mutate graph state, or convert an unsuccessful tool result into success.
+   - Links must be added only after the owning task result has passed Jarvis validation.
+
 ## Provider/model rules — NON-NEGOTIABLE
 
 1. **Never hardcode a concrete AI provider or model in desktop/client business or orchestration code.**
@@ -107,6 +139,8 @@ This file is a persistent engineering contract for anyone (human or AI) changing
 - `Access/Verilic/JarvisDirectAiTransport.cs` — normal direct provider transport after provisioning. It must never contact Verilic; all provider-specific request/response/schema/tool-choice translation stays here.
 - `Access/Verilic/VerilicAiMessagesClient.cs` — legacy class name retained only as the local session dispatcher/compatibility boundary; it must not send runtime messages to Verilic. It also enforces provider-neutral supervisory rejection of false capability-denial prose when the request itself proves that registered tools were attached.
 - `Core/JarvisAgentClient.cs` and orchestration clients — select logical agents/tasks only; they must not own provider/model/API-key configuration.
+- `Core/JarvisBusinessEntityCatalog.cs` — authoritative confirmed business-entity roles/discriminators/identity metadata shared by deterministic resolvers and agent execution context.
+- `Core/JarvisResultLinkPolicy.cs` — presentation-only conversion of verified addressable outputs into registered Jarvis UI links.
 
 ## Security rules for AI credentials
 
