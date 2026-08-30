@@ -312,7 +312,21 @@ namespace S1Jarvis.Access.Verilic
 
             JArray enumValues = source["enum"] as JArray;
             if (enumValues != null)
-                result["enum"] = enumValues.DeepClone();
+            {
+                var normalizedEnum = new JArray();
+                foreach (JToken enumValue in enumValues)
+                {
+                    if (enumValue == null || enumValue.Type == JTokenType.Null || enumValue.Type == JTokenType.Undefined)
+                        continue;
+
+                    normalizedEnum.Add(enumValue.Type == JTokenType.String
+                        ? enumValue.DeepClone()
+                        : new JValue(enumValue.ToString(Formatting.None)));
+                }
+
+                if (normalizedEnum.Count > 0)
+                    result["enum"] = normalizedEnum;
+            }
 
             JObject properties = source["properties"] as JObject;
             if (properties != null)
