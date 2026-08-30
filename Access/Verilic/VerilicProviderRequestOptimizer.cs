@@ -660,25 +660,11 @@ namespace S1Jarvis.Access.Verilic
             bool hasSuccessfulTools = successfulTools != null && successfulTools.Count > 0;
             if (!hasPaths && !hasSuccessfulTools) return string.Empty;
 
-            var sb = new StringBuilder();
-            sb.AppendLine("Durable context από ολοκληρωμένα tools:");
-
-            if (hasSuccessfulTools)
+            return "[VERIFIED_DURABLE_CONTEXT] " + new JObject
             {
-                foreach (string tool in successfulTools)
-                    sb.AppendLine("- Επιβεβαιωμένη επιτυχής εκτέλεση tool: " + tool + ".");
-                sb.AppendLine("Οι παραπάνω εκτελέσεις είναι πραγματικά επιβεβαιωμένες από tool_result. Μην ισχυριστείς ότι δεν εκτελέστηκαν μόνο επειδή τα παλιά raw tool traces συμπτύχθηκαν από το context.");
-            }
-
-            if (hasPaths)
-            {
-                foreach (string path in paths)
-                    sb.AppendLine("- Διαθέσιμο αρχείο: " + path);
-                sb.AppendLine("Αν ο χρήστης αναφέρεται σε «το αρχείο που μόλις έφτιαξες», χρησιμοποίησε ακριβώς αυτό το path. Μην ξανακάνεις export αν το path υπάρχει ήδη.");
-                sb.AppendLine("Όταν ΕΜΦΑΝΙΖΕΙΣ αρχείο στον χειριστή, γράψε Markdown link [όνομα_αρχείου](ΑΚΡΙΒΩΣ_το_path_του_tool_result). ΜΗΝ προσθέσεις file:// ή file:/// και ΜΗΝ κάνεις URL-encoding του local path. Το Jarvis UI χειρίζεται το raw Windows path μέσα στο Markdown link.");
-            }
-
-            return sb.ToString().Trim();
+                ["successfulTools"] = new JArray((successfulTools ?? new List<string>()).Distinct(StringComparer.OrdinalIgnoreCase)),
+                ["filePaths"] = new JArray((paths ?? new List<string>()).Distinct(StringComparer.OrdinalIgnoreCase))
+            }.ToString(Formatting.None);
         }
 
         private static void AppendDurableContextToSystem(JObject request, string durableContext)
@@ -776,23 +762,15 @@ namespace S1Jarvis.Access.Verilic
         private static void HardenDirectExportTools(JArray tools)
         {
             if (tools == null) return;
-            foreach (JToken token in tools)
+            foreach (JObject tool in tools.OfType<JObject>())
             {
-                JObject tool = token as JObject;
-                if (tool == null) continue;
-                string name = tool["name"]?.ToString();
+                string name = (string)tool["name"];
                 if (string.Equals(name, "query_data", StringComparison.OrdinalIgnoreCase))
-                {
-                    tool["description"] = "Για direct-export flow: χρησιμοποίησέ το ΜΟΝΟ για μικρό/narrow lookup ταυτότητας, COUNT ή απολύτως αναγκαίο schema check. Αν lookup ταυτότητας επιστρέψει 2 ή περισσότερα λογικά matches και ο χειριστής δεν έχει ήδη δώσει μοναδικό CODE/id/κριτήριο, ΣΤΑΜΑΤΑ: ζήτησε clarification με τις επιλογές και ΜΗΝ καλέσεις export tool στο ίδιο turn. ΠΟΤΕ μην ενώσεις σιωπηλά πολλαπλές καρτέλες/οντότητες. Η κατηγορία παραστατικού είναι semantic: μην hardcode-άρεις αριθμούς SERIES που διαφέρουν ανά εταιρία. ΠΟΤΕ μην τραβήξεις τις γραμμές του export ως preview (ούτε TOP 100/200) και ΠΟΤΕ μεγάλο dataset. Τα πραγματικά export rows πρέπει να πάνε απευθείας SQL -> export_query_to_file, όχι μέσω LLM context.";
-                }
+                    tool["description"] = "Read-only SQL SELECT for a narrow lookup, count or schema check needed by the direct-export protocol.";
                 else if (string.Equals(name, "export_query_to_file", StringComparison.OrdinalIgnoreCase))
-                {
-                    tool["description"] = "Ο χειριστής έχει ήδη ζητήσει ρητά αρχείο. Εκτέλεσε το τελικό SELECT ΑΠΕΥΘΕΙΑΣ στη βάση και γράψε Excel/CSV χωρίς preview και χωρίς να περάσουν οι γραμμές από το LLM context. Κάλεσέ το μία φορά ΜΟΝΟ αφού έχουν λυθεί μονοσήμαντα τα απαραίτητα φίλτρα/οντότητες και η semantic κατηγορία παραστατικών. Αν υπάρχουν 2+ λογικά matches για πελάτη/προμηθευτή/άλλη οντότητα, απαγορεύεται export πριν από clarification. Μην χρησιμοποιείς hardcoded SERIES ids ως γενικό κανόνα μεταξύ εταιριών. Επιστρέφει path, rowsWritten και totalFound.";
-                }
+                    tool["description"] = "Execute the final SELECT directly to an export file and return path, rowsWritten and totalFound.";
                 else if (string.Equals(name, "export_shown_table", StringComparison.OrdinalIgnoreCase))
-                {
-                    tool["description"] = "Αν ο χρήστης αναφέρεται ρητά στον πίνακα που μόλις εμφανίστηκε (π.χ. «κάν' το Excel/PDF»), εξήγαγε εκείνον τον ήδη ορατό πίνακα μία φορά. Μην ξανατρέξεις query_data για να ξαναφέρεις τις ίδιες γραμμές.";
-                }
+                    tool["description"] = "Export the already-visible table through the registered visible-table artifact flow.";
             }
         }
 
@@ -1122,10 +1100,10 @@ namespace S1Jarvis.Access.Verilic
         private static StringBuilder PromptBase(string agent, string role, string contextLine, string durableContext)
         {
             var sb = new StringBuilder();
-            sb.AppendLine("Είσαι ο " + agent + ", " + role + " του Jarvis μέσα στο Soft1. Απαντάς στα ελληνικά, σύντομα και συγκεκριμένα.");
-            sb.AppendLine("Σημερινή τοπική ημερομηνία: " + DateTime.Now.ToString("yyyy-MM-dd") + ". Για λέξεις όπως σήμερα/χθες/αύριο/τελευταία εβδομάδα/τελευταίος μήνας/προηγούμενο έτος, υπολόγισε το εύρος από αυτή την ημερομηνία και μην κάνεις query στη βάση μόνο για να μάθεις την τρέχουσα ημερομηνία.");
-            sb.AppendLine("Semantic κατηγορίες παραστατικών: ερμήνευε τον όρο του χειριστή με βάση τη φύση/περιγραφή των document types και ΟΧΙ με hardcoded αριθμούς SERIES, επειδή οι σειρές διαφέρουν ανά εταιρία/installation. «Τιμολόγια» σημαίνει invoice-like αξιακά παραστατικά και ΔΕΝ περιλαμβάνει παραγγελίες/orders, προσφορές ή συμψηφισμούς εκτός αν ζητηθούν ρητά. «Παραγγελίες» σημαίνει order-like παραστατικά. «Παραστατικά» ή «κινήσεις» είναι ευρύτερο scope. Τα πιστωτικά είναι ξεχωριστή semantic κατηγορία: αν ο χειριστής δεν τα προσδιορίζει και η ένταξή τους αλλάζει ουσιωδώς το αποτέλεσμα, ζήτησε σύντομη clarification. Αν δεν μπορείς να ταξινομήσεις με ασφάλεια από τα διαθέσιμα metadata/description, κάνε μικρό lookup των σχετικών τύπων και ρώτα αντί να μαντέψεις.");
-            sb.AppendLine("Χρησιμοποίησε μόνο τα tools που δίνονται. Μην ισχυρίζεσαι ότι εκτέλεσες ενέργεια χωρίς επιτυχημένο tool result. Οι φράσεις «το ξανάτρεξα», «το επιβεβαίωσα από τη βάση» ή ισοδύναμες είναι ισχυρισμός ΝΕΑΣ εκτέλεσης και επιτρέπονται μόνο αν υπάρχει αντίστοιχο επιτυχημένο tool_result στο ΤΡΕΧΟΝ turn· παλιό durable success δεν σημαίνει ότι το ξανάτρεξες τώρα. Αν ο χειριστής ρωτήσει ποιο SQL/query χρησιμοποιήθηκε, μην ανακατασκευάσεις ή βελτιώσεις το query εκ των υστέρων: πρέπει να αναφέρεις μόνο το πραγματικό query από το tool trace, αλλιώς να πεις ότι δεν είναι διαθέσιμο. Μόλις έχεις αρκετά δεδομένα, σταμάτα τα περιττά tool calls και απάντησε.");
+            sb.AppendLine("[JARVIS_OPTIMIZER_PROTOCOL] logicalAgent=" + (agent ?? string.Empty) +
+                "; mode=" + (role ?? string.Empty) +
+                "; localDate=" + DateTime.Now.ToString("yyyy-MM-dd") + ".");
+            sb.AppendLine("Behavioral rules are supplied exclusively by JARVIS_POLICY_CONTEXT; business/schema facts by JARVIS_KNOWLEDGE_CONTEXT.");
             if (!string.IsNullOrWhiteSpace(contextLine)) sb.AppendLine(contextLine);
             if (!string.IsNullOrWhiteSpace(durableContext)) sb.AppendLine(durableContext);
             return sb;
@@ -1134,153 +1112,96 @@ namespace S1Jarvis.Access.Verilic
         private static string BuildConversationalPrompt(string agentName, string contextLine, string durableContext)
         {
             string name = string.IsNullOrWhiteSpace(agentName) ? "Jarvis" : agentName.Trim();
-            var sb = new StringBuilder();
-            sb.AppendLine("Είσαι ο " + name + " του Jarvis μέσα στο Soft1. Απάντησε φυσικά στα ελληνικά, σύντομα και φιλικά.");
-            sb.AppendLine("Σημερινή τοπική ημερομηνία: " + DateTime.Now.ToString("yyyy-MM-dd") + ".");
-            sb.AppendLine("Αυτό το turn είναι απλή συνομιλία: δεν έχεις tools και δεν πρέπει να ισχυριστείς ότι διάβασες ή άλλαξες δεδομένα Soft1.");
-            if (!string.IsNullOrWhiteSpace(contextLine)) sb.AppendLine(contextLine);
-            if (!string.IsNullOrWhiteSpace(durableContext)) sb.AppendLine(durableContext);
-            return sb.ToString().Trim();
+            return PromptBase(name, "conversation_no_tools", contextLine, durableContext).ToString().Trim();
         }
 
         private static string BuildQueryProvenancePrompt(string agentName, string contextLine, string sql)
         {
             string name = string.IsNullOrWhiteSpace(agentName) ? "Jarvis" : agentName.Trim();
-            var sb = new StringBuilder();
-            sb.AppendLine("Είσαι ο " + name + " του Jarvis μέσα στο Soft1. Ο χειριστής ζητά το πραγματικό SQL/query που χρησιμοποιήθηκε προηγουμένως.");
-            sb.AppendLine("ΜΗΝ συνθέσεις νέο query, ΜΗΝ το διορθώσεις και ΜΗΝ το παρουσιάσεις ως καλύτερη εκδοχή. Εμφάνισε ακριβώς το παρακάτω SQL ως code block και εξήγησε σύντομα ότι αυτό είναι το πραγματικό προηγούμενο query_data call:");
-            sb.AppendLine(sql ?? string.Empty);
-            if (!string.IsNullOrWhiteSpace(contextLine)) sb.AppendLine(contextLine);
+            StringBuilder sb = PromptBase(name, "query_provenance", contextLine, string.Empty);
+            sb.AppendLine("actualPreviousQuery=" + (sql ?? string.Empty));
             return sb.ToString().Trim();
         }
 
         private static string BuildLatestDocumentPrompt(string agent, string contextLine, string durableContext)
         {
-            StringBuilder sb = PromptBase(agent, "Soft1 deterministic read agent", contextLine, durableContext);
-            sb.AppendLine("Το αίτημα σημαίνει «ποιο είναι το τελευταίο παραστατικό που καταχώρησε ο ΤΡΕΧΩΝ Soft1 χρήστης», όχι το τελευταίο παραστατικό γενικά στην εταιρία.");
-            sb.AppendLine("Υποχρεωτική semantics: FINDOC.COMPANY=currentCompany ΚΑΙ FINDOC.INSUSER=currentUserId από το Τρέχον context. Ταξινόμηση ORDER BY FINDOC.INSDATE DESC, FINDOC.FINDOC DESC. ΜΗΝ χρησιμοποιήσεις ORDER BY FINDOC DESC μόνο του και ΜΗΝ χρησιμοποιήσεις TRNDATE ως χρόνο καταχώρησης.");
-            sb.AppendLine("Γνωστό schema για αυτό το intent: FINDOC(FINDOC,TRDR,TRNDATE,FINCODE,SUMAMNT,SERIES,SOSOURCE,COMPANY,INSUSER,INSDATE), USERS(USERS,NAME), TRDR(TRDR,CODE,NAME,COMPANY), SERIES(COMPANY,SERIES,SOSOURCE,NAME). Αν κάνεις joins: SERIES μόνο με COMPANY+SERIES+SOSOURCE και TRDR με COMPANY+TRDR. Ένα query_data αρκεί.");
-            return sb.ToString().Trim();
+            return PromptBase(agent, "latest_document_by_current_operator", contextLine, durableContext).ToString().Trim();
         }
 
         private static string BuildDirectExportPrompt(
             string agent, string contextLine, string durableContext, string inheritedRequest)
         {
-            StringBuilder sb = PromptBase(agent, "direct export agent", contextLine, durableContext);
+            StringBuilder sb = PromptBase(agent, "direct_export", contextLine, durableContext);
             if (!string.IsNullOrWhiteSpace(inheritedRequest))
-            {
-                sb.AppendLine("Το τρέχον μήνυμα είναι απάντηση σε διευκρίνιση. Συνέχισε το προηγούμενο export αίτημα, μην το αντιμετωπίσεις ως νέο ανεξάρτητο read request:");
-                sb.AppendLine("Προηγούμενο export αίτημα: " + inheritedRequest.Trim());
-            }
-            sb.AppendLine("Ο χειριστής έχει ήδη ζητήσει ΡΗΤΑ αρχείο. Αυτό είναι direct-export flow: ΜΗΝ εμφανίσεις preview 100/200 γραμμών και ΜΗΝ κάνεις query_data που επιστρέφει το dataset του export. Οι γραμμές πρέπει να ταξιδέψουν SQL -> export tool -> αρχείο, ποτέ SQL -> LLM -> export.");
-            sb.AppendLine("ΠΡΙΝ από export, λύσε μονοσήμαντα κάθε οντότητα που επηρεάζει το φίλτρο. Αν ένα narrow identity lookup επιστρέψει 2 ή περισσότερα λογικά matches (π.χ. ίδιο όνομα/ΑΦΜ σε πελάτη και προμηθευτή) και ο χειριστής δεν έχει ήδη δώσει μοναδικό CODE/id/κριτήριο, ΣΤΑΜΑΤΑ και ρώτα με ❓/> επιλογές. ΜΗΝ ενώσεις πολλαπλές καρτέλες, ΜΗΝ διαλέξεις μόνος σου και ΜΗΝ καλέσεις export_query_to_file στο ίδιο turn. Μετά την επιλογή του χειριστή, συνέχισε το ίδιο export intent στο επόμενο turn.");
-            sb.AppendLine("Για document filtering χρησιμοποίησε semantic classification από την περιγραφή/metadata των σχετικών document types, ποτέ σταθερούς αριθμούς SERIES. Αν ο χειριστής ζητήσει «τιμολόγια», το τελικό SELECT ΠΡΕΠΕΙ να αποκλείει order-like/«Παραγγελία», quotation-like και settlement/«Συμψηφισμός» τύπους. Μην συμπεριλάβεις άλλες κατηγορίες επειδή απλώς έχουν ίδιο TRDR/έτος. Αν υπάρχουν credit-invoice types και δεν είναι σαφές αν τα θέλει, ρώτα μόνο γι' αυτή τη διάκριση πριν το export όταν επηρεάζει ουσιωδώς το αποτέλεσμα.");
-            sb.AppendLine("query_data επιτρέπεται μόνο για μικρό lookup/validation που χρειάζεται για να χτιστεί το τελικό SELECT (π.χ. TOP 5 για TRDR, COUNT, ή ένα στοχευμένο INFORMATION_SCHEMA). Μόλις λυθούν τα φίλτρα, κάλεσε export_query_to_file ΜΙΑ φορά με το τελικό SELECT. Αν ο χρήστης αναφέρεται σε πίνακα που ήδη φαίνεται, χρησιμοποίησε export_shown_table αντί να ξανατρέξεις query.");
-            sb.AppendLine("Μην κάνεις SELECT GETDATE()/YEAR(GETDATE()) για σχετικές ημερομηνίες: χρησιμοποίησε τη σημερινή ημερομηνία του system context. Για «προηγούμενο έτος» σήμερα σημαίνει " + (DateTime.Now.Year - 1) + ".");
-            sb.AppendLine("Γνωστό schema: TRDR(TRDR,CODE,NAME,AFM,SODTYPE,COMPANY), FINDOC(FINDOC,TRDR,TRNDATE,FINCODE,SUMAMNT,SERIES,SOSOURCE,COMPANY), SERIES join ΜΟΝΟ με COMPANY+SERIES+SOSOURCE. ΜΗΝ μαντέψεις CUSTOMER, FINDOCID, FULLFINCODE, TRDTYPE ή SERIES.SODTYPE. Αν χρειάζεται άγνωστο πεδίο, κάνε ΕΝΑ στοχευμένο INFORMATION_SCHEMA lookup, όχι διαδοχικές εικασίες.");
-            sb.AppendLine("Μετά από successful export, σταμάτα αμέσως και απάντησε σύντομα με πλήθος γραμμών και clickable Markdown link [όνομα_αρχείου.ext](ΑΚΡΙΒΩΣ_το_path_που_επέστρεψε_το_tool). ΜΗΝ προσθέσεις file:// ή file:/// και ΜΗΝ κάνεις URL-encoding του local path. ΜΗΝ ξανακάνεις query/export μόνο για επιβεβαίωση.");
+                sb.AppendLine("inheritedExportRequest=" + inheritedRequest.Trim());
             return sb.ToString().Trim();
         }
 
         private static string BuildReadPrompt(string agent, string contextLine, string durableContext)
         {
-            StringBuilder sb = PromptBase(agent, "read/reporting agent", contextLine, durableContext);
-            sb.AppendLine("Για Soft1 χρησιμοποίησε query_data μόνο για SELECT. Μην μαντεύεις schema: INFORMATION_SCHEMA μόνο όταν λείπει πραγματικά πληροφορία.");
-            sb.AppendLine("Γνωστό schema: TRDR(TRDR,CODE,NAME,AFM,SODTYPE), FINDOC(FINDOC,TRDR,TRNDATE,FINCODE,SUMAMNT,SERIES,SOSOURCE,COMPANY,INSUSER,INSDATE), SERIES join σε COMPANY+SERIES+SOSOURCE, TRDBALSHEET(TRDR,FISCPRD,LDEBIT,LCREDIT), USERS(USERS,NAME). Δεν υπάρχει FINTRD.");
-            sb.AppendLine("Αν ο χειριστής πει «τελευταίο παραστατικό που καταχώρησα/πέρασα/έβαλα εγώ», το «εγώ» σημαίνει current Soft1 UserId: φίλτραρε FINDOC.INSUSER=currentUserId και ταξινόμησε INSDATE DESC, FINDOC DESC. Μην το συγχέεις με το τελευταίο FINDOC γενικά.");
-            sb.AppendLine("Πίνακες σε Markdown. Αν totalRowCount>100, preview και πρότεινε export.");
-            return sb.ToString().Trim();
+            return PromptBase(agent, "read_reporting", contextLine, durableContext).ToString().Trim();
         }
 
         private static string BuildEchoContactPrompt(string contextLine, string durableContext)
         {
-            StringBuilder sb = PromptBase("Echo", "contact lookup agent", contextLine, durableContext);
-            sb.AppendLine("Στόχος αυτού του turn είναι μόνο εύρεση επαφής. Πρώτα αναζήτησε στο Soft1 με query_data στον PRSN και μετά συμπληρωματικά στο Outlook με search_outlook_contacts. Για PRSN χρησιμοποίησε μόνο γνωστά πεδία NAME, NAME2, EMAIL, EMAIL1 εκτός αν πρώτα επιβεβαιώσεις άλλο πεδίο από INFORMATION_SCHEMA. Αν ο χρήστης έδωσε ακριβές email, χρησιμοποίησέ το ΑΥΤΟΥΣΙΟ στο PRSN (EMAIL/EMAIL1) και στο Outlook: ΜΗΝ το μετατρέψεις σε επώνυμο, ΜΗΝ κάνεις transliteration και ΜΗΝ δοκιμάζεις εναλλακτικές γραφές. Για όνομα, χρησιμοποίησε το ίδιο κριτήριο που έδωσε ο χρήστης. Μετά κάλεσε show_contact_results με τα αποτελέσματα και των δύο πηγών. Αν δεν βρεθεί τίποτα, σταμάτα μετά από αυτά τα δύο lookups αντί να επαναλαμβάνεις παραλλαγές.");
-            return sb.ToString().Trim();
+            return PromptBase("Echo", "contact_lookup", contextLine, durableContext).ToString().Trim();
         }
 
         private static string BuildEchoInboxPrompt(string contextLine, string durableContext)
         {
-            StringBuilder sb = PromptBase("Echo", "inbox agent", contextLine, durableContext);
-            sb.AppendLine("Για αναζήτηση λίστας emails προτίμησε filter_email_inbox ώστε το αποτέλεσμα να εμφανιστεί στην Email κουρτίνα. read_email μόνο όταν ζητείται το πλήρες περιεχόμενο συγκεκριμένου μηνύματος. Μην επαναλάβεις το ίδιο φίλτρο αν επέστρεψε επιτυχώς.");
-            sb.AppendLine("Για sender/name matching κράτα ασφαλές πλήρες κριτήριο: χρησιμοποίησε το πλήρες επώνυμο ή το πλήρες ονοματεπώνυμο όπως δόθηκε. Αν χρειάζεται εναλλακτική γραφή/μεταγραφή μεταξύ ελληνικών και λατινικών, χρησιμοποίησε πλήρες λογικό variant (π.χ. Milonas/Μυλωνάς), ποτέ αυθαίρετο μικρό substring από το μέσο της λέξης όπως 'ilon'. Μην κόβεις ένα επώνυμο σε 3-4 γράμματα για να αυξήσεις τα matches, γιατί αυτό μπορεί να φέρει άσχετα email.");
-            sb.AppendLine("Για σχετικές περιόδους (π.χ. τελευταία εβδομάδα/τελευταίος μήνας) υπολόγισε το sinceDate από τη σημερινή τοπική ημερομηνία που δίνεται στο system context. Μην ζητάς διευκρίνιση για το ποια ημερομηνία είναι σήμερα.");
-            return sb.ToString().Trim();
+            return PromptBase("Echo", "inbox_read", contextLine, durableContext).ToString().Trim();
         }
 
         private static string BuildEchoCalendarPrompt(string contextLine, string durableContext)
         {
-            StringBuilder sb = PromptBase("Echo", "calendar agent", contextLine, durableContext);
-            sb.AppendLine("Χρησιμοποίησε filter_calendar/show_calendar_entries/read_calendar ανάλογα με το αίτημα. Δημιουργία event/task μόνο με σαφή πρόθεση του χρήστη.");
-            return sb.ToString().Trim();
+            return PromptBase("Echo", "calendar", contextLine, durableContext).ToString().Trim();
         }
 
         private static string BuildEchoDraftPrompt(string contextLine, string durableContext)
         {
-            StringBuilder sb = PromptBase("Echo", "email drafting agent", contextLine, durableContext);
-            sb.AppendLine("Αυτό είναι draft/preview turn. ΜΗΝ στείλεις email. Αν λείπει διεύθυνση, αναζήτησε πρώτα query_data στον PRSN (NAME/NAME2, με EMAIL συμπληρωμένο) και μετά συμπληρωματικά search_outlook_contacts. Παρουσίασε σύντομα Προς/Κοιν/Θέμα/Κείμενο και ζήτησε επιβεβαίωση.");
-            return sb.ToString().Trim();
+            return PromptBase("Echo", "email_draft", contextLine, durableContext).ToString().Trim();
         }
 
         private static string BuildEchoSendPrompt(string contextLine, string durableContext)
         {
-            StringBuilder sb = PromptBase("Echo", "email sending agent", contextLine, durableContext);
-            sb.AppendLine("Αν υπάρχει ήδη επιβεβαιωμένο draft στο αμέσως προηγούμενο context, μην το ξαναγράψεις και μην ξανακάνεις lookup χωρίς λόγο: κάλεσε send_email/reply_email μία φορά με τα ήδη γνωστά στοιχεία. Αν πρόκειται για νέο αίτημα αποστολής που δίνει μόνο όνομα παραλήπτη, χρησιμοποίησε query_data στον PRSN πριν από Outlook lookup και μη μαντέψεις email.");
-            sb.AppendLine("Αν υπάρχει durable file path, χρησιμοποίησέ το αυτούσιο ως attachmentFilePath. Μην δημιουργήσεις ή εξάγεις ξανά το ίδιο αρχείο.");
-            return sb.ToString().Trim();
+            return PromptBase("Echo", "email_send", contextLine, durableContext).ToString().Trim();
         }
 
         private static string BuildEchoExportPrompt(string contextLine, string durableContext, bool emailMentioned)
         {
-            StringBuilder sb = PromptBase("Echo", "report/export agent", contextLine, durableContext);
-            sb.AppendLine("Για δεδομένα Soft1 χρησιμοποίησε query_data και μετά ΕΝΑ export tool. Μόλις export tool επιστρέψει μη κενό path, θεώρησε το αρχείο έτοιμο και ΜΗΝ ξανακάνεις export στο ίδιο user request.");
-            sb.AppendLine("Export schema guardrail: χρησιμοποίησε ως γνωστά TRDR(TRDR,CODE,NAME,AFM,SODTYPE,COMPANY), FINDOC(FINDOC,TRDR,TRNDATE,FINCODE,SUMAMNT,SERIES,SOSOURCE,COMPANY) και SERIES join ΜΟΝΟ με COMPANY+SERIES+SOSOURCE. ΜΗΝ χρησιμοποιήσεις/μαντέψεις CUSTOMER, FINDOCID, FULLFINCODE, TRDTYPE ή SERIES.SODTYPE. Αν χρειάζεσαι πεδίο πέρα από τα γνωστά, κάνε ΕΝΑ στοχευμένο INFORMATION_SCHEMA lookup και μετά χρησιμοποίησέ το· όχι διαδοχικές εικασίες schema. Αν ο συναλλασσόμενος έχει ήδη λυθεί στο κοντινό context, επαναχρησιμοποίησε το γνωστό TRDR/CODE αντί να τον ξαναανακαλύψεις.");
-            sb.AppendLine("Μετά από επιτυχημένο export, η τελική απάντηση ΠΡΕΠΕΙ να εμφανίζει το αρχείο ως clickable Markdown link: [όνομα_αρχείου.xlsx](C:\\πλήρες\\path\\όνομα_αρχείου.xlsx), χρησιμοποιώντας ΑΚΡΙΒΩΣ το path από το tool_result. ΜΗΝ προσθέσεις file:// ή file:/// και ΜΗΝ κάνεις URL-encoding. ΜΗΝ εμφανίζεις το path μόνο του και ΜΗΝ το βάζεις σε code block.");
-            if (emailMentioned)
-                sb.AppendLine("Αν ο χρήστης είπε ότι θα σταλεί αργότερα με email αλλά δεν ζήτησε ρητά άμεση αποστολή, ετοίμασε μόνο το αρχείο και δώσε το clickable link. Η αποστολή θα γίνει σε επόμενο επιβεβαιωμένο turn.");
+            StringBuilder sb = PromptBase("Echo", "report_export", contextLine, durableContext);
+            sb.AppendLine("emailMentioned=" + emailMentioned.ToString().ToLowerInvariant());
             return sb.ToString().Trim();
         }
 
         private static string BuildEchoGeneralPrompt(string contextLine, string durableContext)
         {
-            StringBuilder sb = PromptBase("Echo", "email/calendar/contacts agent", contextLine, durableContext);
-            sb.AppendLine("Χρησιμοποίησε το μικρότερο αναγκαίο σύνολο tools. Εξωτερική αποστολή ή δημιουργία event/task μόνο με σαφή πρόθεση/επιβεβαίωση. Μην επαναλαμβάνεις επιτυχημένα lookups ή exports.");
-            return sb.ToString().Trim();
+            return PromptBase("Echo", "email_calendar_contacts", contextLine, durableContext).ToString().Trim();
         }
 
         private static string BuildForgePrompt(string contextLine, string durableContext)
         {
-            StringBuilder sb = PromptBase("Forge", "agent ειδών", contextLine, durableContext);
-            sb.AppendLine("Για αναζήτηση query_data. Για δημιουργία get_item_template όταν χρειάζεται και μετά create_item. Μην δημιουργείς χωρίς σαφή οδηγία/επιβεβαίωση όπου απαιτείται.");
-            return sb.ToString().Trim();
+            return PromptBase("Forge", "items", contextLine, durableContext).ToString().Trim();
         }
 
         private static string BuildCompassPrompt(string contextLine, string durableContext)
         {
-            StringBuilder sb = PromptBase("Compass", "agent συναλλασσομένων/ΑΦΜ", contextLine, durableContext);
-            sb.AppendLine("Χρησιμοποίησε query_data/find_trader_by_afm για υπάρχοντα δεδομένα, get_aade_data για ΑΑΔΕ και create_trader_from_aade μόνο όταν ζητείται πραγματική δημιουργία.");
-            return sb.ToString().Trim();
+            return PromptBase("Compass", "traders", contextLine, durableContext).ToString().Trim();
         }
 
         private static string BuildSprintPrompt(string contextLine, string durableContext)
         {
-            StringBuilder sb = PromptBase("Sprint", "courier agent", contextLine, durableContext);
-            sb.AppendLine("Χρησιμοποίησε courier tools μόνο για το σχετικό παραστατικό. create/cancel voucher απαιτεί ρητή επιβεβαίωση. Μετά από επιτυχία μην επαναλάβεις το action.");
-            return sb.ToString().Trim();
+            return PromptBase("Sprint", "courier", contextLine, durableContext).ToString().Trim();
         }
 
         private static string BuildScoutPrompt(string contextLine, string durableContext)
         {
-            StringBuilder sb = PromptBase("Scout", "browser/research agent", contextLine, durableContext);
-            sb.AppendLine("Χρησιμοποίησε open_url/read_page_content/extract_page_tables για web περιεχόμενο. Μην ισχυρίζεσαι ότι διάβασες σελίδα πριν χρησιμοποιήσεις read_page_content/extract_page_tables.");
-            return sb.ToString().Trim();
+            return PromptBase("Scout", "browser_research", contextLine, durableContext).ToString().Trim();
         }
 
         private static string BuildSagePrompt(string contextLine, string durableContext)
         {
-            StringBuilder sb = PromptBase("Sage", "help/support agent", contextLine, durableContext);
-            sb.AppendLine("Διάγνωσε το πρόβλημα και δώσε πρακτικά βήματα. query_data/open_document μόνο όταν χρειάζεται πραγματικό Soft1 context. Καμία write/external ενέργεια.");
-            return sb.ToString().Trim();
+            return PromptBase("Sage", "help_support", contextLine, durableContext).ToString().Trim();
         }
 
         private static string BuildDedicatedPrompt(string role, string contextLine, string durableContext)

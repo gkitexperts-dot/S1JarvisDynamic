@@ -124,6 +124,33 @@ namespace S1Jarvis.Core
             P("ORCHESTRATION.DATASET_REFINEMENT_EXISTING_FACTS_ONLY", JarvisPolicyScope.Orchestration, JarvisPolicyEnforcement.Both,
                 "Local dataset refinement επιτρέπεται μόνο όταν το follow-up απαντιέται αποκλειστικά από τις υπάρχουσες validated στήλες/τιμές. Αν απαιτείται νέα πληροφορία ή νέα στήλη, canRefine=false και το request επιστρέφει στο κανονικό orchestration.", agents: A("Jarvis"), tasks: A("__dataset_refinement"), domains: A("Reporting"), priority: 933),
 
+            P("GLOBAL.DURABLE_RESULTS_ARE_FACTS", JarvisPolicyScope.Validation, JarvisPolicyEnforcement.Both,
+                "Verified successful tool results παραμένουν durable facts όταν συμπτύσσεται το raw history. Μην ισχυρίζεσαι νέα εκτέλεση χωρίς current tool_result και μην απορρίπτεις προηγούμενο verified success μόνο επειδή αφαιρέθηκε το raw trace.", priority: 932),
+
+            P("FILE.REUSE_VERIFIED_ARTIFACT", JarvisPolicyScope.Execution, JarvisPolicyEnforcement.Both,
+                "Όταν υπάρχει verified durable file path για το ζητούμενο artifact, επαναχρησιμοποίησε ακριβώς αυτό το artifact/path αντί να ξανακάνεις export χωρίς invalidation ή νέο αίτημα που απαιτεί διαφορετικό περιεχόμενο.", agents: A("Jarvis", "Atlas", "Echo"), priority: 931),
+
+            P("REPORT.QUERY_PROVENANCE_ACTUAL_TRACE", JarvisPolicyScope.Presentation, JarvisPolicyEnforcement.Both,
+                "Όταν ο χειριστής ζητά ποιο SQL/query χρησιμοποιήθηκε, παρουσίασε μόνο το πραγματικό query από το verified tool trace. Μην το ανακατασκευάζεις, διορθώνεις ή αντικαθιστάς εκ των υστέρων.", agents: A("Jarvis", "Atlas"), domains: A("Reporting"), priority: 930),
+
+            P("REPORT.LATEST_CURRENT_OPERATOR_DOCUMENT", JarvisPolicyScope.Task, JarvisPolicyEnforcement.Both,
+                "Αίτημα για το τελευταίο παραστατικό που καταχώρησε ο τρέχων χειριστής σημαίνει FINDOC.COMPANY=currentCompany και FINDOC.INSUSER=currentUserId, με deterministic ORDER BY FINDOC.INSDATE DESC, FINDOC.FINDOC DESC. TRNDATE δεν είναι χρόνος καταχώρησης.", agents: A("Jarvis", "Atlas"), tasks: A("ReportData"), domains: A("Reporting"), priority: 929),
+
+            P("DOCUMENT.SEMANTIC_CATEGORY_FROM_METADATA", JarvisPolicyScope.Domain, JarvisPolicyEnforcement.Both,
+                "Κατηγορίες όπως τιμολόγια, παραγγελίες, προσφορές, συμψηφισμοί και πιστωτικά ερμηνεύονται από authoritative document type metadata/description και όχι από hardcoded SERIES ids που διαφέρουν ανά εταιρία. Αν η κατηγορία παραμένει αμφίσημη και αλλάζει το αποτέλεσμα, ζήτησε clarification.", agents: A("Jarvis", "Atlas", "Echo"), domains: A("Reporting", "Soft1Documents"), priority: 928),
+
+            P("EXPORT.DIRECT_ROWS_BYPASS_LLM", JarvisPolicyScope.Execution, JarvisPolicyEnforcement.Both,
+                "Σε explicit direct export, το τελικό dataset ταξιδεύει από το validated SELECT απευθείας στο registered export tool/file και όχι ως μεγάλο preview μέσω LLM context. Narrow identity/schema/count lookups επιτρέπονται μόνο ως prerequisites.", agents: A("Jarvis", "Atlas", "Echo"), tasks: A("ExportData"), domains: A("Reporting"), priority: 927),
+
+            P("EXPORT.RESOLVE_IDENTITY_BEFORE_EXPORT", JarvisPolicyScope.Validation, JarvisPolicyEnforcement.Both,
+                "Πριν από direct export, κάθε business entity/filter που αλλάζει το dataset πρέπει να είναι μονοσήμαντα resolved. Πολλαπλά λογικά matches απαιτούν clarification πριν από το export· δεν συγχωνεύονται σιωπηρά.", agents: A("Jarvis", "Atlas", "Echo"), tasks: A("ExportData"), domains: A("Reporting"), priority: 926),
+
+            P("CONTACT.SEARCH_CRITERION_FIDELITY", JarvisPolicyScope.Validation, JarvisPolicyEnforcement.Both,
+                "Σε contact/email lookup διατήρησε το explicit email ή πλήρες name criterion του χειριστή. Μην μετατρέπεις exact email σε inferred name και μην χαλαρώνεις αυθαίρετα επώνυμο σε μικρά substrings που μπορούν να φέρουν άσχετα matches.", agents: A("Jarvis", "Echo"), domains: A("Email"), priority: 925),
+
+            P("BROWSER.READ_BEFORE_CLAIM", JarvisPolicyScope.Validation, JarvisPolicyEnforcement.Both,
+                "Μην ισχυρίζεσαι ότι διάβασες web page ή extracted table χωρίς successful registered read_page_content/extract_page_tables result για το σχετικό content.", agents: A("Scout", "Jarvis"), domains: A("Browser"), priority: 924),
+
             // ── Decomposition / planning ─────────────────────────────────────
             P("DECOMPOSER.ATOMIC_OUTCOME", JarvisPolicyScope.Task, JarvisPolicyEnforcement.Training,
                 "Σπάσε το request σε ανεξάρτητα atomic business outcomes, ένα outcome ανά intent object. Μην εκτελείς tools και μην δημιουργείς dependencies κατά το decomposition.", agents: A("Jarvis"), tasks: A("__decomposition"), priority: 920),
