@@ -155,6 +155,7 @@ namespace S1Jarvis.Core
                                    "Για παραστατικά χρησιμοποίησε FINDOC: FINDOC, FINCODE, TRNDATE, SUMAMNT, SERIES, SOSOURCE, COMPANY, TRDR. " +
                                    "Για όνομα συναλλασσόμενου JOIN TRDR ON TRDR.TRDR=FINDOC.TRDR. " +
                                    "Για όνομα σειράς το SERIES είναι composite identity: JOIN SERIES με COMPANY + SERIES + SOSOURCE, όχι μόνο SERIES. " +
+                                   "Μην επιστρέφεις lookup/master rows ως τελικό αποτέλεσμα όταν το business_question ζητά συναλλαγές/παραστατικά. " +
                                    "Μην χρησιμοποιείς άγνωστες στήλες. Ο Jarvis θα ελέγξει το SQL ΠΡΙΝ το εκτελέσει και θα απορρίψει query που δεν εκφράζει σωστά το intent."
                     }
                 },
@@ -213,10 +214,20 @@ namespace S1Jarvis.Core
                 normalized.Contains(" EXEC ") || normalized.Contains(" EXECUTE "))
                 issues.Add("SQL contains a non-read-only operation.");
 
-            if (IsLatestDocumentQuestion(question))
+            if (IsDocumentQuestion(question))
             {
                 if (!normalized.Contains(" FROM FINDOC "))
-                    issues.Add("Latest-document intent must read from FINDOC.");
+                    issues.Add("Document intent must read its final business rows from FINDOC, not only from lookup/master tables.");
+                if (!normalized.Contains("FINDOC"))
+                    issues.Add("Document intent must project document identity FINDOC.");
+                if (!normalized.Contains("FINCODE"))
+                    issues.Add("Document intent must project FINCODE.");
+                if (!normalized.Contains("TRNDATE"))
+                    issues.Add("Document intent must project TRNDATE.");
+            }
+
+            if (IsLatestDocumentQuestion(question))
+            {
                 if (!normalized.Contains("TOP 1"))
                     issues.Add("Latest-document intent requires TOP 1.");
                 if (!normalized.Contains(" ORDER BY "))
@@ -257,17 +268,19 @@ namespace S1Jarvis.Core
                 if (IsSingularLatestQuestion(question) && rows.Count > 1)
                     issues.Add("Singular latest intent returned more than one row despite validated TOP 1 SQL.");
 
-                if (IsLatestDocumentQuestion(question) && rows.Count > 0)
+                if (IsDocumentQuestion(question) && rows.Count > 0)
                 {
                     JObject row = rows[0] as JObject;
                     if (row == null)
-                        issues.Add("Latest-document result row is not an object.");
+                        issues.Add("Document result row is not an object.");
                     else
                     {
                         if (FindPropertyValue(row, "FINDOC") == null)
-                            issues.Add("Latest-document result is missing FINDOC.");
+                            issues.Add("Document result is missing FINDOC.");
+                        if (FindPropertyValue(row, "FINCODE") == null)
+                            issues.Add("Document result is missing FINCODE.");
                         if (FindPropertyValue(row, "TRNDATE") == null)
-                            issues.Add("Latest-document result is missing TRNDATE.");
+                            issues.Add("Document result is missing TRNDATE.");
                     }
                 }
             }
@@ -377,11 +390,23 @@ namespace S1Jarvis.Core
                    value.Contains("most recent");
         }
 
-        private static bool IsLatestDocumentQuestion(string question)
+        private static bool IsDocumentQuestion(string question)
         {
             string value = (question ?? string.Empty).Trim().ToLowerInvariant();
-            return IsSingularLatestQuestion(question) &&
-                   (value.Contains("παραστατικ") || value.Contains("document") || value.Contains("voucher"));
+            if (value.Length == 0)
+                return false;
+
+            return value.Contains("παραστατικ") ||
+                   value.Contains("τιμολόγ") ||
+                   value.Contains("τιμολογ") ||
+                   value.Contains("document") ||
+                   value.Contains("voucher") ||
+                   value.Contains("invoice");
+        }
+
+        private static bool IsLatestDocumentQuestion(string question)
+        {
+            return IsSingularLatestQuestion(question) && IsDocumentQuestion(question);
         }
 
         private static string BuildDeterministicSummary(string question, string queryResult)
