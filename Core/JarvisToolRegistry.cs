@@ -38,8 +38,7 @@ namespace S1Jarvis.Core
             string[] allowedAgents,
             string[] capabilities,
             string[] compactModes,
-            bool durableResult,
-            string fallbackPolicy)
+            bool durableResult)
         {
             Name = name;
             Domain = domain;
@@ -51,7 +50,6 @@ namespace S1Jarvis.Core
             Capabilities = capabilities ?? new string[0];
             CompactModes = compactModes ?? new string[0];
             DurableResult = durableResult;
-            FallbackPolicy = fallbackPolicy ?? string.Empty;
         }
 
         public string Name { get; private set; }
@@ -64,7 +62,12 @@ namespace S1Jarvis.Core
         public string[] Capabilities { get; private set; }
         public string[] CompactModes { get; private set; }
         public bool DurableResult { get; private set; }
-        public string FallbackPolicy { get; private set; }
+
+        // Compatibility projection only. Policy truth lives in JarvisPolicyRegistry.
+        public string FallbackPolicy
+        {
+            get { return JarvisPolicyRegistry.GetToolFallbackPolicy(Name); }
+        }
     }
 
     internal sealed class JarvisToolPrerequisiteDescriptor
@@ -114,127 +117,97 @@ namespace S1Jarvis.Core
             T("query_data", "Reporting", "Atlas", JarvisToolOperation.Read, false, JarvisToolUiEffect.Table,
                 A("Atlas", "Forge", "Compass", "Echo", "Sprint", "Scout", "Sage", "Jarvis"),
                 A("Reporting", "SqlRead", "EntityLookup"),
-                A("atlas-read", "direct-export", "latest-user-document", "forge", "compass", "echo-*", "sprint", "scout", "sage"),
-                true, "Fail closed to no data change; SELECT-only validation remains authoritative in JarvisTools."),
+                A("atlas-read", "direct-export", "latest-user-document", "forge", "compass", "echo-*", "sprint", "scout", "sage"), true),
 
             T("export_query_to_file", "Reporting", "Atlas", JarvisToolOperation.Read, false, JarvisToolUiEffect.File,
                 A("Atlas", "Forge", "Compass", "Echo", "Scout", "Sage", "Jarvis"),
-                A("Reporting", "Export"), A("direct-export", "atlas-read", "echo-export", "scout", "sage"),
-                true, "Return a safe error and preserve the source query/result context; never claim export success without tool success."),
+                A("Reporting", "Export"), A("direct-export", "atlas-read", "echo-export", "scout", "sage"), true),
 
             T("export_shown_table", "Reporting", "Atlas", JarvisToolOperation.Read, false, JarvisToolUiEffect.File,
                 A("Atlas", "Forge", "Echo", "Jarvis"), A("Reporting", "Export", "VisibleTable"),
-                A("direct-export", "atlas-read", "forge", "echo-export"), true,
-                "Export only the already visible table; do not re-query silently."),
+                A("direct-export", "atlas-read", "forge", "echo-export"), true),
 
             T("open_document", "Soft1Documents", "Atlas", JarvisToolOperation.Read, false, JarvisToolUiEffect.Soft1Object,
                 A("Atlas", "Forge", "Compass", "Echo", "Sprint", "Scout", "Sage", "Jarvis"),
-                A("DocumentRead", "Soft1Navigation"), A("atlas-read", "forge", "compass", "echo-export", "sprint", "scout", "sage"),
-                false, "If the object cannot be resolved/opened, report failure without inventing document state."),
+                A("DocumentRead", "Soft1Navigation"), A("atlas-read", "forge", "compass", "echo-export", "sprint", "scout", "sage"), false),
 
             T("get_conversion_targets", "Soft1Documents", "Atlas", JarvisToolOperation.Read, false, JarvisToolUiEffect.None,
-                A("Atlas", "Scout", "Jarvis"), A("DocumentRead", "DocumentConversion"), A("atlas-read", "scout"), false,
-                "Return only real conversion targets available in the active Soft1 context."),
+                A("Atlas", "Scout", "Jarvis"), A("DocumentRead", "DocumentConversion"), A("atlas-read", "scout"), false),
 
             T("get_item_template", "Items", "Forge", JarvisToolOperation.Read, false, JarvisToolUiEffect.None,
-                A("Forge", "Scout"), A("ItemRead", "ItemWrite"), A("forge", "scout"), false,
-                "If template metadata is unavailable, stop before create_item and request/return the missing information."),
+                A("Forge", "Scout"), A("ItemRead", "ItemWrite"), A("forge", "scout"), false),
 
             T("create_item", "Items", "Forge", JarvisToolOperation.Write, true, JarvisToolUiEffect.Soft1Object,
-                A("Forge", "Scout"), A("ItemWrite"), A("forge", "scout"), true,
-                "No success claim without a successful Soft1 result; confirmation/required-field policy must remain enforced."),
+                A("Forge", "Scout"), A("ItemWrite"), A("forge", "scout"), true),
 
             T("find_trader_by_afm", "Traders", "Compass", JarvisToolOperation.Read, false, JarvisToolUiEffect.None,
-                A("Compass"), A("TraderLookup", "TraderWrite"), A("compass"), false,
-                "Return ambiguous matches for clarification instead of guessing an entity."),
+                A("Compass"), A("TraderLookup", "TraderWrite"), A("compass"), false),
 
             T("get_aade_data", "Traders", "Compass", JarvisToolOperation.Read, false, JarvisToolUiEffect.None,
-                A("Compass"), A("TraderLookup", "ExternalBusinessData"), A("compass"), false,
-                "If AADE data is unavailable or incomplete, do not fabricate taxpayer/company fields."),
+                A("Compass"), A("TraderLookup", "ExternalBusinessData"), A("compass"), false),
 
             T("create_trader_from_aade", "Traders", "Compass", JarvisToolOperation.Write, true, JarvisToolUiEffect.Soft1Object,
-                A("Compass"), A("TraderWrite"), A("compass"), true,
-                "Require a resolved target and successful Soft1 write before reporting creation."),
+                A("Compass"), A("TraderWrite"), A("compass"), true),
 
             T("search_outlook_contacts", "Email", "Echo", JarvisToolOperation.Read, false, JarvisToolUiEffect.ContactList,
-                A("Echo", "Scout", "Jarvis"), A("Email", "Contacts"), A("echo-contact", "echo-draft", "echo-send", "scout"), false,
-                "If multiple contacts match, surface choices; do not silently select a recipient."),
+                A("Echo", "Scout", "Jarvis"), A("Email", "Contacts"), A("echo-contact", "echo-draft", "echo-send", "scout"), false),
 
             T("show_contact_results", "Email", "Echo", JarvisToolOperation.Read, false, JarvisToolUiEffect.ContactList,
-                A("Echo", "Scout", "Jarvis"), A("Email", "Contacts", "UiProjection"), A("echo-contact", "echo-draft", "scout"), false,
-                "Project only resolved contact results into the UI."),
+                A("Echo", "Scout", "Jarvis"), A("Email", "Contacts", "UiProjection"), A("echo-contact", "echo-draft", "scout"), false),
 
             T("filter_email_inbox", "Email", "Echo", JarvisToolOperation.Read, false, JarvisToolUiEffect.EmailList,
-                A("Echo", "Jarvis"), A("Email", "Inbox", "UiProjection"), A("echo-inbox"), false,
-                "Filter the visible inbox list; if nothing matches, return an empty result rather than unrelated messages."),
+                A("Echo", "Jarvis"), A("Email", "Inbox", "UiProjection"), A("echo-inbox"), false),
 
             T("read_email", "Email", "Echo", JarvisToolOperation.Read, false, JarvisToolUiEffect.ChatText,
-                A("Echo", "Scout", "Jarvis"), A("Email", "Inbox"), A("echo-inbox", "scout"), true,
-                "Read only the resolved message; never invent body/sender/attachment data."),
+                A("Echo", "Scout", "Jarvis"), A("Email", "Inbox"), A("echo-inbox", "scout"), true),
 
             T("download_email_attachment", "Email", "Echo", JarvisToolOperation.Read, false, JarvisToolUiEffect.File,
-                A("Echo", "Scout", "Jarvis"), A("Email", "Inbox", "Attachment"), A("echo-inbox", "scout"), true,
-                "Only expose the file after successful attachment download."),
+                A("Echo", "Scout", "Jarvis"), A("Email", "Inbox", "Attachment"), A("echo-inbox", "scout"), true),
 
             T("filter_calendar", "Calendar", "Echo", JarvisToolOperation.Read, false, JarvisToolUiEffect.CalendarList,
-                A("Echo", "Jarvis"), A("Calendar", "UiProjection"), A("echo-calendar"), false,
-                "Filter only actual calendar entries; empty match is a valid result."),
+                A("Echo", "Jarvis"), A("Calendar", "UiProjection"), A("echo-calendar"), false),
 
             T("show_calendar_entries", "Calendar", "Echo", JarvisToolOperation.Read, false, JarvisToolUiEffect.CalendarList,
-                A("Echo", "Jarvis"), A("Calendar", "UiProjection"), A("echo-calendar"), false,
-                "Project only returned calendar entries into the UI."),
+                A("Echo", "Jarvis"), A("Calendar", "UiProjection"), A("echo-calendar"), false),
 
             T("read_calendar", "Calendar", "Echo", JarvisToolOperation.Read, false, JarvisToolUiEffect.ChatText,
-                A("Echo", "Jarvis"), A("Calendar"), A("echo-calendar"), true,
-                "Do not infer missing meeting details beyond the retrieved event."),
+                A("Echo", "Jarvis"), A("Calendar"), A("echo-calendar"), true),
 
             T("create_outlook_event", "Calendar", "Echo", JarvisToolOperation.Write, true, JarvisToolUiEffect.ExternalAction,
-                A("Echo", "Scout", "Jarvis"), A("Calendar", "CalendarWrite"), A("echo-calendar", "scout"), true,
-                "Require resolved date/time/attendees as applicable and successful Outlook result."),
+                A("Echo", "Scout", "Jarvis"), A("Calendar", "CalendarWrite"), A("echo-calendar", "scout"), true),
 
             T("create_crm_task", "CRM", "Echo", JarvisToolOperation.Write, true, JarvisToolUiEffect.Soft1Object,
-                A("Echo", "Scout", "Jarvis"), A("CRM", "TaskWrite"), A("echo-calendar", "scout"), true,
-                "No completion claim without successful CRM task creation."),
+                A("Echo", "Scout", "Jarvis"), A("CRM", "TaskWrite"), A("echo-calendar", "scout"), true),
 
             T("send_email", "Email", "Echo", JarvisToolOperation.Write, true, JarvisToolUiEffect.ExternalAction,
-                A("Echo", "Scout", "Jarvis"), A("Email", "EmailWrite"), A("echo-send", "echo-export", "scout"), true,
-                "Recipient/content must be resolved and send success must come from the tool result."),
+                A("Echo", "Scout", "Jarvis"), A("Email", "EmailWrite"), A("echo-send", "echo-export", "scout"), true),
 
             T("reply_email", "Email", "Echo", JarvisToolOperation.Write, true, JarvisToolUiEffect.ExternalAction,
-                A("Echo", "Scout", "Jarvis"), A("Email", "EmailWrite"), A("echo-send", "scout"), true,
-                "Reply only to a resolved source message and require successful send result."),
+                A("Echo", "Scout", "Jarvis"), A("Email", "EmailWrite"), A("echo-send", "scout"), true),
 
             T("show_courier_documents", "Courier", "Sprint", JarvisToolOperation.Read, false, JarvisToolUiEffect.CourierList,
-                A("Sprint", "Jarvis"), A("Courier", "CourierRead", "UiProjection"), A("sprint"), false,
-                "Project only eligible returned documents into the Courier list."),
+                A("Sprint", "Jarvis"), A("Courier", "CourierRead", "UiProjection"), A("sprint"), false),
 
             T("get_courier_voucher_data", "Courier", "Sprint", JarvisToolOperation.Read, false, JarvisToolUiEffect.ChatText,
-                A("Sprint", "Jarvis"), A("Courier", "CourierRead"), A("sprint"), true,
-                "Return only persisted voucher/provider data for the resolved document."),
+                A("Sprint", "Jarvis"), A("Courier", "CourierRead"), A("sprint"), true),
 
             T("create_courier_voucher", "Courier", "Sprint", JarvisToolOperation.Write, true, JarvisToolUiEffect.ExternalAction,
-                A("Sprint", "Jarvis"), A("Courier", "CourierWrite"), A("sprint"), true,
-                "Require a resolved document/provider and successful courier result before reporting voucher creation."),
+                A("Sprint", "Jarvis"), A("Courier", "CourierWrite"), A("sprint"), true),
 
             T("cancel_courier_voucher", "Courier", "Sprint", JarvisToolOperation.Write, true, JarvisToolUiEffect.ExternalAction,
-                A("Sprint", "Jarvis"), A("Courier", "CourierWrite"), A("sprint"), true,
-                "Require an existing resolved voucher and successful provider cancellation result."),
+                A("Sprint", "Jarvis"), A("Courier", "CourierWrite"), A("sprint"), true),
 
             T("open_url", "Browser", "Scout", JarvisToolOperation.Read, false, JarvisToolUiEffect.Browser,
-                A("Scout"), A("Browser", "InternetResearch"), A("scout"), false,
-                "Navigate only to the requested/research target; navigation success is not evidence of page facts."),
+                A("Scout"), A("Browser", "InternetResearch"), A("scout"), false),
 
             T("read_page_content", "Browser", "Scout", JarvisToolOperation.Read, false, JarvisToolUiEffect.ChatText,
-                A("Scout"), A("Browser", "InternetResearch"), A("scout"), true,
-                "Base claims only on content actually returned from the loaded page."),
+                A("Scout"), A("Browser", "InternetResearch"), A("scout"), true),
 
             T("extract_page_tables", "Browser", "Scout", JarvisToolOperation.Read, false, JarvisToolUiEffect.Table,
-                A("Scout"), A("Browser", "InternetResearch", "WebTable"), A("scout"), true,
-                "Return only tables actually extracted from the current page."),
+                A("Scout"), A("Browser", "InternetResearch", "WebTable"), A("scout"), true),
 
             T("create_order", "Orders", "Scout", JarvisToolOperation.Write, true, JarvisToolUiEffect.Soft1Object,
-                A("Scout"), A("OrderWrite", "BrowserAssistedAction"), A("scout"), true,
-                "Require all business keys/lines to be resolved and a successful Soft1 write before reporting creation.")
+                A("Scout"), A("OrderWrite", "BrowserAssistedAction"), A("scout"), true)
         };
 
         private static readonly JarvisToolPrerequisiteDescriptor[] Prerequisites =
@@ -361,6 +334,8 @@ namespace S1Jarvis.Core
                     issues.Add("Write tool without confirmation policy: " + tool.Name);
                 if (FindPrerequisites(tool.Name) == null)
                     issues.Add("Tool without prerequisite map: " + tool.Name);
+                if (string.IsNullOrWhiteSpace(JarvisPolicyRegistry.GetToolFallbackPolicy(tool.Name)))
+                    issues.Add("Tool without centralized fallback policy: " + tool.Name);
             }
 
             foreach (JarvisToolPrerequisiteDescriptor prerequisite in Prerequisites)
@@ -390,11 +365,10 @@ namespace S1Jarvis.Core
             string[] agents,
             string[] capabilities,
             string[] modes,
-            bool durable,
-            string fallback)
+            bool durable)
         {
             return new JarvisToolDescriptor(name, domain, owner, operation, confirmation, uiEffect,
-                agents, capabilities, modes, durable, fallback);
+                agents, capabilities, modes, durable);
         }
 
         private static JarvisToolPrerequisiteDescriptor P(
