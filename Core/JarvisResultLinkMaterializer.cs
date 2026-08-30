@@ -8,8 +8,8 @@ namespace S1Jarvis.Core
 {
     /// <summary>
     /// Deterministic presentation implementation for GLOBAL.ADDRESSABLE_RESULT_LINK.
-    /// The behavioral policy itself lives exclusively in JarvisPolicyRegistry.
-    /// This component only materializes links from authoritative executor outputs.
+    /// The behavioral policy itself lives in the central Policies Inventory.
+    /// This component only materializes links from authoritative executor/dataset outputs.
     /// </summary>
     internal static class JarvisResultLinkMaterializer
     {
@@ -31,6 +31,68 @@ namespace S1Jarvis.Core
                 .Where(x => !string.IsNullOrWhiteSpace(x))
                 .Distinct(StringComparer.OrdinalIgnoreCase)
                 .ToArray();
+        }
+
+        /// <summary>
+        /// Materializes a link for one table cell only when the same row contains
+        /// the authoritative identity required by the registered URI mapping.
+        /// It never guesses SOSOURCE/object ids from labels or series names.
+        /// </summary>
+        internal static string MaterializeDatasetCell(JObject row, string columnName, string displayValue)
+        {
+            string display = EscapeMarkdownLabel(string.IsNullOrWhiteSpace(displayValue)
+                ? JarvisPolicySettings.Presentation.NullDisplay
+                : displayValue);
+            if (row == null || string.IsNullOrWhiteSpace(columnName)) return string.Empty;
+
+            string column = columnName.Trim().ToUpperInvariant();
+
+            if (column == "FINCODE" || column == "FINDOC")
+            {
+                int sosource = ReadInt(row, "SOSOURCE");
+                int findoc = ReadInt(row, "FINDOC");
+                if (sosource > 0 && findoc > 0)
+                    return "[" + display + "](doc:" + sosource + ":" + findoc + ")";
+            }
+
+            if (column == "SOACTION" || column == "SOACTIONID")
+            {
+                int soaction = ReadInt(row, columnName);
+                if (soaction > 0)
+                    return "[" + display + "](doc:2021:" + soaction + ")";
+            }
+
+            if (column == "MTRL")
+            {
+                int mtrl = ReadInt(row, columnName);
+                if (mtrl > 0)
+                    return "[" + display + "](item:" + mtrl + ")";
+            }
+
+            if (column == "PATH" || column == "FILE_PATH")
+            {
+                string path = ReadString(row, columnName);
+                if (!string.IsNullOrWhiteSpace(path))
+                {
+                    try
+                    {
+                        string fullPath = Path.GetFullPath(path.Trim());
+                        return "[" + display + "](" + fullPath + ")";
+                    }
+                    catch { return string.Empty; }
+                }
+            }
+
+            if (column == "URL" || column == "WEBLINK" || column == "PDFLINK")
+            {
+                string url = ReadString(row, columnName);
+                if (!string.IsNullOrWhiteSpace(url) &&
+                    (url.StartsWith("https://", StringComparison.OrdinalIgnoreCase) ||
+                     url.StartsWith("http://", StringComparison.OrdinalIgnoreCase)))
+                    return "[" + display + "](" + url.Trim() + ")";
+            }
+
+            return string.Empty;
         }
 
         private static void AddSoft1CrmLinks(JarvisTaskExecutionResult result, List<string> links)
@@ -125,34 +187,27 @@ namespace S1Jarvis.Core
             return (value ?? string.Empty)
                 .Replace("\\", "\\\\")
                 .Replace("[", "\\[")
-                .Replace("]", "\\]");
+                .Replace("]", "\\]")
+                .Replace("|", "\\|")
+                .Replace("\r", " ")
+                .Replace("\n", " ");
         }
 
         private static int ReadInt(JObject outputs, string property)
         {
-            if (outputs == null || outputs[property] == null) return 0;
+            if (outputs == null || string.IsNullOrWhiteSpace(property)) return 0;
+            JProperty p = outputs.Properties().FirstOrDefault(x => string.Equals(x.Name, property, StringComparison.OrdinalIgnoreCase));
+            if (p == null || p.Value == null) return 0;
             int value;
-            return int.TryParse(outputs[property].ToString(), out value) ? value : 0;
+            return int.TryParse(p.Value.ToString(), out value) ? value : 0;
         }
 
         private static string ReadString(JObject outputs, string property)
         {
-            if (outputs == null || outputs[property] == null || outputs[property].Type == JTokenType.Null)
-                return string.Empty;
-            return outputs[property].ToString();
-        }
-    }
-
-    /// <summary>
-    /// Compatibility facade for existing call sites. This type contains no policy
-    /// inventory or behavioral rule; it delegates to the deterministic materializer.
-    /// New code should call JarvisResultLinkMaterializer directly.
-    /// </summary>
-    internal static class JarvisResultLinkPolicy
-    {
-        internal static string[] BuildMarkdownLinks(JarvisTaskExecutionResult result)
-        {
-            return JarvisResultLinkMaterializer.BuildMarkdownLinks(result);
+            if (outputs == null || string.IsNullOrWhiteSpace(property)) return string.Empty;
+            JProperty p = outputs.Properties().FirstOrDefault(x => string.Equals(x.Name, property, StringComparison.OrdinalIgnoreCase));
+            if (p == null || p.Value == null || p.Value.Type == JTokenType.Null) return string.Empty;
+            return p.Value.ToString();
         }
     }
 }
