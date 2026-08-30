@@ -381,7 +381,10 @@ namespace S1Jarvis.Core
 
             foreach (JarvisValidatedTaskNode node in planning.Graph.Nodes.Where(x => x != null && x.Descriptor != null))
             {
-                if (!RefersToCurrentOperator(node.IntentFragment)) continue;
+                JarvisPrerequisiteResolutionItem assignee = node.Prerequisites.FirstOrDefault(x => x != null && string.Equals(x.InputName, "assignee", StringComparison.OrdinalIgnoreCase));
+                if (assignee == null || assignee.Value == null ||
+                    !string.Equals(assignee.Value.ToString(), "__CURRENT_OPERATOR__", StringComparison.Ordinal))
+                    continue;
 
                 bool needsActor = false;
                 foreach (string toolName in node.Descriptor.Tools ?? new string[0])
@@ -402,23 +405,14 @@ namespace S1Jarvis.Core
 
                 if (!needsActor) continue;
 
-                SetResolvedRuntimeValue(node, "actorUserId", new JValue(currentUserId), "Current operator resolved deterministically from the active Soft1 session.");
-                JarvisPrerequisiteResolutionItem assignee = node.Prerequisites.FirstOrDefault(x => x != null && string.Equals(x.InputName, "assignee", StringComparison.OrdinalIgnoreCase));
-                if (assignee != null && assignee.Value == null)
-                {
-                    assignee.Value = new JValue(currentUserId);
-                    assignee.Kind = JarvisPrerequisiteResolutionKind.ResolvedFromRouting;
-                    assignee.Reason = "Self-assignment resolved deterministically to the active Soft1 operator.";
-                }
+                SetResolvedRuntimeValue(node, "actorUserId", new JValue(currentUserId), "Current operator semantic marker resolved deterministically from the active Soft1 session.");
+                assignee.Value = new JValue(currentUserId);
+                assignee.Kind = JarvisPrerequisiteResolutionKind.ResolvedFromRouting;
+                assignee.Reason = "__CURRENT_OPERATOR__ resolved deterministically to the active Soft1 operator.";
             }
         }
 
-        private static bool RefersToCurrentOperator(string fragment)
-        {
-            string value = (fragment ?? string.Empty).ToLowerInvariant();
-            return value.Contains("βάλε μου") || value.Contains("βαλε μου") || value.Contains("για μένα") || value.Contains("για μενα") ||
-                   value.Contains("σε εμένα") || value.Contains("σε εμενα") || value.Contains("my task") || value.Contains("assign to me");
-        }
+
 
         private static void SetResolvedRuntimeValue(JarvisValidatedTaskNode node, string inputName, JToken value, string reason)
         {

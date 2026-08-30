@@ -186,7 +186,7 @@ namespace S1Jarvis.Core
                 "CreateCrmTask απαιτεί resolved assignee/actor evidence πριν το write. Σε 0 ή πολλαπλά πραγματικά matches ζήτησε clarification· ποτέ guessed actorUserId.", agents: A("Echo", "Jarvis"), tasks: A("CreateCrmTask"), domains: A("CRM"), priority: 820),
 
             P("CRM.CURRENT_OPERATOR_IS_RUNTIME_CONTEXT", JarvisPolicyScope.Validation, JarvisPolicyEnforcement.Both,
-                "Όταν το semantic intent δηλώνει self-assignment/current operator, ο actor resolve γίνεται deterministic από το ενεργό Soft1 session user context και όχι με name lookup ή lexical patch.", agents: A("Echo", "Jarvis"), tasks: A("CreateCrmTask"), priority: 819),
+                "Όταν το semantic intent δηλώνει self-assignment/current operator, το decomposition γράφει assignee=__CURRENT_OPERATOR__. Το runtime μετατρέπει μόνο αυτό το semantic marker deterministic στο ενεργό Soft1 UserId. Δεν χρησιμοποιούνται phrase lists, name lookup ή lexical patches για self-assignment.", agents: A("Echo", "Jarvis"), tasks: A("CreateCrmTask"), priority: 819),
 
             P("CRM.TRADER_REFERENCE_PAIR", JarvisPolicyScope.Validation, JarvisPolicyEnforcement.Both,
                 "Αν CRM task συνδέεται με συγκεκριμένο trader, τα trader id/type evidence πρέπει να είναι συνεπή και να προέρχονται από resolved entity context. Αν δεν αφορά trader, δεν επινοείται σύνδεση.", agents: A("Echo", "Jarvis"), tasks: A("CreateCrmTask"), priority: 818),
