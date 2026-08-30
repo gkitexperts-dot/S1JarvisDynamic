@@ -31,6 +31,16 @@ Read together with `AGENTS.md`. This is the current orchestration checkpoint and
   - If an agent says it lacks tools/access while the exact request carried registered tools, Jarvis rejects that prose and retries once with the same logical agent/session target.
   - Real tool/backend/permission errors are never hidden.
 
+## Open architecture item — deterministic semantic ambiguity before document queries
+
+- [ ] Add a central deterministic semantic ambiguity guard before `ReportData` executes document queries.
+  - Generic document terms such as "τιμολόγια" must not cause Jarvis/model code to silently choose a narrower business scope such as sales vs purchases when that choice changes the dataset.
+  - The guard must use authoritative central document/business knowledge, not prompt-specific keyword branches.
+  - If more than one valid business scope remains possible, Jarvis must ask one concise clarification before SQL execution/export/write actions.
+  - The clarified scope becomes binding structured context for the whole graph (`ReportData` -> `ExportData` -> CRM/email/calendar descriptions as applicable).
+  - FPRMS remains the authoritative row-level document-type discriminator; this TODO concerns pre-query business-scope ambiguity, not FPRMS classification.
+  - Acceptance: a generic invoice request must either resolve to one authoritative scope from explicit context or ask clarification; it must never silently invent "πωλήσεων", "αγορών" or another narrowing assumption.
+
 ## Current implementation commits
 
 - `26f4c7e22a51bfeb1b3850be8d7ae880cc83ddec` — owner-agent task-local prerequisite state.
