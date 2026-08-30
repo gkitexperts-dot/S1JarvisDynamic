@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Net;
@@ -793,9 +793,18 @@ namespace S1Jarvis.Core
             switch (name)
             {
                 case "query_data":
-                    return JarvisTools.ExecuteQueryData(xSupport, input["sql"]?.ToString());
+                {
+                    string scopedSql = JarvisDocumentCompanyScopePolicy.EnforceIfFindocQuery(
+                        xSupport, input["sql"]?.ToString());
+                    return JarvisTools.ExecuteQueryData(xSupport, scopedSql);
+                }
                 case "export_query_to_file":
-                    return JarvisTools.ExecuteExportQueryToFile(xSupport, input);
+                {
+                    JObject scopedInput = input == null ? new JObject() : (JObject)input.DeepClone();
+                    scopedInput["sql"] = JarvisDocumentCompanyScopePolicy.EnforceIfFindocQuery(
+                        xSupport, scopedInput["sql"]?.ToString());
+                    return JarvisTools.ExecuteExportQueryToFile(xSupport, scopedInput);
+                }
                 case "open_url":
                     return JarvisTools.ExecuteOpenUrl(input["url"]?.ToString(), onNavigate);
                 case "read_page_content":
