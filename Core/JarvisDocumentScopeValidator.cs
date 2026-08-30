@@ -26,12 +26,14 @@ namespace S1Jarvis.Core
             if (rows == null || rows.Count == 0) return new string[0];
 
             var violations = new List<string>();
+            bool sawClassifiableMetadata = false;
             foreach (JObject row in rows.OfType<JObject>())
             {
                 foreach (string typeText in ReadDocumentTypeTexts(row))
                 {
                     string category = Classify(typeText);
                     if (string.IsNullOrWhiteSpace(category)) continue;
+                    sawClassifiableMetadata = true;
                     if (!string.Equals(category, scope, StringComparison.OrdinalIgnoreCase))
                     {
                         violations.Add(typeText.Trim());
@@ -40,6 +42,13 @@ namespace S1Jarvis.Core
                     break;
                 }
             }
+
+            if (!sawClassifiableMetadata)
+                return new[]
+                {
+                    "Specific document_scope='" + scope +
+                    "' cannot be verified because returned rows contain no classifiable authoritative document-type metadata."
+                };
 
             if (violations.Count == 0) return new string[0];
             return new[]
