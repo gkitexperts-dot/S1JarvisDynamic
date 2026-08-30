@@ -55,30 +55,29 @@ namespace S1Jarvis.UI
                     return;
                 }
 
-                // Local file links are rendered through the WebView2 page. Chromium
-                // may URL-encode spaces in a filesystem path (for example
-                // "Jarvis Exports" -> "Jarvis%20Exports") before postCommand sends
-                // the open_file command to C#. Normalize only that command at the UI
-                // boundary so File.Exists/Process.Start always receive a Windows path.
-                // This is generic Jarvis UI behavior and is intentionally unrelated
-                // to the selected AI provider or agent routing.
                 await InstallLocalFilePathNormalizationAsync();
-
                 await SetProviderBootInteractionLockedAsync(true);
 
-                // This class-level Loaded handler is the guaranteed startup entry.
-                // Start provisioning here directly; do not wait for a second Loaded
-                // subscription that may never be attached or fired.
+                // Single-flight startup rule:
+                // EnableProviderHealthCheck may already have attached and started the
+                // authoritative ProviderHealth Loaded handler. If so, this boot gate
+                // must only wait for its state and must NOT issue a second /health call.
+                // If no health startup handler was enabled, the gate becomes the one
+                // authoritative provisioning owner and wires shutdown cleanup itself.
                 if (!_providerHealthCheckEnabled)
                 {
                     _providerHealthCheckEnabled = true;
                     Unloaded += ProviderHealthCheck_Unloaded;
-                }
 
-                JarvisAgentRuntimeSnapshot.Reset();
-                VerilicAiMessagesClient.ResetRuntimeTargetSnapshot();
-                DebugLog.Log("[AI-SESSION-REGISTRY] boot provisioning start (boot gate)");
-                await RefreshProviderHealthStatusAsync(false);
+                    JarvisAgentRuntimeSnapshot.Reset();
+                    VerilicAiMessagesClient.ResetRuntimeTargetSnapshot();
+                    DebugLog.Log("[AI-SESSION-REGISTRY] boot provisioning start (boot gate)");
+                    await RefreshProviderHealthStatusAsync(false);
+                }
+                else
+                {
+                    DebugLog.Log("[AI-SESSION-REGISTRY] boot gate joined existing provisioning");
+                }
 
                 // ProviderHealth owns the authoritative startup state. Keep the
                 // gate closed through licence/routing/model/provider checks and
@@ -91,20 +90,17 @@ namespace S1Jarvis.UI
                         return;
                     }
 
-                    // An error is a final visible provider state, but the provider
-                    // is not usable. Keep the two action buttons disabled instead
-                    // of letting a prompt/file enter a known-broken runtime.
                     if (string.Equals(_providerHealthState, "error", StringComparison.Ordinal))
                         return;
 
                     await Task.Delay(100);
                 }
+
+                DebugLog.Log("[provider-boot-gate] provider_state_timeout");
             }
             catch (Exception ex)
             {
                 DebugLog.Log("[provider-boot-gate] EXCEPTION: " + ex);
-                // Fail closed: if the boot gate itself fails, do not deliberately
-                // re-enable interaction before provider readiness is established.
             }
         }
 
