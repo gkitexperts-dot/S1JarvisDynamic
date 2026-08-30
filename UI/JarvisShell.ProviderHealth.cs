@@ -3,6 +3,7 @@ using System.Text;
 using System.Threading.Tasks;
 using System.Windows;
 using S1Jarvis.Access;
+using S1Jarvis.Access.Verilic;
 using S1Jarvis.Core;
 
 namespace S1Jarvis.UI
@@ -21,6 +22,15 @@ namespace S1Jarvis.UI
 
             _providerHealthCheckEnabled = true;
             Loaded += ProviderHealthCheck_Loaded;
+            Closed += ProviderHealthCheck_Closed;
+        }
+
+        private void ProviderHealthCheck_Closed(object sender, EventArgs e)
+        {
+            Closed -= ProviderHealthCheck_Closed;
+            JarvisAgentRuntimeSnapshot.Reset();
+            VerilicAiMessagesClient.ResetRuntimeTargetSnapshot();
+            DebugLog.Log("[AI-SESSION-REGISTRY] cleared on Jarvis shutdown");
         }
 
         private async void ProviderHealthCheck_Loaded(object sender, RoutedEventArgs e)
@@ -44,11 +54,11 @@ namespace S1Jarvis.UI
                     webView.CoreWebView2 == null)
                     return;
 
-                // One Jarvis shell opening = one immutable AI routing snapshot.
-                // This is the ONLY normal runtime point that loads effective
-                // Agent/Provider/Model targets from Verilic. Later prompts reuse
-                // JarvisAgentRuntimeSnapshot and never refresh routing mid-session.
+                // BOOT is the normal provisioning boundary. Keep all existing
+                // licence/activation/identity checks, then load the complete
+                // Agent + Provider + Model + API credential registry once.
                 JarvisAgentRuntimeSnapshot.Reset();
+                VerilicAiMessagesClient.ResetRuntimeTargetSnapshot();
                 await RefreshProviderHealthStatusAsync(false);
             }
             catch
@@ -71,25 +81,6 @@ namespace S1Jarvis.UI
 
             try
             {
-                // HEALTH after startup is a view of the immutable startup
-                // snapshot, not a second Verilic routing/health fetch. Changes
-                // made in Verilic intentionally become effective only after the
-                // Jarvis shell is closed and opened again.
-                if (explicitCommand)
-                {
-                    if (JarvisAgentRuntimeSnapshot.IsInitialized)
-                    {
-                        PostProviderHealthSnapshotCommandResult();
-                    }
-                    else
-                    {
-                        PostProviderHealthCommandResult(
-                            "AI agent: το startup snapshot δεν είναι διαθέσιμο. Κλείσε και άνοιξε ξανά τον Jarvis.",
-                            "error");
-                    }
-                    return;
-                }
-
                 if (string.IsNullOrWhiteSpace(_agentAccountRef))
                 {
                     message = "AI agent: δεν υπάρχει ενεργή άδεια/agent";
@@ -101,31 +92,38 @@ namespace S1Jarvis.UI
                 }
 
                 await ShowProviderHealthStatusAsync(
-                    explicitCommand ? "AI agents: έλεγχος..." : "AI provider: έλεγχος σύνδεσης...",
+                    explicitCommand
+                        ? "AI agents: ανανέωση provisioning..."
+                        : "AI provider: έλεγχος σύνδεσης και provisioning...",
                     "checking");
 
-                // SINGLE remote agent-schema load. The startup Health response
-                // itself returns Jarvis + every helper Provider/Model target.
-                // Do not pre-resolve routing/model here and do not refresh it later.
+                // The ONLY allowed remote AI-provisioning points are:
+                //   1) Jarvis boot
+                //   2) explicit HEALTH command
+                // Normal prompts never call Verilic.
                 var probe = new JarvisAgentHealthProbe();
                 JarvisAgentHealthResult result = await probe.ProbeAsync(
                     _xSupport,
                     _agentAccountRef);
                 model = result == null ? null : result.Model;
 
-                if (result.Ready)
+                if (result != null && result.Ready)
                 {
                     string snapshotIssue;
-                    if (!JarvisAgentRuntimeSnapshot.TryInitialize(
-                        result.Targets,
-                        out snapshotIssue))
+                    bool accepted = explicitCommand
+                        ? JarvisAgentRuntimeSnapshot.TryRefresh(result.Targets, out snapshotIssue)
+                        : JarvisAgentRuntimeSnapshot.TryInitialize(result.Targets, out snapshotIssue);
+
+                    if (!accepted)
                     {
-                        message = "AI provider: μη έγκυρο startup agent snapshot" +
-                            (string.IsNullOrWhiteSpace(snapshotIssue)
-                                ? string.Empty
-                                : " · " + snapshotIssue);
+                        message = explicitCommand
+                            ? "AI provider: το HEALTH provisioning απορρίφθηκε — διατηρήθηκε το προηγούμενο session registry"
+                            : "AI provider: μη έγκυρο startup agent provisioning";
+                        if (!string.IsNullOrWhiteSpace(snapshotIssue))
+                            message += " · " + snapshotIssue;
                         state = "error";
-                        DebugLog.Log("[AI-STARTUP-SNAPSHOT] rejected: " +
+                        DebugLog.Log("[AI-SESSION-REGISTRY] " +
+                            (explicitCommand ? "refresh rejected: " : "startup rejected: ") +
                             (snapshotIssue ?? "unknown"));
                     }
                     else
@@ -134,7 +132,9 @@ namespace S1Jarvis.UI
                         string provider = string.IsNullOrWhiteSpace(result.Provider)
                             ? "provider"
                             : result.Provider;
-                        message = "AI provider: συνδεδεμένος · " + provider + " · " + model;
+                        message = explicitCommand
+                            ? "AI provider: HEALTH refresh ολοκληρώθηκε · " + provider + " · " + model
+                            : "AI provider: συνδεδεμένος · " + provider + " · " + model;
                         state = "ready";
                     }
                 }
@@ -142,6 +142,11 @@ namespace S1Jarvis.UI
                 {
                     message = BuildProviderHealthFailureMessage(result, model);
                     state = "error";
+                    if (explicitCommand && JarvisAgentRuntimeSnapshot.IsInitialized)
+                    {
+                        message += " · διατηρήθηκε το προηγούμενο session registry";
+                        DebugLog.Log("[AI-SESSION-REGISTRY] HEALTH refresh failed; previous registry preserved");
+                    }
                 }
 
                 await ShowProviderHealthStatusAsync(message, state);
@@ -153,11 +158,14 @@ namespace S1Jarvis.UI
                         PostProviderHealthCommandResult(result, message, state);
                 }
             }
-            catch
+            catch (Exception ex)
             {
                 message = "AI provider: ο έλεγχος απέτυχε" +
                     (string.IsNullOrWhiteSpace(model) ? string.Empty : " · " + model);
+                if (explicitCommand && JarvisAgentRuntimeSnapshot.IsInitialized)
+                    message += " · διατηρήθηκε το προηγούμενο session registry";
                 state = "error";
+                DebugLog.Log("[AI-SESSION-REGISTRY] HEALTH exception: " + ex.Message);
                 await ShowProviderHealthStatusAsync(message, state);
                 if (explicitCommand)
                     PostProviderHealthCommandResult(message, state);
@@ -173,16 +181,16 @@ namespace S1Jarvis.UI
             if (targets == null || targets.Count == 0)
             {
                 PostProviderHealthCommandResult(
-                    "AI agent: startup snapshot δεν είναι διαθέσιμο",
+                    "AI agent: session registry δεν είναι διαθέσιμο",
                     "error");
                 return;
             }
 
             var text = new StringBuilder();
-            text.AppendLine("### AI HEALTH — STARTUP SNAPSHOT");
+            text.AppendLine("### AI HEALTH — SESSION REGISTRY");
             text.AppendLine();
-            text.AppendLine("| Agent | Status | Provider | Model | Routing |");
-            text.AppendLine("|---|---|---|---|---|");
+            text.AppendLine("| Agent | Status | Provider | Model | Credential | Routing |");
+            text.AppendLine("|---|---|---|---|---|---|");
 
             foreach (JarvisAgentRuntimeTarget target in targets)
             {
@@ -190,13 +198,14 @@ namespace S1Jarvis.UI
                     .Append(" | ✓ Connected")
                     .Append(" | ").Append(string.IsNullOrWhiteSpace(target.Provider) ? "—" : target.Provider)
                     .Append(" | ").Append(string.IsNullOrWhiteSpace(target.Model) ? "—" : target.Model)
+                    .Append(" | Loaded")
                     .Append(" | ").Append(target.Inherited ? "Inherited" : "Dedicated")
                     .AppendLine(" |");
             }
 
             text.AppendLine();
-            text.Append("_Το routing/model snapshot φορτώθηκε στην εκκίνηση του Jarvis. " +
-                        "Αλλαγές στο Verilic εφαρμόζονται στην επόμενη εκκίνηση._");
+            text.Append("_Το registry βρίσκεται μόνο στη μνήμη του τρέχοντος Jarvis session. " +
+                        "Το HEALTH κάνει ρητό atomic refresh από το Verilic. Τα API keys δεν εμφανίζονται._");
             webView.CoreWebView2.PostWebMessageAsString(text.ToString().TrimEnd());
         }
 
@@ -217,19 +226,21 @@ namespace S1Jarvis.UI
             var text = new StringBuilder();
             text.AppendLine("### AI HEALTH");
             text.AppendLine();
-            text.AppendLine("| Agent | Status | Provider | Model | Routing |");
-            text.AppendLine("|---|---|---|---|---|");
+            text.AppendLine("| Agent | Status | Provider | Model | Credential | Routing |");
+            text.AppendLine("|---|---|---|---|---|---|");
 
             foreach (JarvisAgentHealthTargetResult target in result.Targets)
             {
                 string status = target.Ready ? "✓ Connected" : "✖ " + FriendlyTargetReason(target.ReasonCode);
                 string provider = string.IsNullOrWhiteSpace(target.Provider) ? "—" : target.Provider;
                 string targetModel = string.IsNullOrWhiteSpace(target.Model) ? "—" : target.Model;
+                string credential = string.IsNullOrWhiteSpace(target.ApiKey) ? "Missing" : "Loaded";
                 string routing = target.Inherited ? "Inherited" : "Dedicated";
                 text.Append("| ").Append(target.Agent ?? "—")
                     .Append(" | ").Append(status)
                     .Append(" | ").Append(provider)
                     .Append(" | ").Append(targetModel)
+                    .Append(" | ").Append(credential)
                     .Append(" | ").Append(routing)
                     .AppendLine(" |");
             }
@@ -304,7 +315,7 @@ namespace S1Jarvis.UI
             if (result != null && result.CreditsExhausted)
                 return "AI provider: τα credits έχουν εξαντληθεί" + suffix;
 
-            string reason = result?.ReasonCode ?? string.Empty;
+            string reason = result == null ? string.Empty : (result.ReasonCode ?? string.Empty);
             if (reason == "provider_timeout")
                 return "AI provider: timeout σύνδεσης" + suffix;
             if (reason == "provider_model_missing")
@@ -320,11 +331,9 @@ namespace S1Jarvis.UI
             if (reason == "provider_unsupported")
                 return "AI provider: μη υποστηριζόμενος provider" + suffix;
             if (reason == "provider_credential_unavailable")
-                return "AI provider: credential μη διαθέσιμο στον Verilic" + suffix;
+                return "AI provider: credential μη διαθέσιμο στο provisioning" + suffix;
             if (reason == "agent_account_unavailable")
                 return "AI provider: agent account μη διαθέσιμο" + suffix;
-            if (reason == "provider_routing_changed")
-                return "AI provider: η δρομολόγηση άλλαξε" + suffix;
             if (reason.StartsWith("routing_", StringComparison.Ordinal) ||
                 reason.StartsWith("licence_", StringComparison.Ordinal) ||
                 reason.StartsWith("installation_", StringComparison.Ordinal) ||
@@ -337,9 +346,9 @@ namespace S1Jarvis.UI
                 reason == "provider_health_installation_invalid" ||
                 reason == "provider_health_response_invalid" ||
                 reason == "provider_health_failed")
-                return "AI provider: αποτυχία Verilic health check" + suffix;
+                return "AI provider: αποτυχία Verilic provisioning/health" + suffix;
 
-            return "AI provider: πρόβλημα σύνδεσης" + suffix;
+            return "AI provider: πρόβλημα provisioning/σύνδεσης" + suffix;
         }
 
         private static string BuildProviderDiagnosticSuffix(JarvisAgentHealthResult result)
