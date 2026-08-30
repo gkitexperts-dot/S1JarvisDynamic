@@ -5,8 +5,8 @@ using System.Linq;
 namespace S1Jarvis.Core
 {
     /// <summary>
-    /// Cross-checks orchestration task metadata against the canonical tool/routing
-    /// inventory and the centralized policy plane before semantic planning is
+    /// Cross-checks orchestration task metadata against canonical tool/routing,
+    /// policy, knowledge and durable-state invariants before semantic planning is
     /// allowed to become authoritative.
     /// </summary>
     internal static class JarvisTaskRegistryAudit
@@ -18,6 +18,7 @@ namespace S1Jarvis.Core
             issues.AddRange(JarvisTaskContractAudit.Validate());
             issues.AddRange(JarvisPolicyRegistry.ValidateInventory());
             issues.AddRange(JarvisAgentContextBuilder.ValidateCoverage());
+            issues.AddRange(JarvisArchitectureRegressionAudit.Validate());
 
             foreach (JarvisTaskDescriptor task in JarvisTaskRegistry.AllTasks)
             {
@@ -108,19 +109,13 @@ namespace S1Jarvis.Core
             bool hasConfirmingTool = tools.Any(x => x.RequiresConfirmation);
 
             if (hasConfirmingTool && !task.RequiresConfirmation)
-            {
                 issues.Add("Task exposes a confirming tool without task confirmation: " + task.TaskType);
-            }
 
             if (task.Operation == JarvisTaskOperation.Read && hasConfirmingTool)
-            {
                 issues.Add("Read task contains a state-changing tool: " + task.TaskType);
-            }
 
             if (task.Operation == JarvisTaskOperation.Mixed)
-            {
                 issues.Add("Mixed-operation task must be split into atomic read/write tasks: " + task.TaskType);
-            }
         }
 
         private static void ValidateDependencies(JarvisTaskDescriptor task, List<string> issues)
