@@ -49,27 +49,25 @@ namespace S1Jarvis.Core
             }
         }
 
+        /// <summary>
+        /// Closed contexts are transparent so prompts that fall back to legacy chat
+        /// do not accidentally create stale orchestration state. An active context
+        /// contributes structured state to semantic decomposition without deciding
+        /// whether the current message is a follow-up by words or phrases.
+        /// </summary>
         internal string PreparePrompt(string currentUserMessage)
         {
             lock (_sync)
             {
+                string current = currentUserMessage ?? string.Empty;
                 if (!_open)
-                {
-                    ResetCore();
-                    _runId = Guid.NewGuid().ToString("N");
-                    _originalIntent = currentUserMessage ?? string.Empty;
-                    _open = true;
-                }
+                    return current;
 
-                _latestMessage = currentUserMessage ?? string.Empty;
-                if (string.Equals(_originalIntent, _latestMessage, StringComparison.Ordinal) &&
-                    _explicitFacts.Count == 0 && _completed.Count == 0 && string.IsNullOrWhiteSpace(_pendingObjectId))
-                    return _latestMessage;
-
+                _latestMessage = current;
                 JObject context = BuildSnapshotUnsafe();
                 return "[JARVIS_ACTIVE_ORCHESTRATION_CONTEXT]\n" +
                        context.ToString(Formatting.None) +
-                       "\n[CURRENT_OPERATOR_MESSAGE]\n" + _latestMessage;
+                       "\n[CURRENT_OPERATOR_MESSAGE]\n" + current;
             }
         }
 
@@ -128,9 +126,7 @@ namespace S1Jarvis.Core
             {
                 if (session == null || !session.HasPending)
                 {
-                    _pendingObjectId = null;
-                    _pendingPayload = null;
-                    _pendingPayloadHash = null;
+                    ClearPendingUnsafe();
                     return;
                 }
                 _pendingObjectId = session.PendingObjectId;
@@ -141,12 +137,7 @@ namespace S1Jarvis.Core
 
         internal void ClearPendingConfirmation()
         {
-            lock (_sync)
-            {
-                _pendingObjectId = null;
-                _pendingPayload = null;
-                _pendingPayloadHash = null;
-            }
+            lock (_sync) ClearPendingUnsafe();
         }
 
         internal void Invalidate(string objectId)
@@ -158,17 +149,17 @@ namespace S1Jarvis.Core
                 _completed.Remove(objectId);
                 _verifiedOutputs.Remove(objectId);
                 if (string.Equals(_pendingObjectId, objectId, StringComparison.OrdinalIgnoreCase))
-                {
-                    _pendingObjectId = null;
-                    _pendingPayload = null;
-                    _pendingPayloadHash = null;
-                }
+                    ClearPendingUnsafe();
             }
         }
 
         internal void Complete()
         {
-            lock (_sync) _open = false;
+            lock (_sync)
+            {
+                _open = false;
+                ClearPendingUnsafe();
+            }
         }
 
         internal void Clear()
@@ -211,6 +202,13 @@ namespace S1Jarvis.Core
             };
         }
 
+        private void ClearPendingUnsafe()
+        {
+            _pendingObjectId = null;
+            _pendingPayload = null;
+            _pendingPayloadHash = null;
+        }
+
         private void ResetCore()
         {
             _runId = null;
@@ -222,9 +220,7 @@ namespace S1Jarvis.Core
             _graph.RemoveAll();
             _completed.Clear();
             _invalidated.Clear();
-            _pendingObjectId = null;
-            _pendingPayload = null;
-            _pendingPayloadHash = null;
+            ClearPendingUnsafe();
         }
     }
 }
