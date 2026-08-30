@@ -7,10 +7,24 @@ namespace S1Jarvis.Core
     /// <summary>
     /// Presentation-only observer over the authoritative ORCH-CONTROL state stream.
     /// It never mutates orchestration state and never dispatches work.
+    /// Lifecycle begin/end is owned by the canonical business router so activity
+    /// remains visible even while decomposition/planning is running.
     /// </summary>
     internal static class JarvisOrchestrationActivityBus
     {
         internal static event Action<string, string> ActivityChanged;
+
+        internal static void BeginBusinessTurn()
+        {
+            if (!JarvisPolicySettings.Orchestration.ActivityLifecycleCoversEveryBusinessTurn) return;
+            Publish("update", JarvisPolicySettings.Orchestration.DefaultActivityCaption);
+        }
+
+        internal static void EndBusinessTurn()
+        {
+            if (!JarvisPolicySettings.Orchestration.ActivityLifecycleCoversEveryBusinessTurn) return;
+            Publish("end", string.Empty);
+        }
 
         internal static void ObserveLogMessage(string message)
         {
@@ -40,13 +54,13 @@ namespace S1Jarvis.Core
 
                 if (string.Equals(phase, "confirmation_payload_frozen", StringComparison.OrdinalIgnoreCase))
                 {
-                    Publish("update", "Περιμένω επιβεβαίωση για την αποστολή email…");
+                    Publish("update", "Περιμένω επιβεβαίωση για την εξωτερική ενέργεια…");
                     return;
                 }
 
                 if (string.Equals(phase, "confirmation_granted", StringComparison.OrdinalIgnoreCase))
                 {
-                    Publish("update", "Η αποστολή επιβεβαιώθηκε· εκτελώ την ενέργεια…");
+                    Publish("update", "Η ενέργεια επιβεβαιώθηκε· συνεχίζω την εκτέλεση…");
                     return;
                 }
 
@@ -56,9 +70,6 @@ namespace S1Jarvis.Core
                     Publish("update", "Ελέγχω το επόμενο διαθέσιμο βήμα…");
                     return;
                 }
-
-                if (string.Equals(phase, "echo_result_accepted", StringComparison.OrdinalIgnoreCase))
-                    Publish("end", string.Empty);
             }
             catch
             {
@@ -70,6 +81,8 @@ namespace S1Jarvis.Core
         {
             if (string.Equals(taskType, "ReportData", StringComparison.OrdinalIgnoreCase))
                 return "Αναζητώ και επαληθεύω τα δεδομένα…";
+            if (string.Equals(taskType, "ExportData", StringComparison.OrdinalIgnoreCase))
+                return "Δημιουργώ και επαληθεύω το αρχείο…";
             if (string.Equals(taskType, "CreateCrmTask", StringComparison.OrdinalIgnoreCase))
                 return "Καταχωρώ την εργασία στο Soft1…";
             if (string.Equals(taskType, "CreateCalendarEvent", StringComparison.OrdinalIgnoreCase))
