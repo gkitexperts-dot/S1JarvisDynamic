@@ -7,9 +7,9 @@ using Newtonsoft.Json.Linq;
 namespace S1Jarvis.Core
 {
     /// <summary>
-    /// Single policy-context entry point for every logical-agent dispatch and
-    /// Jarvis internal planning/presentation stage. It derives scope only from
-    /// authoritative registries; callers never maintain local policy lists.
+    /// Single context entry point for every logical-agent dispatch and Jarvis
+    /// internal stage. Behavioral policy comes only from JarvisPolicyRegistry;
+    /// fact/schema knowledge comes only from JarvisKnowledgeCompanion.
     /// </summary>
     internal static class JarvisAgentContextBuilder
     {
@@ -27,6 +27,16 @@ namespace S1Jarvis.Core
             string[] domains;
             ResolveTaskScope(taskType, out tools, out domains);
             return JarvisPolicyRegistry.BuildDeterministicPolicyContext(agentName, taskType, domains, tools);
+        }
+
+        internal static string BuildKnowledgeContext(string taskType)
+        {
+            return JarvisKnowledgeCompanion.BuildForTask(taskType);
+        }
+
+        internal static string BuildKnowledgeContextForRequest(string agentName, string providerRequestJson)
+        {
+            return JarvisKnowledgeCompanion.BuildForRequest(agentName, providerRequestJson);
         }
 
         internal static string BuildDecompositionPolicyContext()
@@ -50,14 +60,6 @@ namespace S1Jarvis.Core
                 "Sage", "__help", new string[] { "Help" }, new string[0]);
         }
 
-        /// <summary>
-        /// Resolves authoritative policy for any outbound AI request. In modern
-        /// orchestration an explicit registered task is enough. In legacy
-        /// multi-tool requests we inspect every attached registered tool and
-        /// union the policies of ALL task owners represented by that surface,
-        /// so a request spanning Forge+Echo+Compass, for example, cannot lose
-        /// policies merely because one model/agent was chosen for transport.
-        /// </summary>
         internal static string BuildPolicyContextForRequest(string agentName, string providerRequestJson)
         {
             if (string.IsNullOrWhiteSpace(agentName)) return string.Empty;
@@ -81,14 +83,10 @@ namespace S1Jarvis.Core
                     .ToArray();
 
             var policies = new Dictionary<string, JarvisPolicyDescriptor>(StringComparer.OrdinalIgnoreCase);
-
-            // Global rules applicable to the physical request surface.
             AddTrainingPolicies(
                 policies,
                 JarvisPolicyRegistry.Resolve(agentName, null, ResolveDomains(requestTools), requestTools, null));
 
-            // Task/owner/domain/tool rules for every registered task represented
-            // by the attached tools, not only the transport-selected agent.
             foreach (JarvisTaskDescriptor task in candidateTasks)
             {
                 string[] tools;
@@ -99,8 +97,6 @@ namespace S1Jarvis.Core
                     JarvisPolicyRegistry.Resolve(task.OwnerAgent, task.TaskType, domains, tools, null));
             }
 
-            // HelpLookup is the registered Sage task while __help is the
-            // internal conversational stage. They intentionally share policy.
             if (candidateTasks.Any(x => string.Equals(x.TaskType, "HelpLookup", StringComparison.OrdinalIgnoreCase)))
             {
                 AddTrainingPolicies(
@@ -112,9 +108,8 @@ namespace S1Jarvis.Core
         }
 
         /// <summary>
-        /// Every registered task must receive centralized training and
-        /// deterministic policy context. This is deliberately checked for all
-        /// owners, not only currently promoted executors.
+        /// Every registered task must receive centralized policy context; tasks
+        /// exposing query_data must also receive a centralized schema slice.
         /// </summary>
         internal static string[] ValidateCoverage()
         {
@@ -130,6 +125,8 @@ namespace S1Jarvis.Core
                 if (string.IsNullOrWhiteSpace(deterministic))
                     issues.Add("Registered task has no centralized deterministic policy context: " + task.TaskType + " owner=" + task.OwnerAgent);
             }
+
+            issues.AddRange(JarvisKnowledgeCompanion.ValidateCoverage());
             return issues.Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
         }
 
@@ -184,7 +181,7 @@ namespace S1Jarvis.Core
             JArray tools = request["tools"] as JArray;
             if (tools == null) return new string[0];
             return tools.OfType<JObject>()
-                .Select(x => (string)x["name"])
+                .Select(x => (string)x["name"] ?? (string)x["function"]?["name"])
                 .Where(x => !string.IsNullOrWhiteSpace(x))
                 .Select(x => x.Trim())
                 .Distinct(StringComparer.OrdinalIgnoreCase)
