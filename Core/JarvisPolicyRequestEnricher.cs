@@ -37,8 +37,7 @@ namespace S1Jarvis.Core
             {
                 ["type"] = "text",
                 ["text"] = authoritative,
-                ["cache_control"] = new JObject { ["type"] = "ephemeral" },
-                ["jarvis_policy_context"] = true
+                ["cache_control"] = new JObject { ["type"] = "ephemeral" }
             });
 
             return request.ToString(Formatting.None);
@@ -70,7 +69,6 @@ namespace S1Jarvis.Core
             JArray blocks = system as JArray;
             if (blocks == null) return system.ToString().IndexOf(Marker, StringComparison.Ordinal) >= 0;
             return blocks.OfType<JObject>().Any(block =>
-                (bool?)block["jarvis_policy_context"] == true ||
                 ((string)block["text"] ?? string.Empty).IndexOf(Marker, StringComparison.Ordinal) >= 0);
         }
     }
