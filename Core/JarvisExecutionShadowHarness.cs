@@ -131,7 +131,7 @@ namespace S1Jarvis.Core
                 if (crmStep != null)
                 {
                     string[] crmAuthIssues;
-                    if (!GrantInitialInstructionAuthorization(coordinator, crmStep, out crmAuthIssues))
+                    if (!coordinator.GrantConfirmation(crmStep.ObjectId, out crmAuthIssues))
                     {
                         deferredIssues.Add(BuildFailureMessage("Η εργασία CRM χρειάζεται επίλυση πριν εκτελεστεί.", crmAuthIssues));
                     }
@@ -175,50 +175,42 @@ namespace S1Jarvis.Core
                 JarvisExecutionStepSnapshot calendarStep = FindStep(coordinator.Inspect(), "CreateCalendarEvent", "Echo");
                 if (calendarStep != null)
                 {
-                    string calendarFragment = ReadIntentFragment(planning, calendarStep.ObjectId);
-                    if (LooksLikeExternalInvitation(calendarFragment))
+                    JObject calendarInputs;
+                    string[] calendarInputIssues;
+                    if (!coordinator.TryGetDispatchInputs(calendarStep.ObjectId, out calendarInputs, out calendarInputIssues))
                     {
-                        deferredIssues.Add("Το Outlook event περιλαμβάνει πιθανή πρόσκληση τρίτου και χρειάζεται ξεχωριστή επιβεβαίωση για attendees.");
+                        deferredIssues.Add(BuildFailureMessage("Το calendar event χρειάζεται επιπλέον πληροφορίες.", calendarInputIssues));
                     }
                     else
                     {
                         string[] calendarAuthIssues;
-                        if (!GrantInitialInstructionAuthorization(coordinator, calendarStep, out calendarAuthIssues))
+                        if (!coordinator.GrantConfirmation(calendarStep.ObjectId, out calendarAuthIssues))
                         {
-                            deferredIssues.Add(BuildFailureMessage("Το calendar event χρειάζεται επίλυση πριν εκτελεστεί.", calendarAuthIssues));
+                            deferredIssues.Add(BuildFailureMessage("Το calendar event χρειάζεται ρητή επιβεβαίωση πριν εκτελεστεί.", calendarAuthIssues));
                         }
                         else
                         {
-                            JObject calendarInputs;
-                            string[] calendarInputIssues;
-                            if (!coordinator.TryGetDispatchInputs(calendarStep.ObjectId, out calendarInputs, out calendarInputIssues))
+                            string[] calendarBeginIssues;
+                            if (!coordinator.TryBeginDispatch(calendarStep.ObjectId, out calendarBeginIssues))
                             {
-                                deferredIssues.Add(BuildFailureMessage("Το calendar event χρειάζεται επιπλέον πληροφορίες.", calendarInputIssues));
+                                deferredIssues.Add(BuildFailureMessage("Το calendar event δεν είναι ακόμη dispatchable.", calendarBeginIssues));
                             }
                             else
                             {
-                                string[] calendarBeginIssues;
-                                if (!coordinator.TryBeginDispatch(calendarStep.ObjectId, out calendarBeginIssues))
+                                LogSnapshot("echo_calendar_running", coordinator.Inspect(), coordinator.GetDispatchableObjectIds(), calendarStep.ObjectId, null, null);
+                                JarvisTaskExecutionResult calendarResult = await JarvisControlledEchoTaskExecutor.ExecuteCreateCalendarEventAsync(xSupport, calendarStep.ObjectId, calendarInputs);
+                                string[] calendarAcceptIssues;
+                                if (!coordinator.TryAcceptResult(calendarResult, out calendarAcceptIssues))
                                 {
-                                    deferredIssues.Add(BuildFailureMessage("Το calendar event δεν είναι ακόμη dispatchable.", calendarBeginIssues));
+                                    deferredIssues.Add(BuildFailureMessage("Ο Jarvis απέρριψε το αποτέλεσμα του calendar event.", calendarAcceptIssues));
                                 }
                                 else
                                 {
-                                    LogSnapshot("echo_calendar_running", coordinator.Inspect(), coordinator.GetDispatchableObjectIds(), calendarStep.ObjectId, null, null);
-                                    JarvisTaskExecutionResult calendarResult = await JarvisControlledEchoTaskExecutor.ExecuteCreateCalendarEventAsync(xSupport, calendarStep.ObjectId, calendarInputs);
-                                    string[] calendarAcceptIssues;
-                                    if (!coordinator.TryAcceptResult(calendarResult, out calendarAcceptIssues))
-                                    {
-                                        deferredIssues.Add(BuildFailureMessage("Ο Jarvis απέρριψε το αποτέλεσμα του calendar event.", calendarAcceptIssues));
-                                    }
+                                    LogSnapshot(calendarResult.Success ? "echo_calendar_accepted" : "echo_calendar_failed", coordinator.Inspect(), coordinator.GetDispatchableObjectIds(), calendarStep.ObjectId, calendarResult.Success ? null : calendarResult.Issues.ToArray(), null);
+                                    if (calendarResult.Success)
+                                        completedSideEffects.Add(BuildCalendarStatus(calendarResult));
                                     else
-                                    {
-                                        LogSnapshot(calendarResult.Success ? "echo_calendar_accepted" : "echo_calendar_failed", coordinator.Inspect(), coordinator.GetDispatchableObjectIds(), calendarStep.ObjectId, calendarResult.Success ? null : calendarResult.Issues.ToArray(), null);
-                                        if (calendarResult.Success)
-                                            completedSideEffects.Add(BuildCalendarStatus(calendarResult));
-                                        else
-                                            deferredIssues.Add(BuildFailureMessage("Το Outlook calendar event δεν ολοκληρώθηκε.", calendarResult.Issues.ToArray()));
-                                    }
+                                        deferredIssues.Add(BuildFailureMessage("Το Outlook calendar event δεν ολοκληρώθηκε.", calendarResult.Issues.ToArray()));
                                 }
                             }
                         }
@@ -366,19 +358,6 @@ namespace S1Jarvis.Core
                 string.Equals(x.OwnerAgent, owner, StringComparison.OrdinalIgnoreCase));
         }
 
-        private static bool GrantInitialInstructionAuthorization(JarvisExecutionCoordinator coordinator, JarvisExecutionStepSnapshot step, out string[] issues)
-        {
-            if (step == null || !step.RequiresConfirmation)
-            {
-                issues = new string[0];
-                return true;
-            }
-            bool ok = coordinator.GrantConfirmation(step.ObjectId, out issues);
-            if (ok)
-                DebugLog.Log("[ORCH-CONTROL] initial explicit instruction authorizes local task object=" + step.ObjectId + " task=" + step.TaskType);
-            return ok;
-        }
-
         private static void ResolveDeterministicSendRecipient(JarvisShadowOrchestrationResult planning)
         {
             if (planning == null || planning.Graph == null) return;
@@ -452,19 +431,6 @@ namespace S1Jarvis.Core
             item.Value = value == null ? null : value.DeepClone();
             item.Kind = JarvisPrerequisiteResolutionKind.ResolvedFromRouting;
             item.Reason = reason ?? string.Empty;
-        }
-
-        private static string ReadIntentFragment(JarvisShadowOrchestrationResult planning, string objectId)
-        {
-            JarvisValidatedTaskNode node = planning == null || planning.Graph == null ? null : planning.Graph.Nodes.FirstOrDefault(x => x != null && string.Equals(x.ObjectId, objectId, StringComparison.OrdinalIgnoreCase));
-            return node == null ? string.Empty : node.IntentFragment ?? string.Empty;
-        }
-
-        private static bool LooksLikeExternalInvitation(string fragment)
-        {
-            string value = (fragment ?? string.Empty).ToLowerInvariant();
-            return value.Contains("κάλεσε") || value.Contains("καλεσε") || value.Contains("πρόσκλη") || value.Contains("προσκλη") ||
-                   value.Contains("invite") || value.Contains("attendee") || value.Contains("συμμετέχ") || value.Contains("συμμετεχ");
         }
 
         private static string FindResolvedSendInput(JarvisShadowOrchestrationResult planning, string inputName)
