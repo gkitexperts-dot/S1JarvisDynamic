@@ -11,6 +11,7 @@ namespace S1Jarvis.Core
         ResolvedFromRouting,
         LookupPlanned,
         DependencyPending,
+        OwnerAgentPending,
         NeedsUserInput,
         Invalid
     }
@@ -52,6 +53,7 @@ namespace S1Jarvis.Core
         public bool IsStructurallyValid { get { return Descriptor != null && ValidationIssues.Count == 0 && Prerequisites.All(x => x != null && x.Kind != JarvisPrerequisiteResolutionKind.Invalid); } }
         public bool NeedsUserInput { get { return Prerequisites.Any(x => x != null && x.Kind == JarvisPrerequisiteResolutionKind.NeedsUserInput); } }
         public bool HasLookupWork { get { return Prerequisites.Any(x => x != null && x.Kind == JarvisPrerequisiteResolutionKind.LookupPlanned); } }
+        public bool HasOwnerAgentWork { get { return Prerequisites.Any(x => x != null && x.Kind == JarvisPrerequisiteResolutionKind.OwnerAgentPending); } }
         public bool HasPendingDependencies { get { return Prerequisites.Any(x => x != null && x.Kind == JarvisPrerequisiteResolutionKind.DependencyPending); } }
         public bool ReadyForDependencyBinding { get { return IsStructurallyValid && !NeedsUserInput; } }
     }
@@ -121,16 +123,57 @@ namespace S1Jarvis.Core
             if (inventoryLookup != null)
                 return new JarvisPrerequisiteResolutionItem { InputName = inputName, Required = true, Kind = JarvisPrerequisiteResolutionKind.LookupPlanned, Lookup = inventoryLookup, Reason = "Required input can be produced by an upstream tool declared in the tool prerequisite inventory." };
 
+            // A logical task contract and a native tool-call argument contract are
+            // not the same boundary. These values are intentionally left for the
+            // registered owner agent to materialize from its atomic intent fragment,
+            // current session context and ONLY the tools registered for that task.
+            // They must not be converted into fake cross-object dependencies and
+            // they must not make Jarvis claim that a capability is unavailable.
+            if (IsOwnerAgentResolvable(descriptor.TaskType, inputName))
+                return new JarvisPrerequisiteResolutionItem
+                {
+                    InputName = inputName,
+                    Required = true,
+                    Kind = JarvisPrerequisiteResolutionKind.OwnerAgentPending,
+                    Reason = "Task-local execution argument is resolved by the registered owner agent from the atomic intent fragment and its scoped tools/context."
+                };
+
             if (descriptor.DependencyCapabilities != null && descriptor.DependencyCapabilities.Length > 0)
                 return new JarvisPrerequisiteResolutionItem { InputName = inputName, Required = true, Kind = JarvisPrerequisiteResolutionKind.DependencyPending, Reason = "No local literal/lookup is available yet; task declares upstream dependency capabilities. Cross-object binding runs later." };
 
-            return new JarvisPrerequisiteResolutionItem { InputName = inputName, Required = true, Kind = JarvisPrerequisiteResolutionKind.NeedsUserInput, Reason = "Required business input is not present and no safe lookup/dependency path is registered." };
+            return new JarvisPrerequisiteResolutionItem { InputName = inputName, Required = true, Kind = JarvisPrerequisiteResolutionKind.NeedsUserInput, Reason = "Required business input is not present and no safe lookup/dependency/owner-agent path is registered." };
         }
 
         private static bool IsCompositionDependency(string taskType, string inputName)
         {
             return string.Equals(taskType, "SendEmail", StringComparison.OrdinalIgnoreCase) &&
                    string.Equals(inputName, "body", StringComparison.OrdinalIgnoreCase);
+        }
+
+        private static bool IsOwnerAgentResolvable(string taskType, string inputName)
+        {
+            string key = (taskType ?? string.Empty) + ":" + (inputName ?? string.Empty);
+            switch (key.ToLowerInvariant())
+            {
+                // Recipient is normally present in the atomic fragment as a literal
+                // email address/name and Echo owns any contact lookup needed to resolve it.
+                case "sendemail:to":
+                    return true;
+
+                // CRM/calendar wording is intentionally natural-language. Echo owns
+                // conversion of the fragment into title/description/date/subject/start
+                // and may use the scoped query/contact tools for identity resolution.
+                case "createcrmtask:title":
+                case "createcrmtask:description":
+                case "createcrmtask:fromdate":
+                case "createcrmtask:assignee":
+                case "createcalendarevent:subject":
+                case "createcalendarevent:start":
+                    return true;
+
+                default:
+                    return false;
+            }
         }
 
         private static JarvisPrerequisiteResolutionItem ResolveDeterministicIntentValue(JarvisIntentObject intentObject, JarvisTaskDescriptor descriptor, string inputName)
