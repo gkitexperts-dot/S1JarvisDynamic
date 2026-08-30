@@ -100,6 +100,14 @@ namespace S1Jarvis.Access.Verilic
                 providerRequestJson = ApplyProductIdentityPolicy(
                     agentName,
                     providerRequestJson);
+
+                // Last-mile centralized policy injection must run AFTER the legacy
+                // optimizer because compact modes may replace the system envelope.
+                // Every logical agent therefore reaches the provider with the
+                // authoritative policy context resolved from registries.
+                providerRequestJson = JarvisPolicyRequestEnricher.Apply(
+                    agentName,
+                    providerRequestJson);
             }
             catch (Exception ex)
             {
