@@ -39,11 +39,18 @@ namespace S1Jarvis.Core
             {
                 string planningPrompt = activeContext == null ? userPrompt : activeContext.PreparePrompt(userPrompt);
                 JarvisShadowOrchestrationResult planning = await JarvisOrchestrationShadowCoordinator.RunAsync(xSupport, planningPrompt);
+                bool replaceActiveRun = planning != null && planning.IntentObjects != null &&
+                    planning.IntentObjects.ActiveContextDisposition == JarvisActiveContextDisposition.Replace;
                 if (!IsSupportedControlledPlan(planning))
+                {
+                    if (activeContext != null && activeContext.HasOpenRun && replaceActiveRun)
+                        activeContext.Clear();
                     return outcome;
+                }
 
                 outcome.Handled = true;
-                if (activeContext != null && !activeContext.HasOpenRun) activeContext.Begin(userPrompt);
+                if (activeContext != null && (!activeContext.HasOpenRun || replaceActiveRun))
+                    activeContext.Begin(userPrompt);
                 bool hasEmail = HasTask(planning, "SendEmail");
                 if (hasEmail && pendingSession == null)
                 {

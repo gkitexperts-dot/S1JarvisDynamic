@@ -158,6 +158,9 @@ namespace S1Jarvis.Core
             P("DECOMPOSER.SELF_CONTAINED_OBJECT", JarvisPolicyScope.Task, JarvisPolicyEnforcement.Training,
                 "Κάθε atomic object είναι self-contained: κληρονομεί από το ίδιο user prompt μόνο τα shared facts που απαιτούνται για αυτόνομη εκτέλεση. Μην αφήνεις fragment τύπου 'και στο calendar' που χάνει πρόσωπο, ημερομηνία, ώρα, entity ή recipient.", agents: A("Jarvis"), tasks: A("__decomposition"), priority: 915),
 
+            P("DECOMPOSER.ACTIVE_CONTEXT_DISPOSITION", JarvisPolicyScope.Orchestration, JarvisPolicyEnforcement.Both,
+                "Όταν υπάρχει JARVIS_ACTIVE_ORCHESTRATION_CONTEXT, δήλωσε activeContextDisposition=continue μόνο αν το CURRENT_OPERATOR_MESSAGE διορθώνει, συμπληρώνει, επιβεβαιώνει ή συνεχίζει το ενεργό run. Δήλωσε replace όταν είναι ανεξάρτητο νέο αίτημα. Η απόφαση είναι semantic και δεν βασίζεται σε λίστα λέξεων/φράσεων.", agents: A("Jarvis"), tasks: A("__decomposition"), priority: 914),
+
             P("DECOMPOSER.REGISTERED_TASKS_ONLY", JarvisPolicyScope.Task, JarvisPolicyEnforcement.Both,
                 "Task candidates προέρχονται αποκλειστικά από το Task Registry. Μην επινοείς agents, tools, capabilities ή task types και μην μαντεύεις resolved ids/series/emails.", agents: A("Jarvis"), tasks: A("__decomposition"), priority: 910),
 

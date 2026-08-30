@@ -16,6 +16,12 @@ namespace S1Jarvis.Core
         Invalid
     }
 
+    internal enum JarvisActiveContextDisposition
+    {
+        Replace,
+        Continue
+    }
+
     internal sealed class JarvisIntentObject
     {
         public JarvisIntentObject()
@@ -54,9 +60,11 @@ namespace S1Jarvis.Core
         {
             OriginalPrompt = originalPrompt ?? string.Empty;
             Objects = new List<JarvisIntentObject>();
+            ActiveContextDisposition = JarvisActiveContextDisposition.Replace;
         }
 
         public string OriginalPrompt { get; private set; }
+        public JarvisActiveContextDisposition ActiveContextDisposition { get; set; }
         public List<JarvisIntentObject> Objects { get; private set; }
 
         public bool AllResolved
@@ -83,7 +91,7 @@ namespace S1Jarvis.Core
 
             return
                 "Είσαι το semantic decomposition stage του Jarvis. Εφάρμοσε υποχρεωτικά το JARVIS_POLICY_CONTEXT και επέστρεψε ΜΟΝΟ έγκυρο JSON. " +
-                "Schema: {\"intentObjects\":[{\"id\":\"o1\",\"intentFragment\":\"...\",\"inputs\":{\"name\":\"value\"},\"candidates\":[{\"taskType\":\"...\",\"confidence\":0.94}]}]}\n\n" +
+                "Schema: {\"activeContextDisposition\":\"replace|continue\",\"intentObjects\":[{\"id\":\"o1\",\"intentFragment\":\"...\",\"inputs\":{\"name\":\"value\"},\"candidates\":[{\"taskType\":\"...\",\"confidence\":0.94}]}]}\n\n" +
                 policyContext;
         }
 
@@ -104,6 +112,22 @@ namespace S1Jarvis.Core
             JObject root;
             try { root = JObject.Parse(responseJson); }
             catch (JsonException ex) { errors.Add("Intent decomposer returned invalid JSON: " + ex.Message); issues = errors.ToArray(); return false; }
+
+            bool hasActiveContext = (originalPrompt ?? string.Empty).IndexOf(
+                "[JARVIS_ACTIVE_ORCHESTRATION_CONTEXT]", StringComparison.Ordinal) >= 0;
+            string disposition = root["activeContextDisposition"] == null
+                ? string.Empty
+                : root["activeContextDisposition"].ToString().Trim();
+            if (string.Equals(disposition, "continue", StringComparison.OrdinalIgnoreCase))
+                objectSet.ActiveContextDisposition = JarvisActiveContextDisposition.Continue;
+            else if (string.Equals(disposition, "replace", StringComparison.OrdinalIgnoreCase) ||
+                     (!hasActiveContext && string.IsNullOrWhiteSpace(disposition)))
+                objectSet.ActiveContextDisposition = JarvisActiveContextDisposition.Replace;
+            else if (hasActiveContext && string.IsNullOrWhiteSpace(disposition))
+                errors.Add("Intent decomposer must return activeContextDisposition for an active orchestration context.");
+            else
+                errors.Add("Invalid activeContextDisposition: " + disposition);
+
             JArray array = root["intentObjects"] as JArray;
             if (array == null) { errors.Add("Intent decomposer response is missing intentObjects array."); issues = errors.ToArray(); return false; }
             var ids = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
