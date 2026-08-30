@@ -135,9 +135,6 @@ namespace S1Jarvis.Core
             JarvisPrerequisiteResolutionItem deterministic = ResolveDeterministicIntentValue(intentObject, descriptor, inputName);
             if (deterministic != null) return deterministic;
 
-            // Composition inputs are deliberately dependency-first. A task that says
-            // "send its/their information" must consume a registered upstream result;
-            // Jarvis must not ask the user to retype content already produced by another object.
             if (IsCompositionDependency(descriptor.TaskType, inputName))
                 return new JarvisPrerequisiteResolutionItem { InputName = inputName, Required = true, Kind = JarvisPrerequisiteResolutionKind.DependencyPending, Reason = "Content is expected from another autonomous task object and must be bound through a registered dependency rule." };
 
@@ -149,12 +146,6 @@ namespace S1Jarvis.Core
             if (inventoryLookup != null)
                 return new JarvisPrerequisiteResolutionItem { InputName = inputName, Required = true, Kind = JarvisPrerequisiteResolutionKind.LookupPlanned, Lookup = inventoryLookup, Reason = "Required input can be produced by an upstream tool declared in the tool prerequisite inventory." };
 
-            // A logical task contract and a native tool-call argument contract are
-            // not the same boundary. These values are intentionally left for the
-            // registered owner agent to materialize from its atomic intent fragment,
-            // current session context and ONLY the tools registered for that task.
-            // They must not be converted into fake cross-object dependencies and
-            // they must not make Jarvis claim that a capability is unavailable.
             if (IsOwnerAgentResolvable(descriptor.TaskType, inputName))
                 return new JarvisPrerequisiteResolutionItem
                 {
@@ -195,14 +186,8 @@ namespace S1Jarvis.Core
             string key = (taskType ?? string.Empty) + ":" + (inputName ?? string.Empty);
             switch (key.ToLowerInvariant())
             {
-                // Recipient is normally present in the atomic fragment as a literal
-                // email address/name and Echo owns any contact lookup needed to resolve it.
                 case "sendemail:to":
                     return true;
-
-                // CRM/calendar wording is intentionally natural-language. Echo owns
-                // conversion of the fragment into title/description/date/subject/start
-                // and may use the scoped query/contact tools for identity resolution.
                 case "createcrmtask:title":
                 case "createcrmtask:description":
                 case "createcrmtask:fromdate":
@@ -210,7 +195,6 @@ namespace S1Jarvis.Core
                 case "createcalendarevent:subject":
                 case "createcalendarevent:start":
                     return true;
-
                 default:
                     return false;
             }
@@ -226,12 +210,44 @@ namespace S1Jarvis.Core
                 return ResolvedRoutingValue(inputName, new JValue(score), "Confidence comes from the validated routing decision, not from user input.");
             }
             if (string.Equals(descriptor.TaskType, "CreateCrmTask", StringComparison.OrdinalIgnoreCase) && string.Equals(inputName, "assignee", StringComparison.OrdinalIgnoreCase))
+            {
+                if (HasExplicitDifferentAssigneeReference(intentObject.IntentFragment))
+                    return null;
                 return ResolvedRoutingValue(inputName, new JValue("__CURRENT_OPERATOR__"), "CRM.DEFAULT_ASSIGNEE_CURRENT_OPERATOR: no explicit different assignee was supplied, so the authenticated session operator is authoritative.");
+            }
             if (string.Equals(descriptor.TaskType, "SendEmail", StringComparison.OrdinalIgnoreCase) && string.Equals(inputName, "subject", StringComparison.OrdinalIgnoreCase))
                 return ResolvedRoutingValue(inputName, new JValue("S1 Jarvis"), "No explicit subject was supplied; the email task uses the neutral Jarvis subject rather than requiring redundant user input.");
             if (IsIntentTextContract(descriptor.TaskType, inputName))
                 return ResolvedRoutingValue(inputName, new JValue(intentObject.IntentFragment ?? string.Empty), "This task contract consumes the intent fragment as its business request/question.");
             return null;
+        }
+
+        private static bool HasExplicitDifferentAssigneeReference(string fragment)
+        {
+            string text = (fragment ?? string.Empty).Trim().ToLowerInvariant();
+            if (text.Length == 0) return false;
+
+            bool explicitAssignment =
+                text.Contains("ανάθεσ") || text.Contains("αναθεσ") ||
+                text.Contains("assign to") || text.Contains("assigned to") ||
+                text.Contains("βάλε στον") || text.Contains("βαλε στον") ||
+                text.Contains("βάλε στην") || text.Contains("βαλε στην") ||
+                text.Contains("task στον") || text.Contains("task στην") ||
+                text.Contains("εργασία στον") || text.Contains("εργασια στον") ||
+                text.Contains("εργασία στην") || text.Contains("εργασια στην");
+
+            if (!explicitAssignment) return false;
+
+            bool explicitSelf =
+                text.Contains("σε εμένα") || text.Contains("σε εμενα") ||
+                text.Contains("στον εαυτό μου") || text.Contains("στον εαυτο μου") ||
+                text.Contains("to me") || text.Contains("myself");
+
+            bool alsoNamesAnotherParty =
+                text.Contains(" και ") || text.Contains(" στον ") || text.Contains(" στην ") ||
+                text.Contains(" στον/") || text.Contains(" στην/");
+
+            return !explicitSelf || alsoNamesAnotherParty;
         }
 
         private static bool IsIntentTextContract(string taskType, string inputName)
@@ -292,10 +308,12 @@ namespace S1Jarvis.Core
             if (value.Type == JTokenType.String) return !string.IsNullOrWhiteSpace(value.ToString());
             return true;
         }
+
         private static JarvisPrerequisiteLookupDefinition L(string source, string strategy, string[] tools, string output, string ambiguityPolicy)
         {
             return new JarvisPrerequisiteLookupDefinition { Source = source ?? string.Empty, Strategy = strategy ?? string.Empty, Tools = tools ?? new string[0], Output = output ?? string.Empty, AmbiguityPolicy = ambiguityPolicy ?? "ask_user" };
         }
+
         private static string[] A(params string[] values) { return values ?? new string[0]; }
     }
 }
