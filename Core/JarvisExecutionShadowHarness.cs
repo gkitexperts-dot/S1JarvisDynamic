@@ -1,5 +1,7 @@
 using System;
+using System.Collections.Generic;
 using System.Linq;
+using System.Text.RegularExpressions;
 using System.Threading.Tasks;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
@@ -16,6 +18,10 @@ namespace S1Jarvis.Core
 
     internal static class JarvisExecutionShadowHarness
     {
+        private static readonly HashSet<string> PromotedControlledTasks = new HashSet<string>(
+            new[] { "ReportData", "SendEmail", "CreateCrmTask", "CreateCalendarEvent" },
+            StringComparer.OrdinalIgnoreCase);
+
         internal static async Task RunAndLogSafeAsync(XSupport xSupport, string userPrompt,
             JarvisPendingConfirmationSession pendingSession = null, JarvisDatasetSession datasetSession = null)
         {
@@ -31,109 +37,216 @@ namespace S1Jarvis.Core
             try
             {
                 JarvisShadowOrchestrationResult planning = await JarvisOrchestrationShadowCoordinator.RunAsync(xSupport, userPrompt);
-                bool reportOnly = IsSupportedReportOnlyPlan(planning);
-                bool reportEmail = IsSupportedReportEmailPlan(planning);
-                if (!reportOnly && !reportEmail) return outcome;
+                if (!IsSupportedControlledPlan(planning))
+                    return outcome;
 
                 outcome.Handled = true;
-                if (reportEmail && pendingSession == null)
+                bool hasEmail = HasTask(planning, "SendEmail");
+                if (hasEmail && pendingSession == null)
                 {
                     outcome.UserMessage = "Το controlled orchestration δεν έχει διαθέσιμο confirmation session.";
                     return outcome;
                 }
                 if (pendingSession != null) pendingSession.Clear();
 
+                // Resolve literals that are deterministic in the atomic fragment before
+                // the execution coordinator freezes any payload. Named recipients remain
+                // owner-agent/contact-resolution work; literal addresses do not need AI.
+                ResolveDeterministicSendRecipient(planning);
+
                 var coordinator = new JarvisExecutionCoordinator(planning.Graph, planning.Preview);
                 JarvisExecutionControlSnapshot before = coordinator.Inspect();
                 LogSnapshot("initial", before, coordinator.GetDispatchableObjectIds(), null, null, null);
-
-                JarvisExecutionStepSnapshot reportStep = before.Steps.FirstOrDefault(x => x != null &&
-                    string.Equals(x.TaskType, "ReportData", StringComparison.OrdinalIgnoreCase) &&
-                    string.Equals(x.OwnerAgent, "Atlas", StringComparison.OrdinalIgnoreCase));
-                if (reportStep == null)
+                if (!before.IsValid)
                 {
-                    outcome.UserMessage = "Ο Jarvis απέρριψε το plan: δεν βρέθηκε έγκυρο ReportData/Atlas βήμα.";
+                    outcome.UserMessage = BuildFailureMessage("Ο Jarvis απέρριψε το execution plan.", before.ValidationIssues.ToArray());
                     return outcome;
                 }
 
-                JObject dispatchInputs;
-                string[] inputIssues;
-                if (!coordinator.TryGetDispatchInputs(reportStep.ObjectId, out dispatchInputs, out inputIssues))
+                JarvisExecutionStepSnapshot reportStep = FindStep(before, "ReportData", "Atlas");
+                JarvisPresentationResult presentation = null;
+                string datasetJson = string.Empty;
+                string businessQuestion = string.Empty;
+
+                if (reportStep != null)
                 {
-                    LogSnapshot("dispatch_input_rejected", coordinator.Inspect(), coordinator.GetDispatchableObjectIds(), reportStep.ObjectId, inputIssues, null);
-                    outcome.UserMessage = BuildFailureMessage("Ο Jarvis απέρριψε τα inputs του Atlas.", inputIssues);
-                    return outcome;
+                    JObject reportInputs;
+                    string[] reportInputIssues;
+                    if (!coordinator.TryGetDispatchInputs(reportStep.ObjectId, out reportInputs, out reportInputIssues))
+                    {
+                        LogSnapshot("dispatch_input_rejected", coordinator.Inspect(), coordinator.GetDispatchableObjectIds(), reportStep.ObjectId, reportInputIssues, null);
+                        outcome.UserMessage = BuildFailureMessage("Ο Jarvis απέρριψε τα inputs του Atlas.", reportInputIssues);
+                        return outcome;
+                    }
+
+                    string[] beginIssues;
+                    if (!coordinator.TryBeginDispatch(reportStep.ObjectId, out beginIssues))
+                    {
+                        LogSnapshot("dispatch_rejected", coordinator.Inspect(), coordinator.GetDispatchableObjectIds(), reportStep.ObjectId, beginIssues, null);
+                        outcome.UserMessage = BuildFailureMessage("Ο Jarvis δεν επέτρεψε την εκτέλεση του Atlas.", beginIssues);
+                        return outcome;
+                    }
+
+                    LogSnapshot("running", coordinator.Inspect(), coordinator.GetDispatchableObjectIds(), reportStep.ObjectId, null, null);
+                    JarvisTaskExecutionResult reportResult = await JarvisControlledTaskExecutor.ExecuteReportDataAsync(xSupport, reportStep.ObjectId, reportInputs);
+                    if (!reportResult.Success)
+                    {
+                        string[] failedAcceptIssues;
+                        coordinator.TryAcceptResult(reportResult, out failedAcceptIssues);
+                        LogSnapshot("result_failed", coordinator.Inspect(), coordinator.GetDispatchableObjectIds(), reportStep.ObjectId, reportResult.Issues.ToArray(), null);
+                        outcome.UserMessage = BuildFailureMessage("Η ανάκτηση δεδομένων απέτυχε.", reportResult.Issues.ToArray());
+                        return outcome;
+                    }
+
+                    businessQuestion = reportInputs["business_question"] == null ? userPrompt : reportInputs["business_question"].ToString();
+                    datasetJson = reportResult.Outputs["dataset"] == null ? string.Empty : reportResult.Outputs["dataset"].ToString();
+                    if (datasetSession != null) datasetSession.TryCapture(businessQuestion, datasetJson);
+
+                    if (hasEmail)
+                    {
+                        string recipient = FindResolvedSendInput(planning, "to");
+                        presentation = await JarvisPresentationComposer.ComposeEmailAsync(xSupport, businessQuestion, datasetJson, recipient);
+                        if (presentation != null && !string.IsNullOrWhiteSpace(presentation.EmailBody))
+                            reportResult.Outputs["summary"] = presentation.EmailBody;
+                        if (presentation != null && !string.IsNullOrWhiteSpace(presentation.EmailSubject))
+                            ApplyResolvedSendInput(planning, "subject", presentation.EmailSubject);
+                    }
+                    else
+                    {
+                        presentation = await JarvisPresentationComposer.ComposeReportAsync(xSupport, businessQuestion, datasetJson);
+                    }
+
+                    string[] acceptIssues;
+                    if (!coordinator.TryAcceptResult(reportResult, out acceptIssues))
+                    {
+                        LogSnapshot("result_rejected", coordinator.Inspect(), coordinator.GetDispatchableObjectIds(), reportStep.ObjectId, acceptIssues, null);
+                        outcome.UserMessage = BuildFailureMessage("Ο Jarvis απέρριψε το αποτέλεσμα του Atlas.", acceptIssues);
+                        return outcome;
+                    }
+                    LogSnapshot("result_accepted", coordinator.Inspect(), coordinator.GetDispatchableObjectIds(), reportStep.ObjectId, null, null);
                 }
 
-                string[] beginIssues;
-                if (!coordinator.TryBeginDispatch(reportStep.ObjectId, out beginIssues))
+                var completedSideEffects = new List<string>();
+
+                // The initial imperative is authorization for the user's own Soft1 CRM
+                // task and a personal Outlook calendar item. They are reversible/local
+                // productivity actions in the mature product behavior. Email remains a
+                // separately-confirmed external send. Calendar invitations/attendees are
+                // NOT auto-authorized here.
+                JarvisExecutionStepSnapshot crmStep = FindStep(coordinator.Inspect(), "CreateCrmTask", "Echo");
+                if (crmStep != null)
                 {
-                    LogSnapshot("dispatch_rejected", coordinator.Inspect(), coordinator.GetDispatchableObjectIds(), reportStep.ObjectId, beginIssues, null);
-                    outcome.UserMessage = BuildFailureMessage("Ο Jarvis δεν επέτρεψε την εκτέλεση του Atlas.", beginIssues);
-                    return outcome;
+                    if (!GrantInitialInstructionAuthorization(coordinator, crmStep, out string[] crmAuthIssues))
+                    {
+                        outcome.UserMessage = BuildFailureMessage("Ο Jarvis δεν μπόρεσε να εξουσιοδοτήσει την εργασία CRM από τη ρητή αρχική εντολή.", crmAuthIssues);
+                        return outcome;
+                    }
+
+                    JObject crmInputs;
+                    string[] crmInputIssues;
+                    if (!coordinator.TryGetDispatchInputs(crmStep.ObjectId, out crmInputs, out crmInputIssues))
+                    {
+                        outcome.UserMessage = BuildFailureMessage("Ο Jarvis απέρριψε τα inputs της εργασίας CRM.", crmInputIssues);
+                        return outcome;
+                    }
+                    string[] crmBeginIssues;
+                    if (!coordinator.TryBeginDispatch(crmStep.ObjectId, out crmBeginIssues))
+                    {
+                        outcome.UserMessage = BuildFailureMessage("Ο Jarvis δεν επέτρεψε την εργασία CRM.", crmBeginIssues);
+                        return outcome;
+                    }
+                    LogSnapshot("echo_crm_running", coordinator.Inspect(), coordinator.GetDispatchableObjectIds(), crmStep.ObjectId, null, null);
+                    JarvisTaskExecutionResult crmResult = await JarvisControlledEchoTaskExecutor.ExecuteCreateCrmTaskAsync(xSupport, crmStep.ObjectId, crmInputs);
+                    string[] crmAcceptIssues;
+                    if (!coordinator.TryAcceptResult(crmResult, out crmAcceptIssues))
+                    {
+                        outcome.UserMessage = BuildFailureMessage("Ο Jarvis απέρριψε το αποτέλεσμα της εργασίας CRM.", crmAcceptIssues);
+                        return outcome;
+                    }
+                    LogSnapshot(crmResult.Success ? "echo_crm_accepted" : "echo_crm_failed", coordinator.Inspect(), coordinator.GetDispatchableObjectIds(), crmStep.ObjectId, crmResult.Success ? null : crmResult.Issues.ToArray(), null);
+                    if (!crmResult.Success)
+                    {
+                        outcome.UserMessage = BuildFailureMessage("Η δημιουργία εργασίας CRM απέτυχε.", crmResult.Issues.ToArray());
+                        return outcome;
+                    }
+                    completedSideEffects.Add(BuildCrmStatus(crmResult));
                 }
 
-                LogSnapshot("running", coordinator.Inspect(), coordinator.GetDispatchableObjectIds(), reportStep.ObjectId, null, null);
-                JarvisTaskExecutionResult executionResult = await JarvisControlledTaskExecutor.ExecuteReportDataAsync(xSupport, reportStep.ObjectId, dispatchInputs);
-
-                if (!executionResult.Success)
+                JarvisExecutionStepSnapshot calendarStep = FindStep(coordinator.Inspect(), "CreateCalendarEvent", "Echo");
+                if (calendarStep != null)
                 {
-                    string[] failedAcceptIssues;
-                    coordinator.TryAcceptResult(executionResult, out failedAcceptIssues);
-                    LogSnapshot("result_failed", coordinator.Inspect(), coordinator.GetDispatchableObjectIds(), reportStep.ObjectId, executionResult.Issues.ToArray(), null);
-                    outcome.UserMessage = BuildFailureMessage("Η ανάκτηση δεδομένων απέτυχε.", executionResult.Issues.ToArray());
-                    return outcome;
+                    string calendarFragment = ReadIntentFragment(planning, calendarStep.ObjectId);
+                    if (LooksLikeExternalInvitation(calendarFragment))
+                    {
+                        outcome.UserMessage = "Ο Jarvis χρειάζεται ξεχωριστή επιβεβαίωση πριν στείλει Outlook πρόσκληση σε τρίτους. Η προσωπική καταχώρηση χωρίς attendees μπορεί να εκτελεστεί άμεσα.";
+                        return outcome;
+                    }
+
+                    if (!GrantInitialInstructionAuthorization(coordinator, calendarStep, out string[] calendarAuthIssues))
+                    {
+                        outcome.UserMessage = BuildFailureMessage("Ο Jarvis δεν μπόρεσε να εξουσιοδοτήσει το προσωπικό calendar event από τη ρητή αρχική εντολή.", calendarAuthIssues);
+                        return outcome;
+                    }
+
+                    JObject calendarInputs;
+                    string[] calendarInputIssues;
+                    if (!coordinator.TryGetDispatchInputs(calendarStep.ObjectId, out calendarInputs, out calendarInputIssues))
+                    {
+                        outcome.UserMessage = BuildFailureMessage("Ο Jarvis απέρριψε τα inputs του calendar event.", calendarInputIssues);
+                        return outcome;
+                    }
+                    string[] calendarBeginIssues;
+                    if (!coordinator.TryBeginDispatch(calendarStep.ObjectId, out calendarBeginIssues))
+                    {
+                        outcome.UserMessage = BuildFailureMessage("Ο Jarvis δεν επέτρεψε το calendar event.", calendarBeginIssues);
+                        return outcome;
+                    }
+                    LogSnapshot("echo_calendar_running", coordinator.Inspect(), coordinator.GetDispatchableObjectIds(), calendarStep.ObjectId, null, null);
+                    JarvisTaskExecutionResult calendarResult = await JarvisControlledEchoTaskExecutor.ExecuteCreateCalendarEventAsync(xSupport, calendarStep.ObjectId, calendarInputs);
+                    string[] calendarAcceptIssues;
+                    if (!coordinator.TryAcceptResult(calendarResult, out calendarAcceptIssues))
+                    {
+                        outcome.UserMessage = BuildFailureMessage("Ο Jarvis απέρριψε το αποτέλεσμα του calendar event.", calendarAcceptIssues);
+                        return outcome;
+                    }
+                    LogSnapshot(calendarResult.Success ? "echo_calendar_accepted" : "echo_calendar_failed", coordinator.Inspect(), coordinator.GetDispatchableObjectIds(), calendarStep.ObjectId, calendarResult.Success ? null : calendarResult.Issues.ToArray(), null);
+                    if (!calendarResult.Success)
+                    {
+                        outcome.UserMessage = BuildFailureMessage("Η δημιουργία Outlook calendar event απέτυχε.", calendarResult.Issues.ToArray());
+                        return outcome;
+                    }
+                    completedSideEffects.Add(BuildCalendarStatus(calendarResult));
                 }
 
-                string businessQuestion = dispatchInputs["business_question"] == null ? userPrompt : dispatchInputs["business_question"].ToString();
-                string datasetJson = executionResult.Outputs["dataset"] == null ? string.Empty : executionResult.Outputs["dataset"].ToString();
-                if (datasetSession != null) datasetSession.TryCapture(businessQuestion, datasetJson);
-
-                JarvisPresentationResult presentation;
-                if (reportEmail)
+                if (!hasEmail)
                 {
-                    string recipient = FindResolvedSendInput(planning, "to");
-                    presentation = await JarvisPresentationComposer.ComposeEmailAsync(xSupport, businessQuestion, datasetJson, recipient);
-                    if (presentation != null && !string.IsNullOrWhiteSpace(presentation.EmailBody))
-                        executionResult.Outputs["summary"] = presentation.EmailBody;
-                    if (presentation != null && !string.IsNullOrWhiteSpace(presentation.EmailSubject))
-                        ApplyResolvedSendInput(planning, "subject", presentation.EmailSubject);
-                }
-                else
-                {
-                    presentation = await JarvisPresentationComposer.ComposeReportAsync(xSupport, businessQuestion, datasetJson);
-                }
-
-                string[] acceptIssues;
-                if (!coordinator.TryAcceptResult(executionResult, out acceptIssues))
-                {
-                    LogSnapshot("result_rejected", coordinator.Inspect(), coordinator.GetDispatchableObjectIds(), reportStep.ObjectId, acceptIssues, null);
-                    outcome.UserMessage = BuildFailureMessage("Ο Jarvis απέρριψε το αποτέλεσμα του Atlas.", acceptIssues);
-                    return outcome;
-                }
-
-                JarvisExecutionControlSnapshot after = coordinator.Inspect();
-                LogSnapshot("result_accepted", after, coordinator.GetDispatchableObjectIds(), reportStep.ObjectId, null, null);
-
-                if (reportOnly)
-                {
+                    string table = string.IsNullOrWhiteSpace(datasetJson) ? string.Empty : JarvisPresentationComposer.BuildMarkdownTable(datasetJson, 250);
                     string intro = presentation == null ? null : presentation.Intro;
-                    if (string.IsNullOrWhiteSpace(intro)) intro = "Βρήκα τα αποτελέσματα που ζήτησες:";
-                    string table = JarvisPresentationComposer.BuildMarkdownTable(datasetJson, 250);
+                    if (string.IsNullOrWhiteSpace(intro)) intro = "Ολοκλήρωσα την εντολή.";
                     outcome.Completed = true;
-                    outcome.UserMessage = intro + "\n\n" + table;
+                    outcome.UserMessage = BuildCombinedMessage(intro, table, completedSideEffects, null);
+                    return outcome;
+                }
+
+                JarvisExecutionStepSnapshot emailStep = FindStep(coordinator.Inspect(), "SendEmail", "Echo");
+                if (emailStep == null)
+                {
+                    outcome.UserMessage = "Ο Jarvis απέρριψε το plan: λείπει το SendEmail/Echo βήμα.";
                     return outcome;
                 }
 
                 string[] captureIssues;
                 if (!pendingSession.TryCapture(coordinator, out captureIssues))
                 {
-                    LogSnapshot("confirmation_payload_rejected", coordinator.Inspect(), coordinator.GetDispatchableObjectIds(), reportStep.ObjectId, captureIssues, null);
+                    LogSnapshot("confirmation_payload_rejected", coordinator.Inspect(), coordinator.GetDispatchableObjectIds(), emailStep.ObjectId, captureIssues, null);
                     outcome.UserMessage = BuildFailureMessage("Ο Jarvis δεν μπόρεσε να παγώσει το payload για επιβεβαίωση.", captureIssues);
                     return outcome;
                 }
+
                 LogSnapshot("confirmation_payload_frozen", coordinator.Inspect(), coordinator.GetDispatchableObjectIds(), pendingSession.PendingObjectId, null, pendingSession.PayloadHash);
-                outcome.UserMessage = BuildConfirmationMessage(pendingSession.FrozenPayload, presentation == null ? null : presentation.Intro);
+                string reportTable = string.IsNullOrWhiteSpace(datasetJson) ? string.Empty : JarvisPresentationComposer.BuildMarkdownTable(datasetJson, 250);
+                string confirmation = BuildConfirmationMessage(pendingSession.FrozenPayload, presentation == null ? null : presentation.Intro);
+                outcome.UserMessage = BuildCombinedMessage(null, reportTable, completedSideEffects, confirmation);
                 return outcome;
             }
             catch (Exception ex)
@@ -193,8 +306,7 @@ namespace S1Jarvis.Core
                 return outcome;
             }
 
-            JarvisExecutionControlSnapshot finalSnapshot = coordinator.Inspect();
-            LogSnapshot(echoResult.Success ? "echo_result_accepted" : "echo_result_failed", finalSnapshot, coordinator.GetDispatchableObjectIds(), objectId,
+            LogSnapshot(echoResult.Success ? "echo_result_accepted" : "echo_result_failed", coordinator.Inspect(), coordinator.GetDispatchableObjectIds(), objectId,
                 echoResult.Success ? null : echoResult.Issues.ToArray(), payloadHash);
             if (!echoResult.Success)
             {
@@ -213,25 +325,74 @@ namespace S1Jarvis.Core
             return pendingSession != null && pendingSession.HasPending && JarvisPendingConfirmationSession.IsAffirmativeConfirmation(userText);
         }
 
+        private static bool IsSupportedControlledPlan(JarvisShadowOrchestrationResult planning)
+        {
+            if (!IsBaseValid(planning) || planning.Preview.Entries.Count == 0) return false;
+            foreach (JarvisExecutionPlanEntry entry in planning.Preview.Entries)
+            {
+                if (entry == null || !PromotedControlledTasks.Contains(entry.TaskType)) return false;
+                JarvisTaskDescriptor descriptor = JarvisTaskRegistry.Find(entry.TaskType);
+                if (descriptor == null || !string.Equals(descriptor.OwnerAgent, entry.OwnerAgent, StringComparison.OrdinalIgnoreCase)) return false;
+            }
+            return true;
+        }
+
         private static bool IsBaseValid(JarvisShadowOrchestrationResult planning)
         {
             return planning != null && planning.GateEnabled && planning.Graph != null && planning.Preview != null && planning.Graph.IsValid && planning.Preview.IsValid;
         }
 
-        private static bool IsSupportedReportOnlyPlan(JarvisShadowOrchestrationResult planning)
+        private static bool HasTask(JarvisShadowOrchestrationResult planning, string taskType)
         {
-            if (!IsBaseValid(planning) || planning.Preview.Entries.Count != 1) return false;
-            JarvisExecutionPlanEntry entry = planning.Preview.Entries[0];
-            return entry != null && string.Equals(entry.TaskType, "ReportData", StringComparison.OrdinalIgnoreCase) &&
-                   string.Equals(entry.OwnerAgent, "Atlas", StringComparison.OrdinalIgnoreCase) && !entry.RequiresConfirmation;
+            return planning != null && planning.Preview != null && planning.Preview.Entries.Any(x => x != null && string.Equals(x.TaskType, taskType, StringComparison.OrdinalIgnoreCase));
         }
 
-        private static bool IsSupportedReportEmailPlan(JarvisShadowOrchestrationResult planning)
+        private static JarvisExecutionStepSnapshot FindStep(JarvisExecutionControlSnapshot snapshot, string taskType, string owner)
         {
-            if (!IsBaseValid(planning) || planning.Preview.Entries.Count != 2) return false;
-            JarvisExecutionPlanEntry report = planning.Preview.Entries.FirstOrDefault(x => x != null && string.Equals(x.TaskType, "ReportData", StringComparison.OrdinalIgnoreCase) && string.Equals(x.OwnerAgent, "Atlas", StringComparison.OrdinalIgnoreCase));
-            JarvisExecutionPlanEntry send = planning.Preview.Entries.FirstOrDefault(x => x != null && string.Equals(x.TaskType, "SendEmail", StringComparison.OrdinalIgnoreCase) && string.Equals(x.OwnerAgent, "Echo", StringComparison.OrdinalIgnoreCase));
-            return report != null && send != null && send.RequiresConfirmation && send.DependsOnObjectIds.Any(x => string.Equals(x, report.ObjectId, StringComparison.OrdinalIgnoreCase));
+            return snapshot == null ? null : snapshot.Steps.FirstOrDefault(x => x != null &&
+                string.Equals(x.TaskType, taskType, StringComparison.OrdinalIgnoreCase) &&
+                string.Equals(x.OwnerAgent, owner, StringComparison.OrdinalIgnoreCase));
+        }
+
+        private static bool GrantInitialInstructionAuthorization(JarvisExecutionCoordinator coordinator, JarvisExecutionStepSnapshot step, out string[] issues)
+        {
+            if (step == null || !step.RequiresConfirmation)
+            {
+                issues = new string[0];
+                return true;
+            }
+            bool ok = coordinator.GrantConfirmation(step.ObjectId, out issues);
+            if (ok)
+                DebugLog.Log("[ORCH-CONTROL] initial explicit instruction authorizes local task object=" + step.ObjectId + " task=" + step.TaskType);
+            return ok;
+        }
+
+        private static void ResolveDeterministicSendRecipient(JarvisShadowOrchestrationResult planning)
+        {
+            if (planning == null || planning.Graph == null) return;
+            JarvisValidatedTaskNode node = planning.Graph.Nodes.FirstOrDefault(x => x != null && string.Equals(x.TaskType, "SendEmail", StringComparison.OrdinalIgnoreCase));
+            if (node == null) return;
+            JarvisPrerequisiteResolutionItem item = node.Prerequisites.FirstOrDefault(x => x != null && string.Equals(x.InputName, "to", StringComparison.OrdinalIgnoreCase));
+            if (item == null || item.Value != null) return;
+
+            Match match = Regex.Match(node.IntentFragment ?? string.Empty, @"[A-Z0-9._%+\-]+@[A-Z0-9.\-]+\.[A-Z]{2,}", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+            if (!match.Success) return;
+            item.Value = new JValue(match.Value);
+            item.Kind = JarvisPrerequisiteResolutionKind.ResolvedFromRouting;
+            item.Reason = "Literal email recipient extracted deterministically from the atomic SendEmail intent fragment.";
+        }
+
+        private static string ReadIntentFragment(JarvisShadowOrchestrationResult planning, string objectId)
+        {
+            JarvisValidatedTaskNode node = planning == null || planning.Graph == null ? null : planning.Graph.Nodes.FirstOrDefault(x => x != null && string.Equals(x.ObjectId, objectId, StringComparison.OrdinalIgnoreCase));
+            return node == null ? string.Empty : node.IntentFragment ?? string.Empty;
+        }
+
+        private static bool LooksLikeExternalInvitation(string fragment)
+        {
+            string value = (fragment ?? string.Empty).ToLowerInvariant();
+            return value.Contains("κάλεσε") || value.Contains("καλεσε") || value.Contains("πρόσκλη") || value.Contains("προσκλη") ||
+                   value.Contains("invite") || value.Contains("attendee") || value.Contains("συμμετέχ") || value.Contains("συμμετεχ");
         }
 
         private static string FindResolvedSendInput(JarvisShadowOrchestrationResult planning, string inputName)
@@ -252,7 +413,29 @@ namespace S1Jarvis.Core
             if (item == null) return;
             item.Value = new JValue(value.Trim());
             item.Kind = JarvisPrerequisiteResolutionKind.ResolvedFromRouting;
-            item.Reason = "Jarvis presentation layer composed this value from the already validated upstream dataset before confirmation.";
+            item.Reason = "Jarvis presentation layer composed/resolved this value before confirmation from validated task context.";
+        }
+
+        private static string BuildCrmStatus(JarvisTaskExecutionResult result)
+        {
+            JToken ids = result == null || result.Outputs == null ? null : result.Outputs["soaction_ids"];
+            return ids == null ? "✓ Η εργασία CRM στο Soft1 δημιουργήθηκε." : "✓ Η εργασία CRM στο Soft1 δημιουργήθηκε (ID: " + ids.ToString(Formatting.None) + ").";
+        }
+
+        private static string BuildCalendarStatus(JarvisTaskExecutionResult result)
+        {
+            string id = result == null || result.Outputs == null || result.Outputs["eventId"] == null ? string.Empty : result.Outputs["eventId"].ToString();
+            return string.IsNullOrWhiteSpace(id) ? "✓ Το προσωπικό Outlook calendar event δημιουργήθηκε." : "✓ Το προσωπικό Outlook calendar event δημιουργήθηκε.";
+        }
+
+        private static string BuildCombinedMessage(string intro, string table, IList<string> statuses, string confirmation)
+        {
+            var parts = new List<string>();
+            if (!string.IsNullOrWhiteSpace(intro)) parts.Add(intro.Trim());
+            if (!string.IsNullOrWhiteSpace(table)) parts.Add(table.Trim());
+            if (statuses != null && statuses.Count > 0) parts.Add(string.Join("\n", statuses));
+            if (!string.IsNullOrWhiteSpace(confirmation)) parts.Add(confirmation.Trim());
+            return string.Join("\n\n", parts.ToArray());
         }
 
         private static string BuildConfirmationMessage(JObject payload, string intro)
@@ -283,15 +466,21 @@ namespace S1Jarvis.Core
                 ["payloadHash"] = payloadHash ?? string.Empty,
                 ["steps"] = snapshot == null ? new JArray() : new JArray(snapshot.Steps.Select(x => new JObject
                 {
-                    ["wave"] = x.Wave, ["ordinal"] = x.Ordinal, ["objectId"] = x.ObjectId ?? string.Empty,
-                    ["taskType"] = x.TaskType ?? string.Empty, ["owner"] = x.OwnerAgent ?? string.Empty,
-                    ["state"] = x.State.ToString(), ["requiresConfirmation"] = x.RequiresConfirmation,
-                    ["confirmationGranted"] = x.ConfirmationGranted, ["dependsOn"] = new JArray(x.DependsOn),
-                    ["boundInputs"] = new JArray(x.BoundInputs),
-                    ["materializedInputs"] = x.MaterializedInputs == null ? new JObject() : (JObject)x.MaterializedInputs.DeepClone(),
-                    ["issues"] = new JArray(x.ValidationIssues)
+                    ["wave"] = x.Wave,
+                    ["ordinal"] = x.Ordinal,
+                    ["objectId"] = x.ObjectId ?? string.Empty,
+                    ["taskType"] = x.TaskType ?? string.Empty,
+                    ["owner"] = x.OwnerAgent ?? string.Empty,
+                    ["state"] = x.State.ToString(),
+                    ["requiresConfirmation"] = x.RequiresConfirmation,
+                    ["confirmationGranted"] = x.ConfirmationGranted,
+                    ["dependsOn"] = new JArray(x.DependsOn ?? new List<string>()),
+                    ["boundInputs"] = new JArray(x.BoundInputs ?? new List<string>()),
+                    ["ownerAgentInputs"] = new JArray(x.OwnerAgentInputs ?? new List<string>()),
+                    ["materializedInputs"] = x.MaterializedInputs == null ? new JObject() : x.MaterializedInputs.DeepClone(),
+                    ["issues"] = new JArray(x.ValidationIssues ?? new List<string>())
                 })),
-                ["issues"] = snapshot == null ? new JArray() : new JArray(snapshot.ValidationIssues),
+                ["issues"] = snapshot == null ? new JArray() : new JArray(snapshot.ValidationIssues ?? new List<string>()),
                 ["eventIssues"] = new JArray(eventIssues ?? new string[0])
             };
             DebugLog.Log("[ORCH-CONTROL] " + root.ToString(Formatting.None));
