@@ -5,15 +5,19 @@ using System.Linq;
 namespace S1Jarvis.Core
 {
     /// <summary>
-    /// Validates the business task catalog against the authoritative tool contract.
-    /// Task metadata describes the business outcome. Native prerequisites and native
-    /// outputs belong to JarvisToolRegistry and must never drift into a second truth.
+    /// Validates the business task catalog against authoritative tool and policy contracts.
+    /// Task metadata describes business outcomes. Native prerequisites/outputs live in
+    /// JarvisToolRegistry; behavioral rules live in JarvisPolicyRegistry. Neither may
+    /// drift into a second truth inside executor prompts.
     /// </summary>
     internal static class JarvisTaskContractAudit
     {
         internal static string[] Validate()
         {
             var issues = new List<string>();
+
+            issues.AddRange(JarvisToolRegistry.ValidateInventory());
+            issues.AddRange(JarvisPolicyRegistry.ValidateInventory());
 
             foreach (JarvisTaskDescriptor task in JarvisTaskRegistry.AllTasks)
             {
@@ -68,9 +72,6 @@ namespace S1Jarvis.Core
             }
         }
 
-        // Single authoritative source for "which tools on this task actually change
-        // state" — used both to find the terminal tool and to validate its contract,
-        // so the two never drift out of sync with each other.
         private static JarvisToolDescriptor[] GetStateChangingTools(JarvisTaskDescriptor task)
         {
             if (task == null) return new JarvisToolDescriptor[0];
