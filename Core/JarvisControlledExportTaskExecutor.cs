@@ -40,17 +40,27 @@ namespace S1Jarvis.Core
                 string sql = ReadString(dispatchInputs, "sql");
                 if (string.IsNullOrWhiteSpace(sql) && source != null)
                     sql = ReadString(source, "querySql");
+
+                string exportRequest = ReadString(dispatchInputs, "export_request");
+                string policyContext = ReadString(dispatchInputs, "__policy_context");
+                string planningOperatorScope = ReadString(dispatchInputs, "operator_scope");
+                string resultMode = ReadString(dispatchInputs, "result_mode");
+                string documentScope = ReadString(dispatchInputs, "document_scope");
+                int currentUserId = dispatchInputs["__current_user_id"] == null ? 0 : (int)dispatchInputs["__current_user_id"];
+
                 if (string.IsNullOrWhiteSpace(sql))
                 {
-                    string exportRequest = ReadString(dispatchInputs, "export_request");
                     if (string.IsNullOrWhiteSpace(exportRequest))
                         throw new InvalidOperationException("ExportData has neither upstream query provenance nor export_request.");
-                    string policyContext = ReadString(dispatchInputs, "__policy_context");
-                    string planningOperatorScope = ReadString(dispatchInputs, "operator_scope");
-                    string resultMode = ReadString(dispatchInputs, "result_mode");
-                    int currentUserId = dispatchInputs["__current_user_id"] == null ? 0 : (int)dispatchInputs["__current_user_id"];
-                    sql = await JarvisControlledTaskExecutor.PlanValidatedSqlForExportAsync(
-                        xSupport, exportRequest, policyContext, planningOperatorScope, resultMode, currentUserId, cancellationToken).ConfigureAwait(false);
+                    sql = await PlanScopeBoundSqlAsync(
+                        xSupport,
+                        exportRequest,
+                        documentScope,
+                        policyContext,
+                        planningOperatorScope,
+                        resultMode,
+                        currentUserId,
+                        cancellationToken).ConfigureAwait(false);
                 }
 
                 string entityRole = ReadString(dispatchInputs, "entity_role");
@@ -59,7 +69,40 @@ namespace S1Jarvis.Core
                 string[] queryScopeIssues = JarvisStructuredQueryScopeValidator.Validate(sql, entityRole, operatorScope, verifiedCurrentUserId);
                 if (queryScopeIssues.Length > 0)
                     throw new InvalidOperationException("Jarvis rejected ExportData structured query scope: " + string.Join(" | ", queryScopeIssues));
-                ValidateStructuredDocumentScope(xSupport, sql, ReadString(dispatchInputs, "document_scope"));
+
+                string[] documentScopeIssues = ValidateStructuredDocumentScope(xSupport, sql, documentScope);
+                if (documentScopeIssues.Length > 0)
+                {
+                    if (string.IsNullOrWhiteSpace(exportRequest))
+                        throw new InvalidOperationException(
+                            "Jarvis rejected ExportData document scope before file creation: " + string.Join(" | ", documentScopeIssues));
+
+                    DebugLog.Log("[ORCH-EXPORT] document_scope_repair object=" + (objectId ?? string.Empty) +
+                                 " scope=" + documentScope + " issues=" + OneLine(string.Join(" | ", documentScopeIssues)));
+
+                    string repairedRequest = BuildScopeRepairRequest(exportRequest, documentScope, documentScopeIssues);
+                    sql = await PlanScopeBoundSqlAsync(
+                        xSupport,
+                        repairedRequest,
+                        documentScope,
+                        policyContext,
+                        planningOperatorScope,
+                        resultMode,
+                        currentUserId,
+                        cancellationToken).ConfigureAwait(false);
+
+                    queryScopeIssues = JarvisStructuredQueryScopeValidator.Validate(sql, entityRole, operatorScope, verifiedCurrentUserId);
+                    if (queryScopeIssues.Length > 0)
+                        throw new InvalidOperationException("Jarvis rejected repaired ExportData structured query scope: " + string.Join(" | ", queryScopeIssues));
+
+                    documentScopeIssues = ValidateStructuredDocumentScope(xSupport, sql, documentScope);
+                    if (documentScopeIssues.Length > 0)
+                        throw new InvalidOperationException(
+                            "Jarvis rejected repaired ExportData document scope before file creation: " + string.Join(" | ", documentScopeIssues));
+
+                    DebugLog.Log("[ORCH-EXPORT] document_scope_repair_accepted object=" + (objectId ?? string.Empty) +
+                                 " scope=" + documentScope);
+                }
 
                 string format = ReadString(dispatchInputs, "format");
                 if (string.IsNullOrWhiteSpace(format)) format = "xlsx";
@@ -95,6 +138,7 @@ namespace S1Jarvis.Core
                     ["rowsWritten"] = payload["rowsWritten"] == null ? 0 : payload["rowsWritten"].DeepClone(),
                     ["totalFound"] = payload["totalFound"] == null ? 0 : payload["totalFound"].DeepClone()
                 };
+                result.Outputs["query_sql"] = sql;
                 result.Success = true;
                 return result;
             }
@@ -105,19 +149,69 @@ namespace S1Jarvis.Core
             }
         }
 
-        private static void ValidateStructuredDocumentScope(XSupport xSupport, string sql, string documentScope)
+        private static async Task<string> PlanScopeBoundSqlAsync(
+            XSupport xSupport,
+            string exportRequest,
+            string documentScope,
+            string policyContext,
+            string operatorScope,
+            string resultMode,
+            int currentUserId,
+            CancellationToken cancellationToken)
         {
-            if (string.IsNullOrWhiteSpace(documentScope)) return;
+            string request = BuildScopeBoundRequest(exportRequest, documentScope);
+            return await JarvisControlledTaskExecutor.PlanValidatedSqlForExportAsync(
+                xSupport,
+                request,
+                policyContext,
+                operatorScope,
+                resultMode,
+                currentUserId,
+                cancellationToken).ConfigureAwait(false);
+        }
 
-            string scope = documentScope.Trim().ToLowerInvariant();
-            if (scope == "documents" || scope == "movements") return;
+        private static string BuildScopeBoundRequest(string exportRequest, string documentScope)
+        {
+            string request = exportRequest ?? string.Empty;
+            string scope = NormalizeDocumentScope(documentScope);
+            if (string.IsNullOrWhiteSpace(scope) || scope == "documents" || scope == "movements")
+                return request;
+
+            return request +
+                   "\n\n[JARVIS_STRUCTURED_CONSTRAINTS]" +
+                   "\ndocument_scope: " + scope +
+                   "\nThe final SQL rows must satisfy this canonical document_scope. Do not broaden the document category.";
+        }
+
+        private static string BuildScopeRepairRequest(string exportRequest, string documentScope, string[] issues)
+        {
+            return BuildScopeBoundRequest(exportRequest, documentScope) +
+                   "\n\n[JARVIS_SCOPE_REPAIR]" +
+                   "\nThe previous candidate was rejected by deterministic dataset validation." +
+                   "\nvalidation_issues: " + string.Join(" | ", issues ?? new string[0]) +
+                   "\nReturn a corrected SELECT whose result contains only the requested canonical document category.";
+        }
+
+        private static string[] ValidateStructuredDocumentScope(XSupport xSupport, string sql, string documentScope)
+        {
+            string scope = NormalizeDocumentScope(documentScope);
+            if (string.IsNullOrWhiteSpace(scope) || scope == "documents" || scope == "movements")
+                return new string[0];
 
             string validationSql = BuildValidationSql(sql);
             string preview = JarvisTools.ExecuteQueryData(xSupport, validationSql);
-            string[] issues = JarvisDocumentScopeValidator.Validate(documentScope, preview);
-            if (issues.Length > 0)
-                throw new InvalidOperationException(
-                    "Jarvis rejected ExportData document scope before file creation: " + string.Join(" | ", issues));
+            return JarvisDocumentScopeValidator.Validate(scope, preview);
+        }
+
+        private static string NormalizeDocumentScope(string documentScope)
+        {
+            string scope = (documentScope ?? string.Empty).Trim().ToLowerInvariant();
+            if (scope == "invoices") return "invoice";
+            if (scope == "orders") return "order";
+            if (scope == "quotes" || scope == "quotation") return "quotation";
+            if (scope == "credits") return "credit";
+            if (scope == "delivery_note" || scope == "delivery_notes") return "delivery";
+            return scope;
         }
 
         private static string BuildValidationSql(string sql)
@@ -147,6 +241,11 @@ namespace S1Jarvis.Core
         {
             if (obj == null || obj[name] == null || obj[name].Type == JTokenType.Null) return string.Empty;
             return obj[name].ToString();
+        }
+
+        private static string OneLine(string value)
+        {
+            return (value ?? string.Empty).Replace("\r", " ").Replace("\n", " ").Trim();
         }
     }
 }
