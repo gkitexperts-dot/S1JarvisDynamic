@@ -8,22 +8,18 @@ namespace S1Jarvis.Core
 {
     /// <summary>
     /// Provider-neutral semantic planning protocol.
-    /// The model selects only registered atomic TaskTypes and describes dependency
-    /// bindings. Behavioral planning policy is resolved centrally; capability,
-    /// owner agent and tools are always resolved locally from JarvisTaskRegistry.
+    /// Capability, owner agent and tools are resolved locally from registries;
+    /// behavioral planning rules are resolved only from JarvisPolicyRegistry.
     /// </summary>
     internal static class JarvisSemanticPlanning
     {
         internal static string BuildPlannerSystemPrompt()
         {
-            string policies = JarvisAgentContextBuilder.BuildPlanningPolicyContext();
             return
-                "Είσαι ο εσωτερικός semantic planner του Jarvis. Εφάρμοσε υποχρεωτικά το JARVIS_POLICY_CONTEXT. " +
-                "Μην εκτελείς tasks/tools και μην απαντάς στον χειριστή. " +
-                "Επέστρεψε ΜΟΝΟ έγκυρο JSON. Κάθε task έχει μοναδικό id, taskType, intentFragment, inputs και dependsOn. " +
-                "Κάθε input είναι literal JSON value ή binding {\"fromTask\":\"t1\",\"output\":\"output_name\"}. " +
+                "Είσαι το registered semantic planning stage του Jarvis. " +
+                "Εφάρμοσε υποχρεωτικά το JARVIS_POLICY_CONTEXT και επέστρεψε ΜΟΝΟ έγκυρο JSON. " +
                 "Schema: {\"tasks\":[{\"id\":\"t1\",\"taskType\":\"...\",\"intentFragment\":\"...\",\"inputs\":{\"name\":value,\"other\":{\"fromTask\":\"t0\",\"output\":\"output_name\"}},\"dependsOn\":[\"t0\"]}]}\n\n" +
-                policies;
+                JarvisAgentContextBuilder.BuildPlanningPolicyContext();
         }
 
         internal static string BuildTaskCatalogJson()
