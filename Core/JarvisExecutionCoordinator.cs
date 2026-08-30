@@ -98,9 +98,49 @@ namespace S1Jarvis.Core
 
         internal bool TryGetDispatchInputs(string objectId, out JObject inputs, out string[] issues)
         {
-            inputs = new JObject();
+            return TryGetDispatchInputsCore(FindEntry(objectId), objectId, out inputs, out issues);
+        }
+
+        internal bool GrantConfirmation(string objectId, out string[] issues)
+        {
             var localIssues = new List<string>();
             JarvisExecutionPlanEntry entry = FindEntry(objectId);
+            if (entry == null) localIssues.Add("Cannot confirm unknown execution object: " + (objectId ?? "<null>"));
+            else if (!entry.RequiresConfirmation) localIssues.Add("Execution object does not require confirmation: " + entry.ObjectId);
+            else if (!DependenciesSucceeded(entry)) localIssues.Add("Confirmation cannot unlock a task before all dependencies succeed: " + entry.ObjectId);
+            else
+            {
+                JObject ignored; string[] materializationIssues;
+                if (!TryGetDispatchInputsCore(entry, entry.ObjectId, out ignored, out materializationIssues)) localIssues.AddRange(materializationIssues);
+            }
+            if (entry != null && localIssues.Count == 0) _confirmed.Add(entry.ObjectId);
+            issues = localIssues.ToArray(); return issues.Length == 0;
+        }
+
+        internal bool TryBeginDispatch(string objectId, out string[] issues)
+        {
+            var localIssues = new List<string>();
+            JarvisExecutionPlanEntry entry = FindEntry(objectId);
+            ValidateBeforeDispatch(entry, localIssues);
+            if (localIssues.Count == 0) _running.Add(entry.ObjectId);
+            issues = localIssues.ToArray(); return issues.Length == 0;
+        }
+
+        internal bool TryAcceptResult(JarvisTaskExecutionResult result, out string[] issues)
+        {
+            var localIssues = new List<string>();
+            ValidateAfterExecution(result, localIssues);
+            if (localIssues.Count == 0) { _running.Remove(result.ObjectId); _results[result.ObjectId] = result; }
+            issues = localIssues.ToArray(); return issues.Length == 0;
+        }
+
+        // Core implementation shared by the public string-objectId overload and the
+        // internal call sites (GrantConfirmation, ValidateBeforeDispatch, BuildStepSnapshot)
+        // that already hold the resolved entry, so they don't pay for a second lookup.
+        private bool TryGetDispatchInputsCore(JarvisExecutionPlanEntry entry, string objectId, out JObject inputs, out string[] issues)
+        {
+            inputs = new JObject();
+            var localIssues = new List<string>();
             if (entry == null)
             {
                 localIssues.Add("Cannot materialize inputs for unknown execution object: " + (objectId ?? "<null>"));
@@ -156,39 +196,6 @@ namespace S1Jarvis.Core
             return issues.Length == 0;
         }
 
-        internal bool GrantConfirmation(string objectId, out string[] issues)
-        {
-            var localIssues = new List<string>();
-            JarvisExecutionPlanEntry entry = FindEntry(objectId);
-            if (entry == null) localIssues.Add("Cannot confirm unknown execution object: " + (objectId ?? "<null>"));
-            else if (!entry.RequiresConfirmation) localIssues.Add("Execution object does not require confirmation: " + entry.ObjectId);
-            else if (!DependenciesSucceeded(entry)) localIssues.Add("Confirmation cannot unlock a task before all dependencies succeed: " + entry.ObjectId);
-            else
-            {
-                JObject ignored; string[] materializationIssues;
-                if (!TryGetDispatchInputs(entry.ObjectId, out ignored, out materializationIssues)) localIssues.AddRange(materializationIssues);
-            }
-            if (localIssues.Count == 0) _confirmed.Add(entry.ObjectId);
-            issues = localIssues.ToArray(); return issues.Length == 0;
-        }
-
-        internal bool TryBeginDispatch(string objectId, out string[] issues)
-        {
-            var localIssues = new List<string>();
-            JarvisExecutionPlanEntry entry = FindEntry(objectId);
-            ValidateBeforeDispatch(entry, localIssues);
-            if (localIssues.Count == 0) _running.Add(entry.ObjectId);
-            issues = localIssues.ToArray(); return issues.Length == 0;
-        }
-
-        internal bool TryAcceptResult(JarvisTaskExecutionResult result, out string[] issues)
-        {
-            var localIssues = new List<string>();
-            ValidateAfterExecution(result, localIssues);
-            if (localIssues.Count == 0) { _running.Remove(result.ObjectId); _results[result.ObjectId] = result; }
-            issues = localIssues.ToArray(); return issues.Length == 0;
-        }
-
         private JarvisExecutionStepSnapshot BuildStepSnapshot(JarvisExecutionPlanEntry entry)
         {
             var step = new JarvisExecutionStepSnapshot
@@ -206,7 +213,7 @@ namespace S1Jarvis.Core
             if (!DependenciesSucceeded(entry)) { step.State = JarvisExecutionStepState.WaitingForDependencies; return step; }
 
             JObject inputs; string[] inputIssues;
-            if (!TryGetDispatchInputs(entry.ObjectId, out inputs, out inputIssues)) { step.State = JarvisExecutionStepState.Blocked; step.ValidationIssues.AddRange(inputIssues); return step; }
+            if (!TryGetDispatchInputsCore(entry, entry.ObjectId, out inputs, out inputIssues)) { step.State = JarvisExecutionStepState.Blocked; step.ValidationIssues.AddRange(inputIssues); return step; }
             foreach (JProperty property in inputs.Properties()) step.MaterializedInputs[property.Name] = property.Value.DeepClone();
 
             if (entry.RequiresConfirmation && !_confirmed.Contains(entry.ObjectId)) { step.State = JarvisExecutionStepState.WaitingForConfirmation; return step; }
@@ -240,7 +247,7 @@ namespace S1Jarvis.Core
             }
             if (!DependenciesSucceeded(entry)) issues.Add("Dependencies are not complete for " + entry.ObjectId + ".");
             JObject ignored; string[] materializationIssues;
-            if (!TryGetDispatchInputs(entry.ObjectId, out ignored, out materializationIssues)) issues.AddRange(materializationIssues);
+            if (!TryGetDispatchInputsCore(entry, entry.ObjectId, out ignored, out materializationIssues)) issues.AddRange(materializationIssues);
             if (entry.RequiresConfirmation && !_confirmed.Contains(entry.ObjectId)) issues.Add("Confirmation is required before dispatch of " + entry.ObjectId + ".");
             if (_running.Contains(entry.ObjectId)) issues.Add("Execution object is already running: " + entry.ObjectId);
             if (_results.ContainsKey(entry.ObjectId)) issues.Add("Execution object already has an accepted result: " + entry.ObjectId);
