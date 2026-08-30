@@ -31,41 +31,19 @@ namespace S1Jarvis.Core
         public string Reason { get; set; }
     }
 
-    /// <summary>
-    /// Deterministic routing decision engine. It implements, but does not own,
-    /// routing policy. Thresholds and weights live in JarvisPolicySettings;
-    /// behavioral policy identity/text lives in JarvisPolicyRegistry.
-    /// </summary>
     internal static class JarvisRoutingDecisionPolicy
     {
-        internal static JarvisRoutingDecision EvaluateDefault(
-            IEnumerable<JarvisRoutingCandidateScore> candidates)
+        internal static JarvisRoutingDecision EvaluateDefault(IEnumerable<JarvisRoutingCandidateScore> candidates)
         {
             JarvisRoutingCandidateScore[] ranked = Rank(candidates);
             JarvisRoutingCandidateScore winner = ranked.FirstOrDefault();
             JarvisRoutingCandidateScore runnerUp = ranked.Skip(1).FirstOrDefault();
-
             if (winner == null)
-            {
-                return new JarvisRoutingDecision
-                {
-                    Kind = JarvisRoutingDecisionKind.UseDynamicPass,
-                    Reason = "Pass 1 produced no task candidate."
-                };
-            }
+                return new JarvisRoutingDecision { Kind = JarvisRoutingDecisionKind.UseDynamicPass, Reason = "Pass 1 produced no task candidate." };
 
             bool ambiguous = IsAmbiguous(winner, runnerUp);
             if (winner.Score >= JarvisPolicySettings.Routing.DefaultAcceptThreshold && !ambiguous)
-            {
-                return new JarvisRoutingDecision
-                {
-                    Kind = JarvisRoutingDecisionKind.ResolveFromDefault,
-                    Winner = winner,
-                    RunnerUp = runnerUp,
-                    IsAmbiguous = false,
-                    Reason = "Pass 1 is high-confidence and clearly separated."
-                };
-            }
+                return new JarvisRoutingDecision { Kind = JarvisRoutingDecisionKind.ResolveFromDefault, Winner = winner, RunnerUp = runnerUp, IsAmbiguous = false, Reason = "Pass 1 is high-confidence and clearly separated." };
 
             return new JarvisRoutingDecision
             {
@@ -75,22 +53,17 @@ namespace S1Jarvis.Core
                 IsAmbiguous = ambiguous,
                 Reason = winner.Score < JarvisPolicySettings.Routing.DefaultMinimumForDynamicPass
                     ? "Pass 1 confidence is low; consult approved dynamic knowledge."
-                    : ambiguous
-                        ? "Pass 1 candidates are too close; consult approved dynamic knowledge."
-                        : "Pass 1 confidence is medium; consult approved dynamic knowledge."
+                    : ambiguous ? "Pass 1 candidates are too close; consult approved dynamic knowledge." : "Pass 1 confidence is medium; consult approved dynamic knowledge."
             };
         }
 
-        internal static JarvisRoutingDecision EvaluateAfterDynamic(
-            IEnumerable<JarvisRoutingCandidateScore> defaultCandidates,
-            IEnumerable<JarvisRoutingKnowledgeRecord> knowledge,
-            int currentCompany)
+        internal static JarvisRoutingDecision EvaluateAfterDynamic(IEnumerable<JarvisRoutingCandidateScore> defaultCandidates, IEnumerable<JarvisRoutingKnowledgeRecord> knowledge, int currentCompany)
         {
             JarvisRoutingCandidateScore[] defaultRanked = Rank(defaultCandidates);
             JarvisRoutingCandidateScore defaultWinner = defaultRanked.FirstOrDefault();
 
             JarvisRoutingCandidateScore[] dynamicRanked = (knowledge ?? Enumerable.Empty<JarvisRoutingKnowledgeRecord>())
-                .Where(IsUsableKnowledge)
+                .Where(x => IsUsableKnowledge(x, currentCompany))
                 .Select(x => ScoreKnowledge(x, currentCompany))
                 .Where(x => x != null)
                 .GroupBy(x => x.TaskType, StringComparer.OrdinalIgnoreCase)
@@ -99,16 +72,7 @@ namespace S1Jarvis.Core
                 .ToArray();
 
             if (dynamicRanked.Length == 0)
-            {
-                return new JarvisRoutingDecision
-                {
-                    Kind = JarvisRoutingDecisionKind.ClarifyWithUser,
-                    Winner = defaultWinner,
-                    RunnerUp = defaultRanked.Skip(1).FirstOrDefault(),
-                    IsAmbiguous = true,
-                    Reason = "Pass 2 contains no usable approved dynamic knowledge."
-                };
-            }
+                return new JarvisRoutingDecision { Kind = JarvisRoutingDecisionKind.ClarifyWithUser, Winner = defaultWinner, RunnerUp = defaultRanked.Skip(1).FirstOrDefault(), IsAmbiguous = true, Reason = "Pass 2 contains no usable approved dynamic knowledge." };
 
             JarvisRoutingCandidateScore dynamicWinner = dynamicRanked[0];
             JarvisRoutingCandidateScore dynamicRunnerUp = dynamicRanked.Skip(1).FirstOrDefault();
@@ -117,13 +81,8 @@ namespace S1Jarvis.Core
             if (defaultWinner == null)
             {
                 if (dynamicWinner.Score >= JarvisPolicySettings.Routing.DynamicAcceptThreshold && !dynamicAmbiguous)
-                {
-                    return ResolvedDynamic(dynamicWinner, dynamicRunnerUp,
-                        "No Pass-1 winner; Pass 2 produced a strong, unambiguous candidate.");
-                }
-
-                return Clarify(dynamicWinner, dynamicRunnerUp,
-                    "Pass 2 did not produce a sufficiently strong, unambiguous candidate.");
+                    return ResolvedDynamic(dynamicWinner, dynamicRunnerUp, "No Pass-1 winner; Pass 2 produced a strong, unambiguous candidate.");
+                return Clarify(dynamicWinner, dynamicRunnerUp, "Pass 2 did not produce a sufficiently strong, unambiguous candidate.");
             }
 
             if (string.Equals(defaultWinner.TaskType, dynamicWinner.TaskType, StringComparison.OrdinalIgnoreCase))
@@ -138,52 +97,25 @@ namespace S1Jarvis.Core
                     Company = dynamicWinner.Company,
                     Reason = "Default and dynamic routing agree."
                 };
-
                 if (reinforced >= JarvisPolicySettings.Routing.DefaultAcceptThreshold)
-                {
-                    return new JarvisRoutingDecision
-                    {
-                        Kind = JarvisRoutingDecisionKind.ResolveAfterDynamic,
-                        Winner = combined,
-                        RunnerUp = dynamicRunnerUp,
-                        IsAmbiguous = false,
-                        Reason = "Pass 2 reinforces the Pass-1 task."
-                    };
-                }
-
-                return Clarify(combined, dynamicRunnerUp,
-                    "Pass 1 and Pass 2 agree, but combined confidence is still insufficient.");
+                    return new JarvisRoutingDecision { Kind = JarvisRoutingDecisionKind.ResolveAfterDynamic, Winner = combined, RunnerUp = dynamicRunnerUp, IsAmbiguous = false, Reason = "Pass 2 reinforces the Pass-1 task." };
+                return Clarify(combined, dynamicRunnerUp, "Pass 1 and Pass 2 agree, but combined confidence is still insufficient.");
             }
 
             double lead = dynamicWinner.Score - defaultWinner.Score;
-            if (dynamicWinner.Score >= JarvisPolicySettings.Routing.ConflictingDynamicThreshold &&
-                lead >= JarvisPolicySettings.Routing.ConflictingDynamicLead &&
-                !dynamicAmbiguous)
-            {
-                return ResolvedDynamic(dynamicWinner, defaultWinner,
-                    "Pass 2 conflicts with Pass 1 but is exceptionally strong and clearly ahead.");
-            }
+            if (dynamicWinner.Score >= JarvisPolicySettings.Routing.ConflictingDynamicThreshold && lead >= JarvisPolicySettings.Routing.ConflictingDynamicLead && !dynamicAmbiguous)
+                return ResolvedDynamic(dynamicWinner, defaultWinner, "Pass 2 conflicts with Pass 1 but is exceptionally strong and clearly ahead.");
 
-            return Clarify(defaultWinner, dynamicWinner,
-                "Pass 1 and Pass 2 disagree without enough evidence for a safe automatic choice.");
+            return Clarify(defaultWinner, dynamicWinner, "Pass 1 and Pass 2 disagree without enough evidence for a safe automatic choice.");
         }
 
-        internal static JarvisRoutingCandidateScore ScoreKnowledge(
-            JarvisRoutingKnowledgeRecord knowledge,
-            int currentCompany)
+        internal static JarvisRoutingCandidateScore ScoreKnowledge(JarvisRoutingKnowledgeRecord knowledge, int currentCompany)
         {
-            if (!IsUsableKnowledge(knowledge))
-                return null;
-
+            if (!IsUsableKnowledge(knowledge, currentCompany)) return null;
             double score = Clamp01(knowledge.Confidence);
-
-            if (knowledge.Company != 0 && knowledge.Company == currentCompany)
-                score += JarvisPolicySettings.Routing.CompanySpecificBonus;
-
+            if (knowledge.Company != 0 && knowledge.Company == currentCompany) score += JarvisPolicySettings.Routing.CompanySpecificBonus;
             if (knowledge.Priority > 0)
-                score += Math.Min(
-                    JarvisPolicySettings.Routing.MaxPriorityBonus,
-                    knowledge.Priority * JarvisPolicySettings.Routing.PriorityStepWeight);
+                score += Math.Min(JarvisPolicySettings.Routing.MaxPriorityBonus, knowledge.Priority * JarvisPolicySettings.Routing.PriorityStepWeight);
 
             int success = Math.Max(0, knowledge.SuccessCount);
             int fail = Math.Max(0, knowledge.FailCount);
@@ -192,11 +124,8 @@ namespace S1Jarvis.Core
             {
                 double successRate = (double)success / total;
                 double evidence = Math.Min(1.0, total / JarvisPolicySettings.Routing.HistoryEvidenceFullSample);
-
-                if (successRate >= 0.5)
-                    score += JarvisPolicySettings.Routing.MaxHistoryBonus * ((successRate - 0.5) / 0.5) * evidence;
-                else
-                    score -= JarvisPolicySettings.Routing.MaxHistoryPenalty * ((0.5 - successRate) / 0.5) * evidence;
+                if (successRate >= 0.5) score += JarvisPolicySettings.Routing.MaxHistoryBonus * ((successRate - 0.5) / 0.5) * evidence;
+                else score -= JarvisPolicySettings.Routing.MaxHistoryPenalty * ((0.5 - successRate) / 0.5) * evidence;
             }
 
             return new JarvisRoutingCandidateScore
@@ -210,11 +139,10 @@ namespace S1Jarvis.Core
             };
         }
 
-        private static bool IsUsableKnowledge(JarvisRoutingKnowledgeRecord knowledge)
+        private static bool IsUsableKnowledge(JarvisRoutingKnowledgeRecord knowledge, int currentCompany)
         {
-            if (knowledge == null || !knowledge.IsActive || string.IsNullOrWhiteSpace(knowledge.TaskType))
-                return false;
-
+            if (knowledge == null || !knowledge.IsActive || string.IsNullOrWhiteSpace(knowledge.TaskType)) return false;
+            if (!JarvisTenantScope.IsVisible(knowledge.Company, currentCompany)) return false;
             return JarvisTaskRegistry.Find(knowledge.TaskType) != null;
         }
 
@@ -224,12 +152,8 @@ namespace S1Jarvis.Core
                 .Where(x => x != null && !string.IsNullOrWhiteSpace(x.TaskType))
                 .Select(x => new JarvisRoutingCandidateScore
                 {
-                    TaskType = x.TaskType.Trim(),
-                    Score = Clamp01(x.Score),
-                    Source = x.Source,
-                    KnowledgeId = x.KnowledgeId,
-                    Company = x.Company,
-                    Reason = x.Reason
+                    TaskType = x.TaskType.Trim(), Score = Clamp01(x.Score), Source = x.Source,
+                    KnowledgeId = x.KnowledgeId, Company = x.Company, Reason = x.Reason
                 })
                 .GroupBy(x => x.TaskType, StringComparer.OrdinalIgnoreCase)
                 .Select(g => g.OrderByDescending(x => x.Score).First())
@@ -237,13 +161,9 @@ namespace S1Jarvis.Core
                 .ToArray();
         }
 
-        private static bool IsAmbiguous(
-            JarvisRoutingCandidateScore winner,
-            JarvisRoutingCandidateScore runnerUp)
+        private static bool IsAmbiguous(JarvisRoutingCandidateScore winner, JarvisRoutingCandidateScore runnerUp)
         {
-            if (winner == null || runnerUp == null)
-                return false;
-
+            if (winner == null || runnerUp == null) return false;
             return (winner.Score - runnerUp.Score) < JarvisPolicySettings.Routing.AmbiguityMargin;
         }
 
@@ -252,40 +172,19 @@ namespace S1Jarvis.Core
             return Clamp01(defaultScore + ((1.0 - defaultScore) * dynamicScore * JarvisPolicySettings.Routing.ReinforcementWeight));
         }
 
-        private static JarvisRoutingDecision ResolvedDynamic(
-            JarvisRoutingCandidateScore winner,
-            JarvisRoutingCandidateScore runnerUp,
-            string reason)
+        private static JarvisRoutingDecision ResolvedDynamic(JarvisRoutingCandidateScore winner, JarvisRoutingCandidateScore runnerUp, string reason)
         {
-            return new JarvisRoutingDecision
-            {
-                Kind = JarvisRoutingDecisionKind.ResolveAfterDynamic,
-                Winner = winner,
-                RunnerUp = runnerUp,
-                IsAmbiguous = false,
-                Reason = reason
-            };
+            return new JarvisRoutingDecision { Kind = JarvisRoutingDecisionKind.ResolveAfterDynamic, Winner = winner, RunnerUp = runnerUp, IsAmbiguous = false, Reason = reason };
         }
 
-        private static JarvisRoutingDecision Clarify(
-            JarvisRoutingCandidateScore winner,
-            JarvisRoutingCandidateScore runnerUp,
-            string reason)
+        private static JarvisRoutingDecision Clarify(JarvisRoutingCandidateScore winner, JarvisRoutingCandidateScore runnerUp, string reason)
         {
-            return new JarvisRoutingDecision
-            {
-                Kind = JarvisRoutingDecisionKind.ClarifyWithUser,
-                Winner = winner,
-                RunnerUp = runnerUp,
-                IsAmbiguous = true,
-                Reason = reason
-            };
+            return new JarvisRoutingDecision { Kind = JarvisRoutingDecisionKind.ClarifyWithUser, Winner = winner, RunnerUp = runnerUp, IsAmbiguous = true, Reason = reason };
         }
 
         private static double Clamp01(double value)
         {
-            if (double.IsNaN(value) || double.IsInfinity(value))
-                return 0.0;
+            if (double.IsNaN(value) || double.IsInfinity(value)) return 0.0;
             if (value < 0.0) return 0.0;
             if (value > 1.0) return 1.0;
             return value;
