@@ -494,9 +494,14 @@ namespace S1Jarvis.Core
             foreach (JarvisValidatedTaskNode node in planning.Graph.Nodes.Where(x => x != null && x.Descriptor != null))
             {
                 JarvisPrerequisiteResolutionItem assignee = node.Prerequisites.FirstOrDefault(x => x != null && string.Equals(x.InputName, "assignee", StringComparison.OrdinalIgnoreCase));
-                if (assignee == null || assignee.Value == null ||
-                    !string.Equals(assignee.Value.ToString(), "__CURRENT_OPERATOR__", StringComparison.Ordinal))
-                    continue;
+                if (assignee == null || assignee.Value == null) continue;
+                string assigneeText = assignee.Value.ToString().Trim();
+                int assigneeUserId;
+                bool isCurrentOperator = string.Equals(assigneeText, "__CURRENT_OPERATOR__", StringComparison.Ordinal) ||
+                    (int.TryParse(assigneeText, out assigneeUserId) && assigneeUserId == currentUserId) ||
+                    (!string.IsNullOrWhiteSpace(runtimeContext.CurrentUserDisplayName) &&
+                     string.Equals(assigneeText, runtimeContext.CurrentUserDisplayName.Trim(), StringComparison.OrdinalIgnoreCase));
+                if (!isCurrentOperator) continue;
 
                 bool needsActor = false;
                 foreach (string toolName in node.Descriptor.Tools ?? new string[0])

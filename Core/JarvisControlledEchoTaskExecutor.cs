@@ -221,9 +221,13 @@ namespace S1Jarvis.Core
             if (HasValue(resolutionContext["actorUserId"]) || HasValue(resolutionContext["actorUserIds"])) return;
 
             JToken assignee = resolutionContext["assignee"];
-            bool defaultSelf = !HasValue(assignee) || string.Equals(assignee.ToString(), "__CURRENT_OPERATOR__", StringComparison.Ordinal);
+            string assigneeText = HasValue(assignee) ? assignee.ToString().Trim() : string.Empty;
+            bool defaultSelf = string.IsNullOrWhiteSpace(assigneeText) ||
+                string.Equals(assigneeText, "__CURRENT_OPERATOR__", StringComparison.Ordinal) ||
+                (!string.IsNullOrWhiteSpace(sessionContext.CurrentUserDisplayName) &&
+                 string.Equals(assigneeText, sessionContext.CurrentUserDisplayName.Trim(), StringComparison.OrdinalIgnoreCase));
             int numericAssignee;
-            if (!defaultSelf && int.TryParse(assignee.ToString(), out numericAssignee))
+            if (!defaultSelf && int.TryParse(assigneeText, out numericAssignee))
                 defaultSelf = numericAssignee == sessionContext.CurrentUserId;
             if (!defaultSelf) return;
 
