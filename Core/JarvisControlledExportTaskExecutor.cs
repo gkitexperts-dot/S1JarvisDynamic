@@ -63,6 +63,11 @@ namespace S1Jarvis.Core
                         cancellationToken).ConfigureAwait(false);
                 }
 
+                // Tenant isolation is re-applied even when ExportData reuses an
+                // upstream/legacy query. FINDOC SQL can never inherit a stale or
+                // cross-company scope merely because provenance was already present.
+                sql = JarvisDocumentCompanyScopePolicy.EnforceIfFindocQuery(xSupport, sql);
+
                 string entityRole = ReadString(dispatchInputs, "entity_role");
                 string operatorScope = ReadString(dispatchInputs, "operator_scope");
                 int verifiedCurrentUserId = dispatchInputs["__current_user_id"] == null ? 0 : (int)dispatchInputs["__current_user_id"];
@@ -90,6 +95,8 @@ namespace S1Jarvis.Core
                         resultMode,
                         currentUserId,
                         cancellationToken).ConfigureAwait(false);
+
+                    sql = JarvisDocumentCompanyScopePolicy.EnforceIfFindocQuery(xSupport, sql);
 
                     queryScopeIssues = JarvisStructuredQueryScopeValidator.Validate(sql, entityRole, operatorScope, verifiedCurrentUserId);
                     if (queryScopeIssues.Length > 0)
