@@ -27,8 +27,6 @@ namespace S1Jarvis.Core
         {
             JObject context = BuildCompactDatasetContext(businessQuestion, datasetJson);
             JObject request = BuildRequest("report", context, null,
-                "Γράψε μόνο ένα σύντομο, φυσικό εισαγωγικό κείμενο στα Ελληνικά για τα validated αποτελέσματα. " +
-                "Μην αντιγράψεις όλες τις γραμμές και μην προσθέσεις κανένα γεγονός που δεν υπάρχει στο context. " +
                 "Επέστρεψε ΑΠΟΚΛΕΙΣΤΙΚΑ JSON: {\"intro\":\"...\"}.");
             JObject parsed = await CallJarvisAsync(xSupport, request, cancellationToken).ConfigureAwait(false);
             return new JarvisPresentationResult { Intro = parsed == null ? null : (string)parsed["intro"] };
@@ -39,11 +37,7 @@ namespace S1Jarvis.Core
             JObject context = BuildCompactDatasetContext(businessQuestion, datasetJson);
             context["recipient"] = recipient ?? string.Empty;
             JObject request = BuildRequest("email-draft", context, recipient,
-                "Σύνθεσε φυσικό, επαγγελματικό email στα Ελληνικά χρησιμοποιώντας ΜΟΝΟ τα validated δεδομένα του context. " +
-                "Μην αλλάξεις αριθμούς, ημερομηνίες, ονόματα ή ids και μην εφεύρεις πληροφορίες. " +
-                "Το subject να είναι σύντομο και σχετικό. Το body να είναι έτοιμο για πραγματική αποστολή και να έχει ανθρώπινη μορφή, όχι raw key=value dump. " +
-                "Όταν το validatedRows περιέχει ολόκληρο το αποτέλεσμα, συμπερίλαβε όλες τις ουσιώδεις γραμμές σε ευανάγνωστη μορφή. " +
-                "Επέστρεψε ΑΠΟΚΛΕΙΣΤΙΚΑ JSON: {\"intro\":\"σύντομη φράση πριν το draft\",\"emailSubject\":\"...\",\"emailBody\":\"...\"}.");
+                "Επέστρεψε ΑΠΟΚΛΕΙΣΤΙΚΑ JSON: {\"intro\":\"...\",\"emailSubject\":\"...\",\"emailBody\":\"...\"}.");
             JObject parsed = await CallJarvisAsync(xSupport, request, cancellationToken).ConfigureAwait(false);
             string subject = parsed == null ? null : (string)parsed["emailSubject"];
             string body = parsed == null ? null : (string)parsed["emailBody"];
@@ -185,8 +179,11 @@ namespace S1Jarvis.Core
             }
         }
 
-        private static JObject BuildRequest(string mode, JObject context, string recipient, string instruction)
+        private static JObject BuildRequest(string mode, JObject context, string recipient, string outputContract)
         {
+            string policyContext = JarvisPolicyRegistry.BuildTrainingContext(
+                "Jarvis", "__presentation", new string[0], new string[0]);
+
             return new JObject
             {
                 ["max_tokens"] = MaxTokens,
@@ -196,7 +193,9 @@ namespace S1Jarvis.Core
                     new JObject
                     {
                         ["type"] = "text",
-                        ["text"] = "Είσαι ο Jarvis presentation layer. Τα δεδομένα που λαμβάνεις έχουν ήδη επικυρωθεί από τον Jarvis control plane. Επιτρέπεται να αλλάξεις μόνο wording/μορφοποίηση. Απαγορεύεται να αλλάξεις business facts, να κάνεις query, να συμπληρώσεις ελλείποντα στοιχεία ή να εκτελέσεις action. " + instruction
+                        ["text"] =
+                            "Είσαι το registered Jarvis presentation layer. Εφάρμοσε υποχρεωτικά το JARVIS_POLICY_CONTEXT. " +
+                            outputContract + "\n\n" + policyContext
                     }
                 },
                 ["messages"] = new JArray
