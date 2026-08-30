@@ -105,6 +105,8 @@ namespace S1Jarvis.Core
                 issues.Add("Export regression: source_result must be optional/upstream-bound, not mandatory.");
             if (export != null && !(export.OptionalInputs ?? new string[0]).Contains("document_scope", StringComparer.OrdinalIgnoreCase))
                 issues.Add("Export regression: ExportData must accept structured document_scope.");
+            if (export != null && !(export.OptionalInputs ?? new string[0]).Contains("entity_role", StringComparer.OrdinalIgnoreCase))
+                issues.Add("Export regression: ExportData must accept structured entity_role.");
 
             bool binding = JarvisDependencyBinder.AllRules.Any(x =>
                 string.Equals(x.SourceTaskType, "ReportData", StringComparison.OrdinalIgnoreCase) &&

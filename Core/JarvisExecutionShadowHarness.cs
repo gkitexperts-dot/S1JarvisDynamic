@@ -121,13 +121,18 @@ namespace S1Jarvis.Core
                     JarvisTaskExecutionResult reportResult = await JarvisControlledTaskExecutor.ExecuteReportDataAsync(xSupport, reportStep.ObjectId, reportInputs);
                     if (reportResult.Success)
                     {
+                        string entityRole = reportInputs["entity_role"] == null ? string.Empty : reportInputs["entity_role"].ToString();
                         string documentScope = reportInputs["document_scope"] == null ? string.Empty : reportInputs["document_scope"].ToString();
+                        string operatorScope = reportInputs["operator_scope"] == null ? string.Empty : reportInputs["operator_scope"].ToString();
+                        string verifiedSql = reportResult.Outputs["query_sql"] == null ? string.Empty : reportResult.Outputs["query_sql"].ToString();
+                        int verifiedUserId = reportInputs["__current_user_id"] == null ? 0 : (int)reportInputs["__current_user_id"];
+                        string[] queryScopeIssues = JarvisStructuredQueryScopeValidator.Validate(verifiedSql, entityRole, operatorScope, verifiedUserId);
                         string reportDatasetForValidation = reportResult.Outputs["dataset"] == null ? string.Empty : reportResult.Outputs["dataset"].ToString();
-                        string[] scopeIssues = JarvisDocumentScopeValidator.Validate(documentScope, reportDatasetForValidation);
-                        if (scopeIssues.Length > 0)
+                        string[] documentScopeIssues = JarvisDocumentScopeValidator.Validate(documentScope, reportDatasetForValidation);
+                        foreach (string scopeIssue in queryScopeIssues.Concat(documentScopeIssues))
                         {
                             reportResult.Success = false;
-                            foreach (string scopeIssue in scopeIssues) reportResult.Issues.Add(scopeIssue);
+                            reportResult.Issues.Add(scopeIssue);
                         }
                     }
                     if (!reportResult.Success)
@@ -435,6 +440,13 @@ namespace S1Jarvis.Core
                 if (entry == null || !PromotedControlledTasks.Contains(entry.TaskType)) return false;
                 JarvisTaskDescriptor descriptor = JarvisTaskRegistry.Find(entry.TaskType);
                 if (descriptor == null || !string.Equals(descriptor.OwnerAgent, entry.OwnerAgent, StringComparison.OrdinalIgnoreCase)) return false;
+                if (string.Equals(entry.TaskType, "ExportData", StringComparison.OrdinalIgnoreCase))
+                {
+                    JarvisValidatedTaskNode node = planning.Graph.Nodes.FirstOrDefault(x => x != null && string.Equals(x.ObjectId, entry.ObjectId, StringComparison.OrdinalIgnoreCase));
+                    JarvisPrerequisiteResolutionItem format = node == null ? null : node.Prerequisites.FirstOrDefault(x => x != null && string.Equals(x.InputName, "format", StringComparison.OrdinalIgnoreCase));
+                    if (format != null && format.Value != null && string.Equals(format.Value.ToString(), "pdf", StringComparison.OrdinalIgnoreCase))
+                        return false;
+                }
             }
             return true;
         }

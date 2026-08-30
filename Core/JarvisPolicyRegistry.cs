@@ -155,7 +155,7 @@ namespace S1Jarvis.Core
                 "JARVIS_RUNTIME_CONTEXT contains authenticated Soft1 session facts such as currentUserId/currentCompanyId/localDateTime. When a required fact is present there, do not ask the operator to identify himself or restate it. Self/current-operator references resolve against that context.", priority: 923),
 
             P("DECOMPOSER.STRUCTURED_SEMANTIC_SCOPE", JarvisPolicyScope.Task, JarvisPolicyEnforcement.Both,
-                "For reporting/export intents emit canonical structured inputs when semantically present: entity_role=Customer|Supplier|Debtor|Creditor only when the role is explicit/resolved; document_scope=invoice|order|quotation|credit|delivery|documents|movements; operator_scope=current_operator when the request concerns the authenticated operator; result_mode=latest when one most-recent business row is requested. Do not invent entity_role when the same identity may exist in multiple roles.", agents: A("Jarvis"), tasks: A("__decomposition"), priority: 922),
+                "For reporting/export intents emit canonical structured inputs when semantically present: entity_role=Customer|Supplier|Debtor|Creditor only when the role is explicit/resolved; document_scope=invoice|order|quotation|credit|delivery|documents|movements; format=xlsx|csv|pdf for ExportData when explicitly requested; operator_scope=current_operator when the request concerns the authenticated operator; result_mode=latest when one most-recent business row is requested. Do not invent entity_role when the same identity may exist in multiple roles.", agents: A("Jarvis"), tasks: A("__decomposition"), priority: 922),
 
             P("DECOMPOSER.EXPLICIT_UPSTREAM_BINDINGS", JarvisPolicyScope.Orchestration, JarvisPolicyEnforcement.Both,
                 "Cross-task composition must be explicit in structured inputs. If an ExportData object semantically exports the result requested by a ReportData object in the same instruction, emit source_result=__UPSTREAM_REPORT__. If a SendEmail object explicitly attaches the file produced by an ExportData object, emit artifact_reference=__UPSTREAM_EXPORT__. Never emit these markers merely because those task types coexist; they represent a real semantic dependency.", agents: A("Jarvis"), tasks: A("__decomposition"), priority: 921),
@@ -197,6 +197,9 @@ namespace S1Jarvis.Core
 
             P("ATLAS.SELECT_ONLY", JarvisPolicyScope.Tool, JarvisPolicyEnforcement.Both,
                 "Το query_data εκτελεί μόνο SELECT. Μη χρησιμοποιείς write/DDL/EXEC operations. Ο deterministic SELECT-only validator παραμένει authoritative.", agents: A("Atlas"), tools: A("query_data"), priority: 885),
+
+            P("ATLAS.STRUCTURED_SCOPE_IS_BINDING", JarvisPolicyScope.Validation, JarvisPolicyEnforcement.Both,
+                "Canonical entity_role, document_scope, operator_scope and result_mode are binding task constraints, not hints. The final verified SQL/result must make those constraints deterministically checkable; specific document scopes must expose authoritative human-readable document type metadata such as SERIES.NAME.", agents: A("Atlas", "Jarvis"), tasks: A("ReportData", "ExportData"), domains: A("Reporting"), priority: 884),
 
             P("ATLAS.ENTITY_FIDELITY", JarvisPolicyScope.Domain, JarvisPolicyEnforcement.Both,
                 "Όταν το request αναφέρει συγκεκριμένη business entity και role, διατήρησε την ίδια identity/role. Μην διευρύνεις αυθαίρετα με συνώνυμα, μεταφράσεις, φωνητικά ή παρόμοιες επωνυμίες. Σε ambiguity απαιτείται resolution/clarification.", agents: A("Atlas", "Compass", "Jarvis"), domains: A("Reporting", "Traders"), priority: 880),

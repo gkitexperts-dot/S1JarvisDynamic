@@ -105,7 +105,7 @@ namespace S1Jarvis.Core
                 "Export business data to a file. It can autonomously plan a validated SELECT from export_request or reuse an explicitly bound upstream report result/query provenance.",
                 A("export_query_to_file", "export_shown_table"),
                 A("export_request"),
-                A("source_result", "sql", "format", "filename", "columns", "visible_table", "document_scope", "operator_scope", "result_mode"),
+                A("source_result", "sql", "format", "filename", "columns", "visible_table", "entity_role", "document_scope", "operator_scope", "result_mode"),
                 A("file_artifact", "path", "filename"),
                 A("Reporting"),
                 A("export", "excel", "xlsx", "csv", "pdf", "file")),

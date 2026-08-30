@@ -53,6 +53,12 @@ namespace S1Jarvis.Core
                         xSupport, exportRequest, policyContext, operatorScope, resultMode, currentUserId, cancellationToken).ConfigureAwait(false);
                 }
 
+                string entityRole = ReadString(dispatchInputs, "entity_role");
+                string operatorScope = ReadString(dispatchInputs, "operator_scope");
+                int verifiedCurrentUserId = dispatchInputs["__current_user_id"] == null ? 0 : (int)dispatchInputs["__current_user_id"];
+                string[] queryScopeIssues = JarvisStructuredQueryScopeValidator.Validate(sql, entityRole, operatorScope, verifiedCurrentUserId);
+                if (queryScopeIssues.Length > 0)
+                    throw new InvalidOperationException("Jarvis rejected ExportData structured query scope: " + string.Join(" | ", queryScopeIssues));
                 ValidateStructuredDocumentScope(xSupport, sql, ReadString(dispatchInputs, "document_scope"));
 
                 string format = ReadString(dispatchInputs, "format");
