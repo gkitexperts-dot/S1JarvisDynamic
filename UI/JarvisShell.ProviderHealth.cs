@@ -39,30 +39,34 @@ namespace S1Jarvis.UI
 
             try
             {
+                DebugLog.Log("[AI-SESSION-REGISTRY] boot provisioning waiting for WebView readiness");
+
                 for (int attempt = 0; attempt < 150; attempt++)
                 {
-                    if (!string.IsNullOrWhiteSpace(_agentAccountRef) &&
-                        webView != null &&
-                        webView.CoreWebView2 != null)
+                    if (webView != null && webView.CoreWebView2 != null)
                         break;
 
                     await Task.Delay(100);
                 }
 
-                if (string.IsNullOrWhiteSpace(_agentAccountRef) ||
-                    webView == null ||
-                    webView.CoreWebView2 == null)
+                if (webView == null || webView.CoreWebView2 == null)
+                {
+                    DebugLog.Log("[AI-SESSION-REGISTRY] boot provisioning aborted: webview_not_ready");
                     return;
+                }
 
-                // BOOT is the normal provisioning boundary. Keep all existing
-                // licence/activation/identity checks, then load the complete
-                // Agent + Provider + Model + API credential registry once.
+                // BOOT is the authoritative provisioning boundary. It must not
+                // depend on the legacy opaque _agentAccountRef being populated
+                // first; the signed HEALTH request resolves licence + identity +
+                // saved AI configuration and returns all session execution targets.
                 JarvisAgentRuntimeSnapshot.Reset();
                 VerilicAiMessagesClient.ResetRuntimeTargetSnapshot();
+                DebugLog.Log("[AI-SESSION-REGISTRY] boot provisioning start");
                 await RefreshProviderHealthStatusAsync(false);
             }
-            catch
+            catch (Exception ex)
             {
+                DebugLog.Log("[AI-SESSION-REGISTRY] boot provisioning exception: " + ex.Message);
                 try
                 {
                     await ShowProviderHealthStatusAsync(
@@ -81,16 +85,6 @@ namespace S1Jarvis.UI
 
             try
             {
-                if (string.IsNullOrWhiteSpace(_agentAccountRef))
-                {
-                    message = "AI agent: δεν υπάρχει ενεργή άδεια/agent";
-                    state = "error";
-                    await ShowProviderHealthStatusAsync(message, state);
-                    if (explicitCommand)
-                        PostProviderHealthCommandResult(message, state);
-                    return;
-                }
-
                 await ShowProviderHealthStatusAsync(
                     explicitCommand
                         ? "AI agents: ανανέωση provisioning..."
@@ -100,11 +94,12 @@ namespace S1Jarvis.UI
                 // The ONLY allowed remote AI-provisioning points are:
                 //   1) Jarvis boot
                 //   2) explicit HEALTH command
-                // Normal prompts never call Verilic.
+                // Normal prompts never call Verilic. The expected account ref is
+                // intentionally null: HEALTH is authoritative for the whole session.
                 var probe = new JarvisAgentHealthProbe();
                 JarvisAgentHealthResult result = await probe.ProbeAsync(
                     _xSupport,
-                    _agentAccountRef);
+                    null);
                 model = result == null ? null : result.Model;
 
                 if (result != null && result.Ready)
@@ -128,6 +123,22 @@ namespace S1Jarvis.UI
                     }
                     else
                     {
+                        // Preserve the old UI compatibility binding after the
+                        // authoritative session registry has loaded successfully.
+                        if (result.Targets != null)
+                        {
+                            foreach (JarvisAgentHealthTargetResult target in result.Targets)
+                            {
+                                if (target != null &&
+                                    string.Equals(target.Agent, "Jarvis", StringComparison.OrdinalIgnoreCase) &&
+                                    !string.IsNullOrWhiteSpace(target.AgentAccountRef))
+                                {
+                                    _agentAccountRef = target.AgentAccountRef.Trim();
+                                    break;
+                                }
+                            }
+                        }
+
                         model = result.Model;
                         string provider = string.IsNullOrWhiteSpace(result.Provider)
                             ? "provider"
@@ -136,12 +147,15 @@ namespace S1Jarvis.UI
                             ? "AI provider: HEALTH refresh ολοκληρώθηκε · " + provider + " · " + model
                             : "AI provider: συνδεδεμένος · " + provider + " · " + model;
                         state = "ready";
+                        DebugLog.Log("[AI-SESSION-REGISTRY] boot/refresh provisioning success");
                     }
                 }
                 else
                 {
                     message = BuildProviderHealthFailureMessage(result, model);
                     state = "error";
+                    DebugLog.Log("[AI-SESSION-REGISTRY] provisioning failed: " +
+                        (result == null ? "null_result" : (result.ReasonCode ?? "unknown")));
                     if (explicitCommand && JarvisAgentRuntimeSnapshot.IsInitialized)
                     {
                         message += " · διατηρήθηκε το προηγούμενο session registry";
