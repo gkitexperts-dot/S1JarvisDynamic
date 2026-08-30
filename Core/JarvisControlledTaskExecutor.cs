@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Text;
+using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
 using Newtonsoft.Json;
@@ -83,7 +84,9 @@ namespace S1Jarvis.Core
 
         private static JObject BuildQueryRequest(string question, string previousSql, string previousDiagnostic, int attempt)
         {
-            string userContent = "business_question: " + (question ?? string.Empty);
+            string entityCatalog = JarvisBusinessEntityCatalog.BuildAgentContext().ToString(Formatting.None);
+            string userContent = "business_question: " + (question ?? string.Empty) +
+                                 "\n\nauthoritative_entity_catalog: " + entityCatalog;
             if (attempt > 1)
             {
                 userContent += "\n\n[JARVIS_VALIDATION_RETRY]" +
@@ -103,11 +106,12 @@ namespace S1Jarvis.Core
                         ["type"] = "text",
                         ["text"] = "Είσαι ο Atlas executor υπό τον έλεγχο του Jarvis. Εκτελείς μόνο το συγκεκριμένο ReportData task. " +
                                    "Επιτρέπεται αποκλειστικά query_data και αποκλειστικά SELECT. Κάνε ΕΝΑ στοχευμένο query που απαντά το business_question. " +
+                                   "Το authoritative_entity_catalog του user payload είναι η μοναδική πηγή αλήθειας για business entity discriminators, Soft1 role mappings και identity fields. Δεν επιτρέπεται να επινοήσεις SODTYPE, object name ή άλλο entity discriminator που δεν υπάρχει εκεί. " +
                                    "Αν το business_question ζητά ΕΝΑ τελευταίο/πιο πρόσφατο αποτέλεσμα, χρησιμοποίησε TOP 1 και deterministic ORDER BY. " +
-                                   "Όταν το business_question αναφέρει συγκεκριμένη επιχειρησιακή οντότητα (πελάτη, προμηθευτή, είδος, χρήστη κ.λπ.), διατήρησε πιστά την ταυτότητα και τον ρόλο που έδωσε ο χειριστής. Μην επεκτείνεις αυθαίρετα το όνομα με μεταφράσεις, συνώνυμα, φωνητικά ισοδύναμα ή άλλες παρόμοιες επωνυμίες. " +
-                                   "Αν ο ρόλος είναι ρητός, χρησιμοποίησε και το αντίστοιχο role discriminator του schema όπου υπάρχει. Το τελικό dataset δεν πρέπει να συγχωνεύει διαφορετικές master οντότητες σαν να είναι η ίδια μόνο επειδή έχουν παρόμοιο όνομα. " +
+                                   "Όταν το business_question αναφέρει συγκεκριμένη επιχειρησιακή οντότητα, διατήρησε πιστά την ταυτότητα και τον ρόλο που έδωσε ο χειριστής. Μην επεκτείνεις αυθαίρετα το όνομα με μεταφράσεις, συνώνυμα, φωνητικά ισοδύναμα ή άλλες παρόμοιες επωνυμίες. " +
+                                   "Αν ο ρόλος είναι ρητός, χρησιμοποίησε αποκλειστικά τον αντίστοιχο discriminator από το authoritative_entity_catalog. Το τελικό dataset δεν πρέπει να συγχωνεύει διαφορετικές master οντότητες σαν να είναι η ίδια μόνο επειδή έχουν παρόμοιο όνομα. " +
                                    "Για παραστατικά χρησιμοποίησε FINDOC: FINDOC, FINCODE, TRNDATE, SUMAMNT, SERIES, SOSOURCE, COMPANY, TRDR. " +
-                                   "Για όνομα συναλλασσόμενου JOIN TRDR ON TRDR.TRDR=FINDOC.TRDR. Για πελάτη χρησιμοποίησε TRDR.SODTYPE=13 και για προμηθευτή TRDR.SODTYPE=12 όταν ο ρόλος δηλώνεται ρητά. " +
+                                   "Για όνομα συναλλασσόμενου JOIN TRDR ON TRDR.TRDR=FINDOC.TRDR. " +
                                    "Για όνομα σειράς το SERIES είναι composite identity: JOIN SERIES με COMPANY + SERIES + SOSOURCE, όχι μόνο SERIES. " +
                                    "Μην επιστρέφεις lookup/master rows ως τελικό αποτέλεσμα όταν το business_question ζητά συναλλαγές/παραστατικά. " +
                                    "Μην χρησιμοποιείς άγνωστες στήλες. Ο Jarvis θα ελέγξει το SQL ΠΡΙΝ το εκτελέσει και θα απορρίψει query που δεν εκφράζει σωστά το intent."
@@ -149,6 +153,9 @@ namespace S1Jarvis.Core
             string normalized = NormalizeSql(sql);
             if (!normalized.StartsWith(" SELECT ", StringComparison.Ordinal)) issues.Add("Only SELECT is allowed.");
             if (normalized.Contains(" INSERT ") || normalized.Contains(" UPDATE ") || normalized.Contains(" DELETE ") || normalized.Contains(" MERGE ") || normalized.Contains(" DROP ") || normalized.Contains(" ALTER ") || normalized.Contains(" EXEC ") || normalized.Contains(" EXECUTE ")) issues.Add("SQL contains a non-read-only operation.");
+
+            ValidateRegisteredTraderRoleDiscriminators(normalized, issues);
+
             if (IsDocumentQuestion(question))
             {
                 if (!normalized.Contains(" FROM FINDOC ")) issues.Add("Document intent must read its final business rows from FINDOC, not only from lookup/master tables.");
@@ -171,6 +178,19 @@ namespace S1Jarvis.Core
                 if (!seriesJoin.Contains("SERIES")) issues.Add("SERIES join must include SERIES key.");
             }
             return issues.Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+        }
+
+        private static void ValidateRegisteredTraderRoleDiscriminators(string normalizedSql, List<string> issues)
+        {
+            if (string.IsNullOrWhiteSpace(normalizedSql) || issues == null) return;
+            MatchCollection matches = Regex.Matches(normalizedSql, @"(?:\b[A-Z0-9_]+\.)?SODTYPE\s*=\s*(\d+)", RegexOptions.CultureInvariant);
+            foreach (Match match in matches)
+            {
+                int sodType;
+                if (!match.Success || match.Groups.Count < 2 || !int.TryParse(match.Groups[1].Value, out sodType)) continue;
+                if (JarvisBusinessEntityCatalog.FindTraderRole(sodType) == null)
+                    issues.Add("SQL uses unregistered TRDR.SODTYPE=" + sodType + ". Entity discriminators must come from JarvisBusinessEntityCatalog.");
+            }
         }
 
         private static string[] ValidateQueryResultForQuestion(string question, string queryResult)
