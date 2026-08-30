@@ -75,11 +75,12 @@ namespace S1Jarvis.Core
             XSupport xSupport, string question, string policyContext, string operatorScope, string resultMode,
             string documentScope, int currentUserId, CancellationToken cancellationToken)
         {
+            JarvisDocumentCompanyScopePolicy.Scope companyScope = JarvisDocumentCompanyScopePolicy.Resolve(xSupport);
             string previousSql = null;
             string previousDiagnostic = null;
             for (int attempt = 1; attempt <= MaxPlanningAttempts; attempt++)
             {
-                JObject request = BuildQueryRequest(question, policyContext, operatorScope, resultMode, documentScope, currentUserId, previousSql, previousDiagnostic, attempt);
+                JObject request = BuildQueryRequest(question, policyContext, operatorScope, resultMode, documentScope, currentUserId, companyScope, previousSql, previousDiagnostic, attempt);
                 S1Jarvis.Core.AgentProxyResponse response = await new S1Jarvis.Access.Verilic.VerilicAiMessagesClient().SendAsync(xSupport, "Atlas", request.ToString(Formatting.None), cancellationToken).ConfigureAwait(false);
                 EnsureSuccess(response, "Atlas ReportData query planning failed.");
                 JObject queryUse = FindToolUse(response.RawResponseJson, "query_data");
@@ -100,8 +101,38 @@ namespace S1Jarvis.Core
                         issues.Add(scopeIssue);
                 }
 
-                DebugLog.Log("[ORCH-SQL] candidate attempt=" + attempt + " sql=" + OneLine(sql));
-                issues.AddRange(ValidateSqlForQuestion(question, sql, operatorScope, resultMode, currentUserId));
+                if (IsDocumentQuestion(question))
+                {
+                    string findocAlias;
+                    string fprmsAlias;
+                    string seriesAlias;
+                    bool hasFindoc = TryReadFromAlias(sql, "FINDOC", out findocAlias);
+                    bool hasFprms = TryReadJoinAlias(sql, "FPRMS", out fprmsAlias);
+                    bool hasSeries = TryReadJoinAlias(sql, "SERIES", out seriesAlias);
+                    if (hasFindoc)
+                    {
+                        try
+                        {
+                            sql = JarvisDocumentCompanyScopePolicy.Apply(
+                                sql,
+                                companyScope,
+                                findocAlias,
+                                hasFprms ? fprmsAlias : null,
+                                hasSeries ? seriesAlias : null);
+                        }
+                        catch (Exception ex)
+                        {
+                            issues.Add("Current-company document scope could not be enforced: " + ex.Message);
+                        }
+                    }
+                    else
+                    {
+                        issues.Add("Current-company document scope requires FINDOC as the document source.");
+                    }
+                }
+
+                DebugLog.Log("[ORCH-SQL] candidate attempt=" + attempt + " company=" + companyScope.CompanyId + " sql=" + OneLine(sql));
+                issues.AddRange(ValidateSqlForQuestion(question, sql, operatorScope, resultMode, currentUserId, companyScope));
 
                 if (issues.Count == 0 && !string.IsNullOrWhiteSpace(normalizedScope) && normalizedScope != "documents" && normalizedScope != "movements")
                 {
@@ -115,7 +146,7 @@ namespace S1Jarvis.Core
 
                 if (issues.Count == 0)
                 {
-                    DebugLog.Log("[ORCH-SQL] accepted attempt=" + attempt + " sql=" + OneLine(sql));
+                    DebugLog.Log("[ORCH-SQL] accepted attempt=" + attempt + " company=" + companyScope.CompanyId + " sql=" + OneLine(sql));
                     return sql;
                 }
                 previousSql = sql;
@@ -127,19 +158,25 @@ namespace S1Jarvis.Core
 
         private static JObject BuildQueryRequest(
             string question, string policyContext, string operatorScope, string resultMode, string documentScope,
-            int currentUserId, string previousSql, string previousDiagnostic, int attempt)
+            int currentUserId, JarvisDocumentCompanyScopePolicy.Scope companyScope,
+            string previousSql, string previousDiagnostic, int attempt)
         {
             string userContent = "business_question: " + (question ?? string.Empty);
             if (!string.IsNullOrWhiteSpace(operatorScope)) userContent += "\noperator_scope: " + operatorScope;
             if (!string.IsNullOrWhiteSpace(resultMode)) userContent += "\nresult_mode: " + resultMode;
             if (!string.IsNullOrWhiteSpace(documentScope)) userContent += "\ndocument_scope: " + NormalizeDocumentScope(documentScope);
             if (currentUserId > 0) userContent += "\ncurrentUserId: " + currentUserId;
+            if (companyScope != null && companyScope.CompanyId > 0)
+            {
+                userContent += "\ncurrentCompanyId: " + companyScope.CompanyId;
+                userContent += "\n" + JarvisDocumentCompanyScopePolicy.BuildPlanningDirective(companyScope);
+            }
             if (attempt > 1)
             {
                 userContent += "\n\n[JARVIS_VALIDATION_RETRY]" +
                                "\nprevious_sql: " + (previousSql ?? string.Empty) +
                                "\nvalidation_issues: " + (previousDiagnostic ?? string.Empty) +
-                               "\nCorrect every validation issue before returning the next SELECT. Do not broaden a structured document_scope.";
+                               "\nCorrect every validation issue before returning the next SELECT. Do not broaden a structured document_scope or current-company scope.";
             }
 
             return new JObject
@@ -156,7 +193,7 @@ namespace S1Jarvis.Core
                             "Εκτελείς το registered atomic task ReportData ως Atlas με scoped tool query_data. " +
                             "Το JARVIS_KNOWLEDGE_CONTEXT περιέχει authoritative business/schema facts και το JARVIS_POLICY_CONTEXT τους behavioral κανόνες. " +
                             "Το envelope ορίζει μόνο το atomic protocol και το required tool call. " +
-                            "Για κάθε FINDOC document query χρησιμοποίησε INNER JOIN FPRMS ON FINDOC.FPRMS=FPRMS.FPRMS και INNER JOIN SERIES ON SERIES.FPRMS=FPRMS.FPRMS. Το FPRMS είναι ο authoritative document type discriminator· η SERIES είναι descriptive subtype/variant. Πρόβαλε FINDOC+SOSOURCE, FPRMS.NAME και SERIES.NAME.\n\n" +
+                            "Για κάθε FINDOC document query χρησιμοποίησε INNER JOIN FPRMS ON FINDOC.FPRMS=FPRMS.FPRMS και INNER JOIN SERIES ON SERIES.FPRMS=FPRMS.FPRMS. Το FPRMS είναι ο authoritative document type discriminator· η SERIES είναι descriptive subtype/variant. Το authenticated currentCompanyId είναι binding tenant scope και πρέπει να περιορίζει FINDOC και κάθε joined document metadata table που διαθέτει COMPANY. Πρόβαλε FINDOC+SOSOURCE, FPRMS.NAME και SERIES.NAME.\n\n" +
                             (policyContext ?? string.Empty)
                     }
                 },
@@ -190,7 +227,13 @@ namespace S1Jarvis.Core
             return content.OfType<JObject>().FirstOrDefault(x => string.Equals((string)x["type"], "tool_use", StringComparison.OrdinalIgnoreCase) && string.Equals((string)x["name"], toolName, StringComparison.OrdinalIgnoreCase));
         }
 
-        private static string[] ValidateSqlForQuestion(string question, string sql, string operatorScope, string resultMode, int currentUserId)
+        private static string[] ValidateSqlForQuestion(
+            string question,
+            string sql,
+            string operatorScope,
+            string resultMode,
+            int currentUserId,
+            JarvisDocumentCompanyScopePolicy.Scope companyScope)
         {
             var issues = new List<string>();
             string normalized = NormalizeSql(sql);
@@ -226,6 +269,16 @@ namespace S1Jarvis.Core
 
                 if (!string.IsNullOrWhiteSpace(seriesAlias) && !SelectClauseContainsExpression(sql, seriesAlias + ".NAME")) issues.Add("Document intent must project SERIES.NAME metadata.");
                 if (!string.IsNullOrWhiteSpace(fprmsAlias) && !SelectClauseContainsExpression(sql, fprmsAlias + ".NAME")) issues.Add("Document intent must project FPRMS.NAME metadata.");
+
+                if (!string.IsNullOrWhiteSpace(findocAlias))
+                {
+                    issues.AddRange(JarvisDocumentCompanyScopePolicy.Validate(
+                        sql,
+                        companyScope,
+                        findocAlias,
+                        string.IsNullOrWhiteSpace(fprmsAlias) ? null : fprmsAlias,
+                        string.IsNullOrWhiteSpace(seriesAlias) ? null : seriesAlias));
+                }
             }
 
             bool currentOperatorScope = string.Equals(operatorScope, "current_operator", StringComparison.OrdinalIgnoreCase);
