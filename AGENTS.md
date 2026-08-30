@@ -38,6 +38,28 @@ This file is a persistent engineering contract for anyone (human or AI) changing
    - If HEALTH fails or returns an incomplete registry, preserve the currently working registry unchanged.
    - HEALTH output may show agent/provider/model/routing and `Credential=Loaded/Missing`; it must never reveal the credential itself.
 
+## Agent/provider/model neutrality — NON-NEGOTIABLE
+
+1. **Logical agents are provider-neutral identities, never aliases for vendors or models.**
+   - `Jarvis`, `Atlas`, `Forge`, `Compass`, `Echo`, `Sprint`, `Scout`, and `Sage` express responsibilities/capabilities only.
+   - No agent behavior, task contract, tool registry entry, orchestration rule, dataset rule, presentation rule, or business flow may depend on Google/Gemini, OpenAI, Anthropic/Claude, or any concrete model family.
+
+2. **The Jarvis AI request/response contract must remain provider-neutral.**
+   - Core code may express neutral semantics such as system instructions, messages, tools, tool choice, images/documents, token limits, temperature and structured tool results.
+   - Core code must not reshape those semantics merely because one provider accepts a smaller/different wire schema.
+   - A provider limitation must be handled at the provider adapter boundary, not by weakening or forking the core orchestration contract.
+
+3. **Provider-specific translation belongs only in the direct provider adapter.**
+   - `Access/Verilic/JarvisDirectAiTransport.cs` translates the neutral Jarvis request into each provider's native wire format and normalizes each native response back to the neutral Jarvis response contract.
+   - Tool/function schemas and tool-choice semantics must be translated independently for Google, OpenAI, Anthropic, and future providers while preserving the same logical intent.
+   - Provider-specific unsupported schema keywords may be normalized/dropped only in that provider adapter. The source neutral tool schema remains unchanged.
+   - Do not add model-specific branches in orchestration/business code to make one model pass a test.
+
+4. **Never solve provider compatibility by changing the selected provider/model.**
+   - Do not silently switch model/provider when a request shape fails.
+   - Fix the adapter mapping or fail with a diagnostic.
+   - Provider/model selection remains exclusively the BOOT/HEALTH-provisioned configuration from Verilic.
+
 ## Provider/model rules — NON-NEGOTIABLE
 
 1. **Never hardcode a concrete AI provider or model in desktop/client business or orchestration code.**
@@ -64,7 +86,7 @@ This file is a persistent engineering contract for anyone (human or AI) changing
 - `UI/JarvisShell.ProviderHealth.cs` — BOOT provisioning and the only explicit runtime refresh (`HEALTH`); also clears session credentials on shell shutdown.
 - `Core/JarvisAgentHealthProbe.cs` — signed BOOT/HEALTH provisioning request. This must never be invoked by normal prompt execution.
 - `Core/JarvisAgentRuntimeSnapshot.cs` — in-memory session execution registry; every executable agent requires Provider + Model + API credential; supports atomic HEALTH replacement and secret clearing.
-- `Access/Verilic/JarvisDirectAiTransport.cs` — normal direct provider transport after provisioning. It must never contact Verilic.
+- `Access/Verilic/JarvisDirectAiTransport.cs` — normal direct provider transport after provisioning. It must never contact Verilic; all provider-specific request/response/schema/tool-choice translation stays here.
 - `Access/Verilic/VerilicAiMessagesClient.cs` — legacy class name retained only as the local session dispatcher/compatibility boundary; it must not send runtime messages to Verilic.
 - `Core/JarvisAgentClient.cs` and orchestration clients — select logical agents/tasks only; they must not own provider/model/API-key configuration.
 
@@ -95,4 +117,6 @@ The same check is wired into `.github/workflows/ai-routing-policy.yml`. It must 
 
 Search the branch for model/provider literals, `/api/jarvis-ai/messages`, routing/Health calls, and credential persistence/logging. A change is not complete if it introduces any of those outside the BOOT/explicit-HEALTH provisioning boundary.
 
-This invariant exists because Verilic owns licence/provisioning while an open Jarvis session owns deterministic, inexpensive, direct AI execution using the customer's session-only agent credentials.
+Also inspect whether a proposed fix belongs in the provider adapter. If the issue is a native provider wire-format difference (tool schema, tool choice, multimodal blocks, response shape, usage fields, reasoning controls), keep the core Jarvis contract unchanged and translate only at the adapter boundary.
+
+This invariant exists because Verilic owns licence/provisioning while an open Jarvis session owns deterministic, inexpensive, direct AI execution using the customer's session-only agent credentials, with logical agents remaining independent of the selected AI vendor/model.
