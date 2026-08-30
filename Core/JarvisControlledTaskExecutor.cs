@@ -156,7 +156,7 @@ namespace S1Jarvis.Core
                             "Εκτελείς το registered atomic task ReportData ως Atlas με scoped tool query_data. " +
                             "Το JARVIS_KNOWLEDGE_CONTEXT περιέχει authoritative business/schema facts και το JARVIS_POLICY_CONTEXT τους behavioral κανόνες. " +
                             "Το envelope ορίζει μόνο το atomic protocol και το required tool call. " +
-                            "Για κάθε FINDOC document query είναι υποχρεωτικά JOIN SERIES και JOIN FPRMS. Το FINDOC δένει στη SERIES με COMPANY+SOSOURCE+SERIES και ο FPRMS δένει μέσω SERIES.FPRMS=FPRMS.FPRMS. Πρόβαλε FINDOC+SOSOURCE και human-readable SERIES.NAME/FPRMS.NAME metadata για classification.\n\n" +
+                            "Για κάθε FINDOC document query χρησιμοποίησε INNER JOIN FPRMS ON FINDOC.FPRMS=FPRMS.FPRMS και INNER JOIN SERIES ON SERIES.FPRMS=FPRMS.FPRMS. Το FPRMS είναι ο authoritative document type discriminator· η SERIES είναι descriptive subtype/variant. Πρόβαλε FINDOC+SOSOURCE, FPRMS.NAME και SERIES.NAME.\n\n" +
                             (policyContext ?? string.Empty)
                     }
                 },
@@ -207,45 +207,32 @@ namespace S1Jarvis.Core
                 if (!SelectClauseContainsColumn(normalized, "FINCODE")) issues.Add("Document intent must project FINCODE.");
                 if (!SelectClauseContainsColumn(normalized, "TRNDATE")) issues.Add("Document intent must project TRNDATE.");
 
-                string seriesJoin = ExtractJoinClause(normalized, "SERIES");
-                if (seriesJoin == null)
-                {
-                    issues.Add("Every FINDOC document SELECT must JOIN SERIES for authoritative series metadata.");
-                }
-                else
-                {
-                    if (!seriesJoin.Contains("COMPANY")) issues.Add("SERIES join must include COMPANY.");
-                    if (!seriesJoin.Contains("SOSOURCE")) issues.Add("SERIES join must include SOSOURCE.");
-                    if (!Regex.IsMatch(seriesJoin, @"(?:\b[A-Z0-9_]+\.)?SERIES\s*=\s*(?:\b[A-Z0-9_]+\.)?SERIES\b", RegexOptions.CultureInvariant))
-                        issues.Add("SERIES join must bind FINDOC.SERIES to SERIES.SERIES.");
-                }
+                string findocAlias;
+                string fprmsAlias;
+                string seriesAlias;
+                if (!TryReadFromAlias(sql, "FINDOC", out findocAlias)) issues.Add("Every FINDOC document SELECT must expose FINDOC as the source table.");
+                if (!TryReadJoinAlias(sql, "FPRMS", out fprmsAlias)) issues.Add("Every FINDOC document SELECT must INNER JOIN FPRMS.");
+                if (!TryReadJoinAlias(sql, "SERIES", out seriesAlias)) issues.Add("Every FINDOC document SELECT must INNER JOIN SERIES.");
 
                 string fprmsJoin = ExtractJoinClause(normalized, "FPRMS");
-                if (fprmsJoin == null)
-                {
-                    issues.Add("Every FINDOC document SELECT must JOIN FPRMS for authoritative movement/parameter metadata.");
-                }
-                else if (!Regex.IsMatch(fprmsJoin, @"(?:\b[A-Z0-9_]+\.)?FPRMS\s*=\s*(?:\b[A-Z0-9_]+\.)?FPRMS\b", RegexOptions.CultureInvariant))
-                {
-                    issues.Add("FPRMS join must bind SERIES.FPRMS to FPRMS.FPRMS.");
-                }
+                if (!string.IsNullOrWhiteSpace(findocAlias) && !string.IsNullOrWhiteSpace(fprmsAlias))
+                    if (fprmsJoin == null || !JoinBinds(fprmsJoin, findocAlias, "FPRMS", fprmsAlias, "FPRMS"))
+                        issues.Add("FPRMS join must bind FINDOC.FPRMS to FPRMS.FPRMS.");
 
-                string seriesAlias;
-                string fprmsAlias;
-                if (TryReadJoinAlias(sql, "SERIES", out seriesAlias) &&
-                    !SelectClauseContainsExpression(sql, seriesAlias + ".NAME"))
-                    issues.Add("Document intent must project SERIES.NAME metadata.");
-                if (TryReadJoinAlias(sql, "FPRMS", out fprmsAlias) &&
-                    !SelectClauseContainsExpression(sql, fprmsAlias + ".NAME"))
-                    issues.Add("Document intent must project FPRMS.NAME metadata.");
+                string seriesJoin = ExtractJoinClause(normalized, "SERIES");
+                if (!string.IsNullOrWhiteSpace(seriesAlias) && !string.IsNullOrWhiteSpace(fprmsAlias))
+                    if (seriesJoin == null || !JoinBinds(seriesJoin, seriesAlias, "FPRMS", fprmsAlias, "FPRMS"))
+                        issues.Add("SERIES join must bind SERIES.FPRMS to FPRMS.FPRMS.");
+
+                if (!string.IsNullOrWhiteSpace(seriesAlias) && !SelectClauseContainsExpression(sql, seriesAlias + ".NAME")) issues.Add("Document intent must project SERIES.NAME metadata.");
+                if (!string.IsNullOrWhiteSpace(fprmsAlias) && !SelectClauseContainsExpression(sql, fprmsAlias + ".NAME")) issues.Add("Document intent must project FPRMS.NAME metadata.");
             }
 
             bool currentOperatorScope = string.Equals(operatorScope, "current_operator", StringComparison.OrdinalIgnoreCase);
             if (currentOperatorScope)
             {
                 if (currentUserId <= 0) issues.Add("current_operator scope requires authenticated currentUserId.");
-                else if (!Regex.IsMatch(normalized, @"\bINSUSER\s*=\s*" + currentUserId + @"\b", RegexOptions.CultureInvariant))
-                    issues.Add("current_operator report must filter FINDOC.INSUSER to authenticated currentUserId.");
+                else if (!Regex.IsMatch(normalized, @"\bINSUSER\s*=\s*" + currentUserId + @"\b", RegexOptions.CultureInvariant)) issues.Add("current_operator report must filter FINDOC.INSUSER to authenticated currentUserId.");
             }
             if (string.Equals(resultMode, "latest", StringComparison.OrdinalIgnoreCase))
             {
@@ -269,8 +256,7 @@ namespace S1Jarvis.Core
             {
                 int sodType;
                 if (!match.Success || match.Groups.Count < 2 || !int.TryParse(match.Groups[1].Value, out sodType)) continue;
-                if (JarvisBusinessEntityCatalog.FindTraderRole(sodType) == null)
-                    issues.Add("SQL uses unregistered TRDR.SODTYPE=" + sodType + ". Entity discriminators must come from authoritative knowledge.");
+                if (JarvisBusinessEntityCatalog.FindTraderRole(sodType) == null) issues.Add("SQL uses unregistered TRDR.SODTYPE=" + sodType + ". Entity discriminators must come from authoritative knowledge.");
             }
         }
 
@@ -293,8 +279,8 @@ namespace S1Jarvis.Core
                         if (FindPropertyValue(row, "SOSOURCE") == null) issues.Add("Document result is missing SOSOURCE required by the central addressable-link policy.");
                         if (FindPropertyValue(row, "FINCODE") == null) issues.Add("Document result is missing FINCODE.");
                         if (FindPropertyValue(row, "TRNDATE") == null) issues.Add("Document result is missing TRNDATE.");
-                        if (!RowContainsMetadata(row, "SERIES")) issues.Add("Document result is missing SERIES metadata.");
-                        if (!RowContainsMetadata(row, "FPRMS")) issues.Add("Document result is missing FPRMS metadata.");
+                        if (!RowContainsMetadata(row, "FPRMS")) issues.Add("Document result is missing authoritative FPRMS metadata.");
+                        if (!RowContainsMetadata(row, "SERIES")) issues.Add("Document result is missing SERIES subtype metadata.");
                     }
                 }
             }
@@ -334,29 +320,22 @@ namespace S1Jarvis.Core
             int orderIndex = normalizedSql.IndexOf(" ORDER BY ", StringComparison.Ordinal);
             if (orderIndex < 0) return false;
             string orderClause = normalizedSql.Substring(orderIndex);
-            string bare = columnName + " " + direction;
-            if (orderClause.Contains(bare)) return true;
-            string dottedSuffix = "." + columnName + " " + direction;
-            return orderClause.Contains(dottedSuffix);
+            return orderClause.Contains(columnName + " " + direction) || orderClause.Contains("." + columnName + " " + direction);
         }
 
         private static string ExtractJoinClause(string normalizedSql, string tableName)
         {
-            Match table = Regex.Match(
-                normalizedSql ?? string.Empty,
-                @"\bJOIN\s+" + Regex.Escape(tableName ?? string.Empty) + @"\b",
-                RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+            Match table = Regex.Match(normalizedSql ?? string.Empty, @"\b(?:INNER\s+)?JOIN\s+" + Regex.Escape(tableName ?? string.Empty) + @"\b", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
             if (!table.Success) return null;
             int start = table.Index;
             int end = normalizedSql.Length;
-            int nextJoin = normalizedSql.IndexOf(" JOIN ", start + table.Length, StringComparison.Ordinal);
-            int where = normalizedSql.IndexOf(" WHERE ", start + table.Length, StringComparison.Ordinal);
-            int order = normalizedSql.IndexOf(" ORDER BY ", start + table.Length, StringComparison.Ordinal);
-            int group = normalizedSql.IndexOf(" GROUP BY ", start + table.Length, StringComparison.Ordinal);
-            if (nextJoin >= 0 && nextJoin < end) end = nextJoin;
-            if (where >= 0 && where < end) end = where;
-            if (order >= 0 && order < end) end = order;
-            if (group >= 0 && group < end) end = group;
+            Match next = Regex.Match(normalizedSql.Substring(start + table.Length), @"\b(?:INNER\s+|LEFT\s+|RIGHT\s+|FULL\s+)?JOIN\b", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+            if (next.Success) end = start + table.Length + next.Index;
+            foreach (string marker in new[] { " WHERE ", " ORDER BY ", " GROUP BY " })
+            {
+                int i = normalizedSql.IndexOf(marker, start + table.Length, StringComparison.Ordinal);
+                if (i >= 0 && i < end) end = i;
+            }
             return normalizedSql.Substring(start, end - start);
         }
 
@@ -369,50 +348,30 @@ namespace S1Jarvis.Core
 
         private static bool RowContainsMetadata(JObject row, string token)
         {
-            return row != null && row.Properties().Any(x =>
-                x.Name.IndexOf(token ?? string.Empty, StringComparison.OrdinalIgnoreCase) >= 0 &&
-                x.Value != null && x.Value.Type != JTokenType.Null && !string.IsNullOrWhiteSpace(x.Value.ToString()));
+            return row != null && row.Properties().Any(x => x.Name.IndexOf(token ?? string.Empty, StringComparison.OrdinalIgnoreCase) >= 0 && x.Value != null && x.Value.Type != JTokenType.Null && !string.IsNullOrWhiteSpace(x.Value.ToString()));
         }
 
         private static bool TryApplyDocumentScopePredicate(string sql, string documentScope, out string constrainedSql, out string issue)
         {
             constrainedSql = sql ?? string.Empty;
             issue = string.Empty;
-            if (string.IsNullOrWhiteSpace(constrainedSql))
-            {
-                issue = "Structured document_scope cannot be enforced on empty SQL.";
-                return false;
-            }
+            if (string.IsNullOrWhiteSpace(constrainedSql)) { issue = "Structured document_scope cannot be enforced on empty SQL."; return false; }
 
-            string seriesAlias;
+            string findocAlias;
             string fprmsAlias;
-            if (!TryReadJoinAlias(constrainedSql, "SERIES", out seriesAlias))
-            {
-                issue = "Specific document_scope requires JOIN SERIES before category enforcement.";
-                return false;
-            }
-            if (!TryReadJoinAlias(constrainedSql, "FPRMS", out fprmsAlias))
-            {
-                issue = "Specific document_scope requires JOIN FPRMS through SERIES.FPRMS before category enforcement.";
-                return false;
-            }
+            string seriesAlias;
+            if (!TryReadFromAlias(constrainedSql, "FINDOC", out findocAlias)) { issue = "Specific document_scope requires FINDOC as document source."; return false; }
+            if (!TryReadJoinAlias(constrainedSql, "FPRMS", out fprmsAlias)) { issue = "Specific document_scope requires INNER JOIN FPRMS ON FINDOC.FPRMS=FPRMS.FPRMS."; return false; }
+            if (!TryReadJoinAlias(constrainedSql, "SERIES", out seriesAlias)) { issue = "Specific document_scope requires INNER JOIN SERIES ON SERIES.FPRMS=FPRMS.FPRMS."; return false; }
 
             string normalized = NormalizeSql(constrainedSql);
             string fprmsJoin = ExtractJoinClause(normalized, "FPRMS");
-            if (fprmsJoin == null || !Regex.IsMatch(fprmsJoin,
-                @"\b" + Regex.Escape(seriesAlias.ToUpperInvariant()) + @"\.FPRMS\s*=\s*\b" + Regex.Escape(fprmsAlias.ToUpperInvariant()) + @"\.FPRMS\b|\b" + Regex.Escape(fprmsAlias.ToUpperInvariant()) + @"\.FPRMS\s*=\s*\b" + Regex.Escape(seriesAlias.ToUpperInvariant()) + @"\.FPRMS\b",
-                RegexOptions.CultureInvariant))
-            {
-                issue = "FPRMS must be joined through SERIES.FPRMS=FPRMS.FPRMS.";
-                return false;
-            }
+            if (fprmsJoin == null || !JoinBinds(fprmsJoin, findocAlias, "FPRMS", fprmsAlias, "FPRMS")) { issue = "FPRMS must be joined with FINDOC.FPRMS=FPRMS.FPRMS."; return false; }
+            string seriesJoin = ExtractJoinClause(normalized, "SERIES");
+            if (seriesJoin == null || !JoinBinds(seriesJoin, seriesAlias, "FPRMS", fprmsAlias, "FPRMS")) { issue = "SERIES must be joined with SERIES.FPRMS=FPRMS.FPRMS."; return false; }
 
             string predicate;
-            if (!JarvisDocumentScopeValidator.TryBuildDocumentSqlPredicate(documentScope, seriesAlias, fprmsAlias, out predicate) || string.IsNullOrWhiteSpace(predicate))
-            {
-                issue = "No deterministic SERIES/FPRMS predicate is registered for document_scope='" + documentScope + "'.";
-                return false;
-            }
+            if (!JarvisDocumentScopeValidator.TryBuildDocumentSqlPredicate(documentScope, seriesAlias, fprmsAlias, out predicate) || string.IsNullOrWhiteSpace(predicate)) { issue = "No deterministic FPRMS predicate is registered for document_scope='" + documentScope + "'."; return false; }
 
             int insertion = FindClauseInsertionPoint(constrainedSql);
             string head = insertion < constrainedSql.Length ? constrainedSql.Substring(0, insertion).TrimEnd() : constrainedSql.TrimEnd();
@@ -422,16 +381,30 @@ namespace S1Jarvis.Core
             return true;
         }
 
+        private static bool TryReadFromAlias(string sql, string tableName, out string alias)
+        {
+            alias = string.Empty;
+            Match match = Regex.Match(sql ?? string.Empty, @"\bFROM\s+" + Regex.Escape(tableName ?? string.Empty) + @"(?:\s+AS)?(?:\s+(?<alias>[A-Z_][A-Z0-9_]*))?\b", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+            if (!match.Success) return false;
+            alias = match.Groups["alias"].Success ? match.Groups["alias"].Value : tableName;
+            return !string.IsNullOrWhiteSpace(alias);
+        }
+
         private static bool TryReadJoinAlias(string sql, string tableName, out string alias)
         {
             alias = string.Empty;
-            Match match = Regex.Match(
-                sql ?? string.Empty,
-                @"\bJOIN\s+" + Regex.Escape(tableName ?? string.Empty) + @"(?:\s+AS)?\s+(?<alias>[A-Z_][A-Z0-9_]*)\b",
-                RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+            Match match = Regex.Match(sql ?? string.Empty, @"\b(?:INNER\s+)?JOIN\s+" + Regex.Escape(tableName ?? string.Empty) + @"(?:\s+AS)?(?:\s+(?<alias>[A-Z_][A-Z0-9_]*))?\b", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
             if (!match.Success) return false;
-            alias = match.Groups["alias"].Value;
+            alias = match.Groups["alias"].Success ? match.Groups["alias"].Value : tableName;
             return !string.IsNullOrWhiteSpace(alias);
+        }
+
+        private static bool JoinBinds(string joinClause, string leftAlias, string leftField, string rightAlias, string rightField)
+        {
+            string clause = NormalizeSql(joinClause);
+            string left = Regex.Escape((leftAlias ?? string.Empty).ToUpperInvariant()) + @"\." + Regex.Escape((leftField ?? string.Empty).ToUpperInvariant());
+            string right = Regex.Escape((rightAlias ?? string.Empty).ToUpperInvariant()) + @"\." + Regex.Escape((rightField ?? string.Empty).ToUpperInvariant());
+            return Regex.IsMatch(clause, @"\b" + left + @"\s*=\s*" + right + @"\b|\b" + right + @"\s*=\s*" + left + @"\b", RegexOptions.CultureInvariant);
         }
 
         private static int FindClauseInsertionPoint(string sql)
@@ -449,12 +422,9 @@ namespace S1Jarvis.Core
         {
             string value = (sql ?? string.Empty).Trim();
             if (value.Length == 0) return value;
-            if (value.StartsWith("SELECT DISTINCT ", StringComparison.OrdinalIgnoreCase))
-                return "SELECT DISTINCT TOP 200 " + value.Substring("SELECT DISTINCT ".Length);
-            if (value.StartsWith("SELECT TOP ", StringComparison.OrdinalIgnoreCase))
-                return value;
-            if (value.StartsWith("SELECT ", StringComparison.OrdinalIgnoreCase))
-                return "SELECT TOP 200 " + value.Substring("SELECT ".Length);
+            if (value.StartsWith("SELECT DISTINCT ", StringComparison.OrdinalIgnoreCase)) return "SELECT DISTINCT TOP 200 " + value.Substring("SELECT DISTINCT ".Length);
+            if (value.StartsWith("SELECT TOP ", StringComparison.OrdinalIgnoreCase)) return value;
+            if (value.StartsWith("SELECT ", StringComparison.OrdinalIgnoreCase)) return "SELECT TOP 200 " + value.Substring("SELECT ".Length);
             return value;
         }
 
@@ -483,9 +453,8 @@ namespace S1Jarvis.Core
                 JObject root = JObject.Parse(queryResult);
                 JArray rows = root["rows"] as JArray;
                 if (rows == null || rows.Count <= 1) return queryResult;
-                JToken first = rows[0];
                 var normalizedRows = new JArray();
-                if (first != null) normalizedRows.Add(first.DeepClone());
+                if (rows[0] != null) normalizedRows.Add(rows[0].DeepClone());
                 root["rows"] = normalizedRows;
                 root["rowCount"] = normalizedRows.Count;
                 root["totalRowCount"] = normalizedRows.Count;
@@ -508,8 +477,6 @@ namespace S1Jarvis.Core
             if (value.Length == 0) return false;
             return value.Contains("παραστατικ") || value.Contains("τιμολόγ") || value.Contains("τιμολογ") || value.Contains("document") || value.Contains("voucher") || value.Contains("invoice");
         }
-
-        private static bool IsLatestDocumentQuestion(string question) { return IsSingularLatestQuestion(question) && IsDocumentQuestion(question); }
 
         private static string BuildDeterministicSummary(string question, string queryResult)
         {
@@ -555,7 +522,7 @@ namespace S1Jarvis.Core
                 JArray rows = root["rows"] as JArray;
                 int rowCount = (int?)root["totalRowCount"] ?? (int?)root["rowCount"] ?? (rows == null ? 0 : rows.Count);
                 string[] columns = rows == null ? new string[0] : rows.OfType<JObject>().Take(1).SelectMany(x => x.Properties().Select(p => p.Name)).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
-                return "chars=" + queryResult.Length + " rowCount=" + rowCount + " columns=[" + string.Join(",", columns) + "]" + " preview=" + OneLine(Truncate(queryResult, 1200));
+                return "chars=" + queryResult.Length + " rowCount=" + rowCount + " columns=[" + string.Join(",", columns) + "] preview=" + OneLine(Truncate(queryResult, 1200));
             }
             catch { return "chars=" + queryResult.Length + " rowCount=<unparsed> columns=[] preview=" + OneLine(Truncate(queryResult, 1200)); }
         }
@@ -563,8 +530,7 @@ namespace S1Jarvis.Core
         private static string ReadRequiredInternalContext(JObject inputs, string name)
         {
             string value = inputs == null || inputs[name] == null ? string.Empty : inputs[name].ToString();
-            if (string.IsNullOrWhiteSpace(value))
-                throw new InvalidOperationException("Jarvis dispatch is missing required internal context: " + name);
+            if (string.IsNullOrWhiteSpace(value)) throw new InvalidOperationException("Jarvis dispatch is missing required internal context: " + name);
             return value;
         }
 
