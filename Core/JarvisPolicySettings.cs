@@ -49,6 +49,13 @@ namespace S1Jarvis.Core
             internal const string NumericAlignmentMarker = "---:";
             internal const string DateAlignmentMarker = ":---:";
 
+            // Presentation precedence is itself policy: existing rules are mandatory.
+            // Model initiative is permitted only for a presentation aspect for which
+            // the central policy inventory has no clear applicable instruction.
+            internal const bool ApplyPoliciesBeforeModelInitiative = true;
+            internal const bool AllowModelInitiativeOnlyWhenNoClearPolicy = true;
+            internal const string CanonicalPresentationChannel = "JarvisPresentationGateway";
+
             // Registered addressable URI templates. Presentation may instantiate
             // them only from authoritative ids already present in verified output.
             internal const string CrmTaskUriTemplate = "doc:2021:{soactionId}";
@@ -57,6 +64,15 @@ namespace S1Jarvis.Core
 
             internal const int DefaultPreviewRows = 50;
             internal const int MaxChatTableRows = 250;
+
+            // Canonical side-effect labels. Executors return structured results only;
+            // this wording belongs to the presentation policy plane.
+            internal const string CrmTaskCreatedLabel = "✓ Η εργασία CRM στο Soft1 δημιουργήθηκε.";
+            internal const string CalendarCreatedLabel = "✓ Το προσωπικό Outlook calendar event δημιουργήθηκε.";
+            internal const string ExportCreatedLabel = "✓ Το αρχείο εξαγωγής δημιουργήθηκε.";
+            internal const string EmailSentLabel = "Το email στάλθηκε με επιτυχία.";
+            internal const string DefaultSuccessIntro = "Ολοκλήρωσα την εντολή.";
+            internal const string PartialSuccessIntro = "Εκτέλεσα όσα βήματα ήταν διαθέσιμα και χρειάζομαι διευκρίνιση για τα υπόλοιπα.";
 
             internal static readonly string[] DateColumnHints =
             {
@@ -116,6 +132,9 @@ namespace S1Jarvis.Core
             internal static string BuildPolicyEnvelope()
             {
                 return "[JARVIS_PRESENTATION_POLICY_PROFILE]\n" +
+                       "channel=" + CanonicalPresentationChannel + "\n" +
+                       "precedence=apply_all_applicable_policies_before_model_initiative\n" +
+                       "model_initiative=allowed_only_when_no_clear_presentation_policy_exists\n" +
                        "culture=" + CultureName + "\n" +
                        "date=" + DateFormat + "\n" +
                        "datetime=" + DateTimeFormat + "\n" +
