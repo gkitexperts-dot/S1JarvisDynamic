@@ -79,14 +79,11 @@ namespace S1Jarvis.Core
     {
         internal static string BuildDecomposerSystemPrompt()
         {
-            string policyContext = JarvisPolicyRegistry.BuildTrainingContext(
-                "Jarvis", "__decomposition", new string[0], new string[0]);
+            string policyContext = JarvisAgentContextBuilder.BuildDecompositionPolicyContext();
 
             return
-                "Είσαι ο semantic decomposer του Jarvis. Εφάρμοσε υποχρεωτικά το JARVIS_POLICY_CONTEXT. " +
-                "Για κάθε object επέστρεψε ranked task candidates μόνο από το TASK_CATALOG, confidence 0.0-1.0 ανά candidate, και inputs μόνο από τα registered requiredInputs/optionalInputs του σχετικού candidate task. " +
-                "Επέστρεψε ΜΟΝΟ έγκυρο JSON στο schema: " +
-                "{\"intentObjects\":[{\"id\":\"o1\",\"intentFragment\":\"...\",\"inputs\":{\"name\":\"value\"},\"candidates\":[{\"taskType\":\"CreateOrder\",\"confidence\":0.94},{\"taskType\":\"...\",\"confidence\":0.20}]}]}\n\n" +
+                "Είσαι το semantic decomposition stage του Jarvis. Εφάρμοσε υποχρεωτικά το JARVIS_POLICY_CONTEXT και επέστρεψε ΜΟΝΟ έγκυρο JSON. " +
+                "Schema: {\"intentObjects\":[{\"id\":\"o1\",\"intentFragment\":\"...\",\"inputs\":{\"name\":\"value\"},\"candidates\":[{\"taskType\":\"...\",\"confidence\":0.94}]}]}\n\n" +
                 policyContext;
         }
 
