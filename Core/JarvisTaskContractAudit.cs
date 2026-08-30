@@ -16,7 +16,15 @@ namespace S1Jarvis.Core
         {
             var issues = new List<string>();
 
-            issues.AddRange(JarvisToolRegistry.ValidateInventory());
+            foreach (string inventoryIssue in JarvisToolRegistry.ValidateInventory())
+            {
+                // A routing capability may intentionally be semantic-only (for example,
+                // a help/knowledge route) and therefore need no tool advertising the exact
+                // same capability. It is valid only when the capability resolves through
+                // the canonical routing registry to an agent that actually owns tools.
+                if (!IsValidSemanticRouteWithoutDedicatedTool(inventoryIssue))
+                    issues.Add(inventoryIssue);
+            }
             issues.AddRange(JarvisPolicyRegistry.ValidateInventory());
 
             foreach (JarvisTaskDescriptor task in JarvisTaskRegistry.AllTasks)
@@ -37,6 +45,22 @@ namespace S1Jarvis.Core
         {
             JarvisToolDescriptor[] changing = GetStateChangingTools(task);
             return changing.Length == 1 ? changing[0] : null;
+        }
+
+        private static bool IsValidSemanticRouteWithoutDedicatedTool(string issue)
+        {
+            const string prefix = "Route capability without registered tool:";
+            if (string.IsNullOrWhiteSpace(issue) ||
+                !issue.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
+                return false;
+
+            string capability = issue.Substring(prefix.Length).Trim();
+            if (string.IsNullOrWhiteSpace(capability)) return false;
+
+            string owner = JarvisCapabilityResolver.ResolveOwner(capability);
+            if (string.IsNullOrWhiteSpace(owner)) return false;
+
+            return JarvisToolRegistry.ForAgent(owner).Any();
         }
 
         private static void ValidateTerminalToolContract(JarvisTaskDescriptor task, List<string> issues)
