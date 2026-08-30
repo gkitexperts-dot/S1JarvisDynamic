@@ -5,15 +5,9 @@ using System.Linq;
 namespace S1Jarvis.Core
 {
     /// <summary>
-    /// Validates the semantic contract exposed to the orchestration planner.
-    ///
-    /// This deliberately audits business-level task inputs/outputs rather than
-    /// pretending that task contracts are identical to one tool JSON schema.
-    /// A task may use several tools and may translate a business input into a
-    /// lower-level tool argument during execution.
-    ///
-    /// The goal is to catch metadata that would make planning impossible or
-    /// unsafe before a provider call is allowed to consume TASK_CATALOG.
+    /// Validates the business task catalog against the authoritative tool contract.
+    /// Task metadata describes the business outcome. Native prerequisites and native
+    /// outputs belong to JarvisToolRegistry and must never drift into a second truth.
     /// </summary>
     internal static class JarvisTaskContractAudit
     {
@@ -26,12 +20,59 @@ namespace S1Jarvis.Core
                 ValidateNames(task, issues);
                 ValidateOutputs(task, issues);
                 ValidateDependencyContracts(task, issues);
+                ValidateTerminalToolContract(task, issues);
             }
 
             return issues
                 .Where(x => !string.IsNullOrWhiteSpace(x))
                 .Distinct(StringComparer.OrdinalIgnoreCase)
                 .ToArray();
+        }
+
+        internal static JarvisToolDescriptor FindTerminalStateChangingTool(JarvisTaskDescriptor task)
+        {
+            if (task == null) return null;
+            JarvisToolDescriptor[] changing = (task.Tools ?? new string[0])
+                .Select(JarvisToolRegistry.Find)
+                .Where(x => x != null && x.Operation != JarvisToolOperation.Read)
+                .ToArray();
+            return changing.Length == 1 ? changing[0] : null;
+        }
+
+        private static void ValidateTerminalToolContract(JarvisTaskDescriptor task, List<string> issues)
+        {
+            JarvisToolDescriptor[] changing = (task.Tools ?? new string[0])
+                .Select(JarvisToolRegistry.Find)
+                .Where(x => x != null && x.Operation != JarvisToolOperation.Read)
+                .ToArray();
+
+            bool stateChangingTask = task.Operation == JarvisTaskOperation.Write ||
+                                     task.Operation == JarvisTaskOperation.ExternalAction;
+
+            if (!stateChangingTask)
+                return;
+
+            if (changing.Length != 1)
+            {
+                issues.Add("State-changing atomic task must expose exactly one terminal state-changing tool: " +
+                    task.TaskType + " count=" + changing.Length);
+                return;
+            }
+
+            JarvisToolPrerequisiteDescriptor contract = JarvisToolRegistry.FindPrerequisites(changing[0].Name);
+            if (contract == null)
+            {
+                issues.Add("Terminal tool has no authoritative prerequisite contract: " +
+                    task.TaskType + " -> " + changing[0].Name);
+                return;
+            }
+
+            foreach (string produced in Normalize(contract.Produces))
+            {
+                if (!(task.Produces ?? new string[0]).Contains(produced, StringComparer.OrdinalIgnoreCase))
+                    issues.Add("Task output contract does not include terminal tool output: " +
+                        task.TaskType + " -> " + changing[0].Name + "." + produced);
+            }
         }
 
         private static void ValidateNames(JarvisTaskDescriptor task, List<string> issues)
@@ -73,9 +114,6 @@ namespace S1Jarvis.Core
                 JarvisTaskDescriptor[] producers = JarvisTaskRegistry.ForCapability(capability).ToArray();
                 if (producers.Length == 0)
                 {
-                    // Some dependencies are helper capabilities supplied by tools
-                    // inside the same atomic task (for example Contacts). Those
-                    // are valid when the capability resolves in the tool registry.
                     if (!JarvisToolRegistry.ForCapability(capability).Any())
                         issues.Add("Task dependency has no task/tool producer: " + task.TaskType + " -> " + capability);
                     continue;
