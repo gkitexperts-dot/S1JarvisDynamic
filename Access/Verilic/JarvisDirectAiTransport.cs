@@ -21,6 +21,10 @@ namespace S1Jarvis.Access.Verilic
     /// boot (or explicitly refreshed by HEALTH). The provider response is
     /// normalized to the Anthropic-style content/tool contract already consumed
     /// by the mature Jarvis loop and the orchestration clients.
+    ///
+    /// Provider-specific wire differences must stay inside this adapter. Core
+    /// orchestration, agents, tasks and neutral tool schemas must never be changed
+    /// merely to accommodate one provider/model implementation.
     /// </summary>
     internal static class JarvisDirectAiTransport
     {
@@ -121,8 +125,8 @@ namespace S1Jarvis.Access.Verilic
             string requestJson,
             CancellationToken cancellationToken)
         {
-            JObject anthropic = JObject.Parse(requestJson ?? "{}");
-            JObject google = BuildGoogleRequest(anthropic);
+            JObject neutralRequest = JObject.Parse(requestJson ?? "{}");
+            JObject google = BuildGoogleRequest(neutralRequest);
             string model = Uri.EscapeDataString(target.Model);
             string endpoint = "https://generativelanguage.googleapis.com/v1beta/models/" +
                 model + ":generateContent";
@@ -166,8 +170,8 @@ namespace S1Jarvis.Access.Verilic
             string requestJson,
             CancellationToken cancellationToken)
         {
-            JObject anthropic = JObject.Parse(requestJson ?? "{}");
-            JObject openAi = BuildOpenAiRequest(anthropic, target.Model);
+            JObject neutralRequest = JObject.Parse(requestJson ?? "{}");
+            JObject openAi = BuildOpenAiRequest(neutralRequest, target.Model);
             string apiKey = target.GetApiKey();
 
             using (var message = new HttpRequestMessage(
@@ -246,15 +250,18 @@ namespace S1Jarvis.Access.Verilic
                     string name = (string)tool["name"];
                     if (string.IsNullOrWhiteSpace(name))
                         continue;
+
+                    JToken neutralSchema = tool["input_schema"] ?? new JObject
+                    {
+                        ["type"] = "object",
+                        ["properties"] = new JObject()
+                    };
+
                     declarations.Add(new JObject
                     {
                         ["name"] = name,
                         ["description"] = (string)tool["description"] ?? string.Empty,
-                        ["parameters"] = (tool["input_schema"] ?? new JObject
-                        {
-                            ["type"] = "object",
-                            ["properties"] = new JObject()
-                        }).DeepClone()
+                        ["parameters"] = NormalizeGoogleFunctionSchema(neutralSchema)
                     });
                 }
                 if (declarations.Count > 0)
@@ -263,6 +270,7 @@ namespace S1Jarvis.Access.Verilic
                     {
                         ["functionDeclarations"] = declarations
                     });
+                    ApplyGoogleToolChoice(result, source["tool_choice"]);
                 }
             }
 
@@ -276,6 +284,122 @@ namespace S1Jarvis.Access.Verilic
                 result["generationConfig"] = generation;
 
             return result;
+        }
+
+        /// <summary>
+        /// Translate the provider-neutral JSON-schema-like Jarvis tool contract
+        /// into the conservative OpenAPI subset accepted by Gemini function
+        /// declarations. The neutral schema itself is never mutated or weakened.
+        /// Provider-only normalization belongs here, at the adapter boundary.
+        /// </summary>
+        private static JObject NormalizeGoogleFunctionSchema(JToken schema)
+        {
+            JObject source = schema as JObject;
+            if (source == null)
+                return new JObject { ["type"] = "object" };
+
+            var result = new JObject();
+            CopyScalarSchemaField(source, result, "type");
+            CopyScalarSchemaField(source, result, "description");
+            CopyScalarSchemaField(source, result, "format");
+            CopyScalarSchemaField(source, result, "nullable");
+            CopyScalarSchemaField(source, result, "minimum");
+            CopyScalarSchemaField(source, result, "maximum");
+            CopyScalarSchemaField(source, result, "minItems");
+            CopyScalarSchemaField(source, result, "maxItems");
+            CopyScalarSchemaField(source, result, "minLength");
+            CopyScalarSchemaField(source, result, "maxLength");
+
+            JArray enumValues = source["enum"] as JArray;
+            if (enumValues != null)
+                result["enum"] = enumValues.DeepClone();
+
+            JObject properties = source["properties"] as JObject;
+            if (properties != null)
+            {
+                var normalizedProperties = new JObject();
+                foreach (JProperty property in properties.Properties())
+                    normalizedProperties[property.Name] = NormalizeGoogleFunctionSchema(property.Value);
+                result["properties"] = normalizedProperties;
+            }
+
+            JArray required = source["required"] as JArray;
+            if (required != null && required.Count > 0)
+                result["required"] = required.DeepClone();
+
+            if (source["items"] != null)
+                result["items"] = NormalizeGoogleFunctionSchema(source["items"]);
+
+            JArray anyOf = source["anyOf"] as JArray;
+            if (anyOf != null && anyOf.Count > 0)
+                result["anyOf"] = new JArray(anyOf.Select(NormalizeGoogleFunctionSchema));
+
+            // Function declarations accept only a provider-specific subset.
+            // Keywords such as additionalProperties, oneOf/allOf/not, $defs and
+            // conditionals intentionally remain in the neutral Jarvis schema and
+            // are not leaked onto Gemini's wire contract.
+            if (result["type"] == null)
+            {
+                if (result["properties"] != null)
+                    result["type"] = "object";
+                else if (result["items"] != null)
+                    result["type"] = "array";
+            }
+
+            return result;
+        }
+
+        private static void CopyScalarSchemaField(JObject source, JObject target, string name)
+        {
+            JToken value = source[name];
+            if (value != null && value.Type != JTokenType.Null && value.Type != JTokenType.Undefined)
+                target[name] = value.DeepClone();
+        }
+
+        private static void ApplyGoogleToolChoice(JObject result, JToken neutralChoice)
+        {
+            if (result == null || neutralChoice == null)
+                return;
+
+            string type = neutralChoice.Type == JTokenType.String
+                ? neutralChoice.ToString()
+                : (string)neutralChoice["type"];
+            type = (type ?? string.Empty).Trim().ToLowerInvariant();
+
+            string mode = null;
+            var allowed = new JArray();
+            if (type == "tool")
+            {
+                string name = (string)neutralChoice["name"];
+                if (string.IsNullOrWhiteSpace(name))
+                    return;
+                mode = "ANY";
+                allowed.Add(name);
+            }
+            else if (type == "any" || type == "required")
+            {
+                mode = "ANY";
+            }
+            else if (type == "none")
+            {
+                mode = "NONE";
+            }
+            else if (type == "auto")
+            {
+                mode = "AUTO";
+            }
+            else
+            {
+                return;
+            }
+
+            var config = new JObject { ["mode"] = mode };
+            if (allowed.Count > 0)
+                config["allowedFunctionNames"] = allowed;
+            result["toolConfig"] = new JObject
+            {
+                ["functionCallingConfig"] = config
+            };
         }
 
         private static void AppendGoogleAssistantParts(
@@ -545,10 +669,45 @@ namespace S1Jarvis.Access.Verilic
                     });
                 }
                 if (tools.Count > 0)
+                {
                     result["tools"] = tools;
+                    ApplyOpenAiToolChoice(result, source["tool_choice"]);
+                }
             }
 
             return result;
+        }
+
+        private static void ApplyOpenAiToolChoice(JObject result, JToken neutralChoice)
+        {
+            if (result == null || neutralChoice == null)
+                return;
+
+            string type = neutralChoice.Type == JTokenType.String
+                ? neutralChoice.ToString()
+                : (string)neutralChoice["type"];
+            type = (type ?? string.Empty).Trim().ToLowerInvariant();
+
+            if (type == "tool")
+            {
+                string name = (string)neutralChoice["name"];
+                if (!string.IsNullOrWhiteSpace(name))
+                {
+                    result["tool_choice"] = new JObject
+                    {
+                        ["type"] = "function",
+                        ["function"] = new JObject { ["name"] = name }
+                    };
+                }
+                return;
+            }
+
+            if (type == "any" || type == "required")
+                result["tool_choice"] = "required";
+            else if (type == "none")
+                result["tool_choice"] = "none";
+            else if (type == "auto")
+                result["tool_choice"] = "auto";
         }
 
         private static JObject ConvertOpenAiAssistantMessage(
@@ -770,11 +929,48 @@ namespace S1Jarvis.Access.Verilic
             else
                 reason = "provider_upstream_error";
 
+            string providerDetail = ExtractProviderErrorDetail(raw);
             DebugLog.Log("[AI-DIRECT] provider error agent=" + Safe(agentName) +
                 " provider=" + Safe(target == null ? null : target.Provider) +
                 " model=" + Safe(target == null ? null : target.Model) +
-                " http=" + code.ToString() + " reason=" + reason);
+                " http=" + code.ToString() + " reason=" + reason +
+                (string.IsNullOrWhiteSpace(providerDetail)
+                    ? string.Empty
+                    : " detail=" + Safe(providerDetail)));
             return Failure(reason, agentName, target);
+        }
+
+        private static string ExtractProviderErrorDetail(string raw)
+        {
+            if (string.IsNullOrWhiteSpace(raw))
+                return string.Empty;
+
+            try
+            {
+                JObject root = JObject.Parse(raw);
+                JToken error = root["error"];
+                if (error is JObject)
+                {
+                    JObject obj = (JObject)error;
+                    string status = (string)obj["status"];
+                    string message = (string)obj["message"];
+                    if (!string.IsNullOrWhiteSpace(status) && !string.IsNullOrWhiteSpace(message))
+                        return status + ": " + message;
+                    if (!string.IsNullOrWhiteSpace(message))
+                        return message;
+                }
+                else if (error != null && error.Type == JTokenType.String)
+                {
+                    return error.ToString();
+                }
+
+                string messageText = (string)root["message"];
+                return messageText ?? string.Empty;
+            }
+            catch
+            {
+                return string.Empty;
+            }
         }
 
         private static bool IsCreditsError(string raw)
