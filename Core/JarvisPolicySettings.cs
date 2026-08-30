@@ -42,6 +42,7 @@ namespace S1Jarvis.Core
             internal const bool DatasetRefinementIsPureReadOnly = true;
             internal const bool ActivityLifecycleCoversEveryBusinessTurn = true;
             internal const bool FinalBusinessOutputUsesPresentationGateway = true;
+            internal const bool AuthenticatedCurrentCompanyIsBindingTenantScope = true;
             internal const string CanonicalBusinessRouter = "OrchestrationPrimary_WebMessageReceived";
             internal const string CanonicalPresentationGateway = "JarvisPresentationGateway";
             internal const string DefaultActivityCaption = "Επεξεργάζομαι το αίτημα…";
@@ -52,6 +53,8 @@ namespace S1Jarvis.Core
                        "single_business_router=" + SingleBusinessRouter.ToString().ToLowerInvariant() + "\n" +
                        "canonical_router=" + CanonicalBusinessRouter + "\n" +
                        "registry_capabilities_authoritative=" + RegistryCapabilitiesAreAuthoritative.ToString().ToLowerInvariant() + "\n" +
+                       "authenticated_current_company=binding_tenant_scope_for_company_scoped_business_queries\n" +
+                       "document_company_scope=FINDOC_and_joined_document_metadata_must_be_constrained_to_currentCompanyId_when_COMPANY_exists\n" +
                        "ambiguity_that_changes_business_outcome=clarify_before_read_export_or_write\n" +
                        "dataset_refinement=pure_read_only_existing_validated_facts\n" +
                        "activity_lifecycle=begin_update_end_every_business_turn\n" +
