@@ -9,6 +9,7 @@ namespace S1Jarvis.UI
     {
         private static readonly bool _jarvisActivityBootstrapRegistered = RegisterJarvisActivityBootstrap();
         private bool _jarvisActivityCoreHooked;
+        private bool _jarvisOrchestrationActivitySubscribed;
 
         private static bool RegisterJarvisActivityBootstrap()
         {
@@ -40,7 +41,27 @@ namespace S1Jarvis.UI
         {
             if (_jarvisActivityCoreHooked || webView.CoreWebView2 == null) return;
             _jarvisActivityCoreHooked = true;
+
+            if (!_jarvisOrchestrationActivitySubscribed)
+            {
+                _jarvisOrchestrationActivitySubscribed = true;
+                JarvisOrchestrationActivityBus.ActivityChanged += JarvisOrchestrationActivityChanged;
+            }
+
             DebugLog.Log("[JARVIS-ACTIVITY] shared activity UI installed");
+        }
+
+        private void JarvisOrchestrationActivityChanged(string action, string text)
+        {
+            try
+            {
+                Dispatcher.BeginInvoke(new Action(() =>
+                {
+                    if (webView == null || webView.CoreWebView2 == null) return;
+                    PostJarvisActivity(action, "main", text, false);
+                }));
+            }
+            catch { }
         }
 
         private async void PostJarvisActivity(string action, string channel, string text = null, bool suppressAssistant = false)
