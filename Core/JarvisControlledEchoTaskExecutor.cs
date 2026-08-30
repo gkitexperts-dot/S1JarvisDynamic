@@ -43,9 +43,8 @@ namespace S1Jarvis.Core
                             "Δεν επιτρέπεται lookup/retry loop σε αυτό το execution layer. " +
                             "Τρέχουσα τοπική ημερομηνία/ώρα Jarvis=" + runtimeNow + ". " +
                             "Ο τρέχων Soft1 userId είναι " + currentUserId.ToString() + ". " +
-                            "Αν η οδηγία αναθέτει την εργασία στον ίδιο τον χειριστή (π.χ. 'βάλε μου'), actorUserId=" + currentUserId.ToString() + ". " +
                             "Μετέτρεψε φυσική ημερομηνία/ώρα σε ISO. " +
-                            "Ο Jarvis θα ελέγξει deterministic την προτεινόμενη κλήση με το authoritative tool prerequisite contract πριν εκτελεστεί."
+                            "Ο Jarvis θα συμπληρώσει deterministic όσα resolution prerequisites έχουν ήδη λυθεί και θα ελέγξει την προτεινόμενη κλήση με το authoritative tool prerequisite contract πριν εκτελεστεί."
                     }),
                     ["tools"] = JArray.FromObject(new object[] { JarvisTools.CreateCrmTaskToolDefinition }),
                     ["tool_choice"] = new JObject { ["type"] = "tool", ["name"] = "create_crm_task" },
@@ -76,11 +75,26 @@ namespace S1Jarvis.Core
                 }
 
                 JObject input = call["input"] as JObject ?? new JObject();
-                string[] nativeIssues = JarvisToolContractValidator.ValidateProposedInput("create_crm_task", input);
-                string[] resolutionIssues = JarvisToolContractValidator.ValidateResolutionEvidence("create_crm_task", input);
-                string[] contractIssues = nativeIssues.Concat(resolutionIssues)
-                    .Distinct(StringComparer.OrdinalIgnoreCase)
-                    .ToArray();
+                JObject resolutionContext = new JObject();
+                if (dispatchInputs != null)
+                {
+                    foreach (JProperty property in dispatchInputs.Properties())
+                    {
+                        if (!property.Name.StartsWith("__", StringComparison.Ordinal))
+                            resolutionContext[property.Name] = property.Value.DeepClone();
+                    }
+                }
+
+                JarvisToolContractValidator.ApplyResolutionEvidence("create_crm_task", input, resolutionContext);
+
+                string[] resolutionIssues = JarvisToolContractValidator.ValidateResolutionEvidence("create_crm_task", resolutionContext);
+                if (resolutionIssues.Length > 0)
+                {
+                    result.Issues.Add("NEEDS_USER_INPUT: " + string.Join(" | ", resolutionIssues));
+                    return result;
+                }
+
+                string[] contractIssues = JarvisToolContractValidator.ValidateProposedInput("create_crm_task", input);
                 if (contractIssues.Length > 0)
                 {
                     result.Issues.Add("NEEDS_USER_INPUT: " + string.Join(" | ", contractIssues));
@@ -135,7 +149,7 @@ namespace S1Jarvis.Core
                             "Τρέχουσα τοπική ημερομηνία/ώρα Jarvis=" + runtimeNow + ". " +
                             "Μετέτρεψε φυσική ημερομηνία/ώρα σε ISO. Αν δεν δίνεται διάρκεια, χρησιμοποίησε 30 λεπτά. " +
                             "Η αναφορά προσώπου μέσα στην περιγραφή ΔΕΝ σημαίνει attendee εκτός αν ο χρήστης ζήτησε ρητά πρόσκληση. " +
-                            "Ο Jarvis θα ελέγξει deterministic την προτεινόμενη κλήση με το authoritative tool prerequisite contract πριν εκτελεστεί."
+                            "Ο Jarvis θα συμπληρώσει deterministic όσα resolution prerequisites έχουν ήδη λυθεί και θα ελέγξει την προτεινόμενη κλήση με το authoritative tool prerequisite contract πριν εκτελεστεί."
                     }),
                     ["tools"] = JArray.FromObject(new object[] { JarvisEmailAccess.CreateOutlookEventToolDefinition }),
                     ["tool_choice"] = new JObject { ["type"] = "tool", ["name"] = "create_outlook_event" },
@@ -162,6 +176,25 @@ namespace S1Jarvis.Core
                 }
 
                 JObject input = call["input"] as JObject ?? new JObject();
+                JObject resolutionContext = new JObject();
+                if (dispatchInputs != null)
+                {
+                    foreach (JProperty property in dispatchInputs.Properties())
+                    {
+                        if (!property.Name.StartsWith("__", StringComparison.Ordinal))
+                            resolutionContext[property.Name] = property.Value.DeepClone();
+                    }
+                }
+
+                JarvisToolContractValidator.ApplyResolutionEvidence("create_outlook_event", input, resolutionContext);
+
+                string[] resolutionIssues = JarvisToolContractValidator.ValidateResolutionEvidence("create_outlook_event", resolutionContext);
+                if (resolutionIssues.Length > 0)
+                {
+                    result.Issues.Add("NEEDS_USER_INPUT: " + string.Join(" | ", resolutionIssues));
+                    return result;
+                }
+
                 string[] contractIssues = JarvisToolContractValidator.ValidateProposedInput("create_outlook_event", input);
                 if (contractIssues.Length > 0)
                 {
