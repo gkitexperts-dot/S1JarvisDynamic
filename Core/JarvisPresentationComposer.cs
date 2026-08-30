@@ -181,8 +181,7 @@ namespace S1Jarvis.Core
 
         private static JObject BuildRequest(string mode, JObject context, string recipient, string outputContract)
         {
-            string policyContext = JarvisPolicyRegistry.BuildTrainingContext(
-                "Jarvis", "__presentation", new string[0], new string[0]);
+            string policyContext = JarvisAgentContextBuilder.BuildPresentationPolicyContext();
 
             return new JObject
             {
