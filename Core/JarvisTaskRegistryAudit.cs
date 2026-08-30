@@ -6,8 +6,8 @@ namespace S1Jarvis.Core
 {
     /// <summary>
     /// Cross-checks orchestration task metadata against the canonical tool/routing
-    /// inventory before semantic planning is allowed to become authoritative.
-    /// This audit is side-effect free and does not change mature runtime routing.
+    /// inventory and the centralized policy plane before semantic planning is
+    /// allowed to become authoritative.
     /// </summary>
     internal static class JarvisTaskRegistryAudit
     {
@@ -16,6 +16,8 @@ namespace S1Jarvis.Core
             var issues = new List<string>();
             issues.AddRange(JarvisTaskRegistry.ValidateAgainstToolRegistry());
             issues.AddRange(JarvisTaskContractAudit.Validate());
+            issues.AddRange(JarvisPolicyRegistry.ValidateInventory());
+            issues.AddRange(JarvisAgentContextBuilder.ValidateCoverage());
 
             foreach (JarvisTaskDescriptor task in JarvisTaskRegistry.AllTasks)
             {
@@ -88,10 +90,6 @@ namespace S1Jarvis.Core
             if (anyToolMatchesPrimaryCapability)
                 return;
 
-            // Some capabilities are intentionally routing-only umbrellas. Help is
-            // the current example: it owns a read workflow but reuses Atlas tools.
-            // An explicit canonical route makes that exception deliberate rather
-            // than an accidental capability typo.
             string explicitOwner = JarvisToolRegistry.ResolveOwnerForCapability(task.Capability);
             if (string.IsNullOrWhiteSpace(explicitOwner))
             {
@@ -119,11 +117,6 @@ namespace S1Jarvis.Core
                 issues.Add("Read task contains a state-changing tool: " + task.TaskType);
             }
 
-            // A write task may legitimately use non-confirming helper reads before
-            // its single state-changing action (e.g. template/lookup + create).
-            // What is not safe for semantic planning is one task whose user intent
-            // can independently mean either read or write; that makes confirmation
-            // semantics depend on which branch the model happened to choose.
             if (task.Operation == JarvisTaskOperation.Mixed)
             {
                 issues.Add("Mixed-operation task must be split into atomic read/write tasks: " + task.TaskType);
