@@ -11,9 +11,8 @@ namespace S1Jarvis.Core
 {
     /// <summary>
     /// Controlled execution for promoted Echo write tasks.
-    /// Jarvis owns graph state, prerequisites and confirmation. Echo may only
-    /// materialize the registered terminal tool for the assigned atomic task.
-    /// Behavioral policy scope is resolved by JarvisAgentContextBuilder.
+    /// Jarvis owns graph state, prerequisites, confirmation and resolved policy
+    /// context. Echo only materializes the registered terminal tool call.
     /// </summary>
     internal static class JarvisControlledEchoTaskExecutor
     {
@@ -23,12 +22,12 @@ namespace S1Jarvis.Core
             var result = NewResult(objectId, "CreateCrmTask", "Echo");
             try
             {
-                string fragment = ReadFragment(dispatchInputs);
+                string fragment = ReadRequiredInternalContext(dispatchInputs, "__intent_fragment", "Atomic intent fragment is missing.");
+                string policies = ReadRequiredInternalContext(dispatchInputs, "__policy_context", "Jarvis dispatch policy context is missing.");
                 string runtimeNow = DateTime.Now.ToString("yyyy-MM-ddTHH:mm:ss");
                 int currentUserId = xSupport != null && xSupport.ConnectionInfo != null
                     ? xSupport.ConnectionInfo.UserId
                     : 0;
-                string policies = JarvisAgentContextBuilder.BuildTrainingPolicyContext("Echo", "CreateCrmTask");
 
                 var request = new JObject
                 {
@@ -120,9 +119,9 @@ namespace S1Jarvis.Core
             var result = NewResult(objectId, "CreateCalendarEvent", "Echo");
             try
             {
-                string fragment = ReadFragment(dispatchInputs);
+                string fragment = ReadRequiredInternalContext(dispatchInputs, "__intent_fragment", "Atomic intent fragment is missing.");
+                string policies = ReadRequiredInternalContext(dispatchInputs, "__policy_context", "Jarvis dispatch policy context is missing.");
                 string runtimeNow = DateTime.Now.ToString("yyyy-MM-ddTHH:mm:ss");
-                string policies = JarvisAgentContextBuilder.BuildTrainingPolicyContext("Echo", "CreateCalendarEvent");
 
                 var request = new JObject
                 {
@@ -210,14 +209,11 @@ namespace S1Jarvis.Core
             return resolutionContext;
         }
 
-        private static string ReadFragment(JObject inputs)
+        private static string ReadRequiredInternalContext(JObject inputs, string name, string error)
         {
-            string fragment = inputs == null || inputs["__intent_fragment"] == null
-                ? string.Empty
-                : inputs["__intent_fragment"].ToString();
-            if (string.IsNullOrWhiteSpace(fragment))
-                throw new InvalidOperationException("Atomic intent fragment is missing.");
-            return fragment;
+            string value = inputs == null || inputs[name] == null ? string.Empty : inputs[name].ToString();
+            if (string.IsNullOrWhiteSpace(value)) throw new InvalidOperationException(error);
+            return value;
         }
 
         private static JarvisTaskExecutionResult NewResult(string objectId, string taskType, string owner)
