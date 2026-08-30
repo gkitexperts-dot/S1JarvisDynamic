@@ -310,26 +310,14 @@ namespace S1Jarvis.Access.Verilic
             }
 
             if (!string.IsNullOrWhiteSpace(rejectedText))
-            {
-                messages.Add(new JObject
-                {
-                    ["role"] = "assistant",
-                    ["content"] = rejectedText
-                });
-            }
+                messages.Add(new JObject { ["role"] = "assistant", ["content"] = rejectedText });
 
             string toolList = string.Join(", ", (attachedTools ?? Enumerable.Empty<string>())
                 .OrderBy(x => x, StringComparer.OrdinalIgnoreCase));
             messages.Add(new JObject
             {
                 ["role"] = "user",
-                ["content"] =
-                    "[JARVIS_SUPERVISORY_CORRECTION]\n" +
-                    "Η προηγούμενη δήλωση περί έλλειψης εργαλείων/capability απορρίφθηκε από τον Jarvis runtime. " +
-                    "Το authoritative runtime έχει επισυνάψει ρητά τα ακόλουθα εργαλεία σε αυτή την εργασία: " +
-                    toolList + ". Συνέχισε την εργασία χρησιμοποιώντας τα διαθέσιμα εργαλεία. " +
-                    "Μην δηλώνεις ότι λείπει capability αν δεν έχει προηγηθεί πραγματικό tool invocation που επέστρεψε error. " +
-                    "Αν ένα tool αποτύχει, ανέφερε το πραγματικό tool error."
+                ["content"] = "[JARVIS_SUPERVISORY_CORRECTION] Policy=GLOBAL.REGISTRY_IS_AUTHORITY; attachedTools=" + toolList
             });
 
             return request.ToString(Formatting.None);
@@ -351,7 +339,7 @@ namespace S1Jarvis.Access.Verilic
                     info.CompanyId);
                 string safeCompanyName = SanitizeCompanyName(companyName);
                 string companyContextValue = string.IsNullOrWhiteSpace(safeCompanyName)
-                    ? "UNKNOWN (δεν ανακτήθηκε από COMPANY - μην υποθέσεις όνομα/κλάδο)"
+                    ? "UNKNOWN"
                     : safeCompanyName;
 
                 JObject request = JObject.Parse(providerRequestJson);
@@ -378,75 +366,10 @@ namespace S1Jarvis.Access.Verilic
             string internalAgentName,
             string providerRequestJson)
         {
-            if (string.IsNullOrWhiteSpace(providerRequestJson))
-                return providerRequestJson;
-
-            try
-            {
-                JObject request = JObject.Parse(providerRequestJson);
-                string role = string.IsNullOrWhiteSpace(internalAgentName)
-                    ? "internal"
-                    : internalAgentName.Trim();
-
-                const string identityRule =
-                    "PRODUCT IDENTITY — AUTHORITATIVE: Είσαι ο Jarvis, ο ψηφιακός βοηθός μέσα στο Soft1. " +
-                    "Ο χειριστής μιλά πάντα με τον Jarvis. Τα ονόματα Atlas, Forge, Compass, Echo, Sprint, Scout και Sage είναι μόνο εσωτερικοί execution roles και ΔΕΝ αποτελούν ξεχωριστές ορατές ταυτότητες. " +
-                    "Μην αυτοσυστήνεσαι ποτέ ως εσωτερικός agent και μην λες ότι είσαι ο Atlas/Forge/Compass/Echo/Sprint/Scout/Sage. " +
-                    "Αν ο χειριστής ρωτήσει ποιος είσαι ή πώς σε λένε, απάντησε ότι είσαι ο Jarvis. " +
-                    "Αν ρωτήσει για εσωτερικούς agents/αρχιτεκτονική, μην επινοήσεις ονόματα, πλήθος ή ρόλους· εξήγησε μόνο ότι ο Jarvis χρησιμοποιεί εσωτερική δρομολόγηση σε εξειδικευμένες δυνατότητες και ότι αυτό είναι implementation detail.";
-
-                JArray blocks = request["system"] as JArray;
-                if (blocks == null)
-                {
-                    string existing = request["system"] == null
-                        ? string.Empty
-                        : request["system"].ToString();
-                    blocks = new JArray();
-                    if (!string.IsNullOrWhiteSpace(existing))
-                    {
-                        blocks.Add(new JObject
-                        {
-                            ["type"] = "text",
-                            ["text"] = existing
-                        });
-                    }
-                    request["system"] = blocks;
-                }
-
-                foreach (JObject block in blocks.OfType<JObject>())
-                {
-                    JToken textToken = block["text"];
-                    if (textToken == null || textToken.Type != JTokenType.String)
-                        continue;
-
-                    string text = textToken.ToString();
-                    if (!string.Equals(role, "Jarvis", StringComparison.OrdinalIgnoreCase))
-                    {
-                        text = text.Replace(
-                            "Είσαι ο " + role + " του Jarvis μέσα στο Soft1.",
-                            "Είσαι ο Jarvis μέσα στο Soft1.");
-                        text = text.Replace(
-                            "Είσαι ο " + role + ",",
-                            "Είσαι ο Jarvis,");
-                    }
-                    block["text"] = text;
-                }
-
-                blocks.Insert(0, new JObject
-                {
-                    ["type"] = "text",
-                    ["text"] = identityRule,
-                    ["cache_control"] = new JObject { ["type"] = "ephemeral" }
-                });
-
-                return request.ToString(Formatting.None);
-            }
-            catch (Exception ex)
-            {
-                try { DebugLog.Log("[JARVIS-IDENTITY] provider policy skipped: " + ex.Message); }
-                catch { }
-                return providerRequestJson;
-            }
+            // Product identity is a centralized global policy injected by
+            // JarvisPolicyRequestEnricher. Keep this compatibility hook free of
+            // independent policy prose.
+            return providerRequestJson;
         }
 
         private static string ResolveCurrentCompanyName(

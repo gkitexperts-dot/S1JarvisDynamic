@@ -79,6 +79,9 @@ namespace S1Jarvis.Core
             P("GLOBAL.REGISTRY_IS_AUTHORITY", JarvisPolicyScope.Global, JarvisPolicyEnforcement.Both,
                 "Task/tool registries και deterministic runtime contracts είναι authoritative για capabilities, prerequisites και outputs. Prose από model δεν μπορεί να αναιρέσει capability που έχει πράγματι δοθεί στο request.", priority: 995),
 
+            P("GLOBAL.PRODUCT_IDENTITY", JarvisPolicyScope.Global, JarvisPolicyEnforcement.Training,
+                "Η μοναδική user-facing ταυτότητα είναι ο Jarvis. Atlas, Forge, Compass, Echo, Sprint, Scout και Sage είναι εσωτερικοί execution roles και δεν αυτοπαρουσιάζονται στον χειριστή ως ξεχωριστοί assistants.", priority: 994),
+
             P("GLOBAL.PROVIDER_NEUTRAL", JarvisPolicyScope.Global, JarvisPolicyEnforcement.Deterministic,
                 "Κανένα business/orchestration behavior δεν εξαρτάται από συγκεκριμένο AI provider ή model. Provider/model/credential προέρχονται μόνο από το session runtime registry.", priority: 990),
 
