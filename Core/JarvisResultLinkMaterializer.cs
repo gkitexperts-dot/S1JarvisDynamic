@@ -34,6 +34,85 @@ namespace S1Jarvis.Core
         }
 
         /// <summary>
+        /// Compatibility bridge for the still-live mature agent loop. The legacy
+        /// processor stores every tool_use and tool_result in the conversation
+        /// protocol. Those tool results are verified runtime outputs and therefore
+        /// may be used by the same central addressable-link policy. Model prose is
+        /// never treated as identity evidence here.
+        /// </summary>
+        internal static string[] BuildMarkdownLinksFromLegacyTrace(
+            IList<JObject> conversation,
+            int startIndex)
+        {
+            var links = new List<string>();
+            if (conversation == null || conversation.Count == 0) return links.ToArray();
+
+            int first = Math.Max(0, Math.Min(startIndex, conversation.Count));
+            var toolNamesById = new Dictionary<string, string>(StringComparer.Ordinal);
+
+            for (int i = first; i < conversation.Count; i++)
+            {
+                JObject message = conversation[i];
+                JArray blocks = message == null ? null : message["content"] as JArray;
+                if (blocks == null) continue;
+
+                foreach (JObject block in blocks.OfType<JObject>())
+                {
+                    string type = block["type"] == null ? string.Empty : block["type"].ToString();
+                    if (string.Equals(type, "tool_use", StringComparison.OrdinalIgnoreCase))
+                    {
+                        string id = block["id"] == null ? string.Empty : block["id"].ToString();
+                        string name = block["name"] == null ? string.Empty : block["name"].ToString();
+                        if (!string.IsNullOrWhiteSpace(id) && !string.IsNullOrWhiteSpace(name))
+                            toolNamesById[id] = name;
+                        continue;
+                    }
+
+                    if (!string.Equals(type, "tool_result", StringComparison.OrdinalIgnoreCase) ||
+                        (bool?)block["is_error"] == true)
+                        continue;
+
+                    string toolUseId = block["tool_use_id"] == null ? string.Empty : block["tool_use_id"].ToString();
+                    string toolName;
+                    if (string.IsNullOrWhiteSpace(toolUseId) ||
+                        !toolNamesById.TryGetValue(toolUseId, out toolName))
+                        continue;
+
+                    AddLegacyToolResultLinks(toolName, block["content"] == null ? string.Empty : block["content"].ToString(), links);
+                }
+            }
+
+            return links
+                .Where(x => !string.IsNullOrWhiteSpace(x))
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToArray();
+        }
+
+        /// <summary>
+        /// Adds verified canonical links without duplicating a target already
+        /// present in model-authored text. The caller still sends the combined
+        /// text through JarvisPresentationGateway.FinalizeFreeform afterwards.
+        /// </summary>
+        internal static string AppendMissingVerifiedLinks(string text, IEnumerable<string> verifiedLinks)
+        {
+            string value = text ?? string.Empty;
+            if (verifiedLinks == null) return value;
+
+            var missing = new List<string>();
+            foreach (string link in verifiedLinks.Where(x => !string.IsNullOrWhiteSpace(x)).Distinct(StringComparer.OrdinalIgnoreCase))
+            {
+                string target = ReadMarkdownTarget(link);
+                if (!string.IsNullOrWhiteSpace(target) &&
+                    value.IndexOf(target, StringComparison.OrdinalIgnoreCase) >= 0)
+                    continue;
+                missing.Add(link.Trim());
+            }
+
+            if (missing.Count == 0) return value;
+            return value.TrimEnd() + (value.Length == 0 ? string.Empty : "\n\n") + string.Join("\n", missing.ToArray());
+        }
+
+        /// <summary>
         /// Materializes a link for one table cell only when the same row contains
         /// the authoritative identity required by the registered URI mapping.
         /// It never guesses SOSOURCE/object ids from labels or series names.
@@ -93,6 +172,68 @@ namespace S1Jarvis.Core
             }
 
             return string.Empty;
+        }
+
+        private static void AddLegacyToolResultLinks(string toolName, string rawResult, List<string> links)
+        {
+            if (string.IsNullOrWhiteSpace(toolName) || string.IsNullOrWhiteSpace(rawResult) || links == null) return;
+
+            JObject parsed = null;
+            try { parsed = JObject.Parse(rawResult); } catch { }
+
+            if (string.Equals(toolName, "create_crm_task", StringComparison.OrdinalIgnoreCase))
+            {
+                if (parsed == null || (bool?)parsed["success"] != true) return;
+
+                JArray rows = parsed["results"] as JArray;
+                if (rows != null)
+                {
+                    foreach (JObject row in rows.OfType<JObject>())
+                    {
+                        int id = ReadInt(row, "soactionId");
+                        if (id > 0) links.Add("[Άνοιγμα εργασίας " + id + "](" + BuildCrmTaskUri(id) + ")");
+                    }
+                }
+
+                int directId = ReadInt(parsed, "soactionId");
+                if (directId > 0) links.Add("[Άνοιγμα εργασίας " + directId + "](" + BuildCrmTaskUri(directId) + ")");
+                return;
+            }
+
+            if (string.Equals(toolName, "export_query_to_file", StringComparison.OrdinalIgnoreCase))
+            {
+                if (parsed == null || (parsed["success"] != null && (bool?)parsed["success"] != true)) return;
+                AddFileLink(parsed, "path", links);
+                return;
+            }
+
+            if (string.Equals(toolName, "export_shown_table", StringComparison.OrdinalIgnoreCase))
+            {
+                if (parsed != null)
+                {
+                    if (parsed["success"] != null && (bool?)parsed["success"] != true) return;
+                    AddFileLink(parsed, "path", links);
+                }
+                else
+                {
+                    var pathWrapper = new JObject { ["path"] = rawResult.Trim().Trim('"') };
+                    AddFileLink(pathWrapper, "path", links);
+                }
+                return;
+            }
+
+            if (string.Equals(toolName, "create_outlook_event", StringComparison.OrdinalIgnoreCase))
+            {
+                if (parsed == null || (bool?)parsed["success"] != true) return;
+                AddExternalLink(parsed, "webLink", "Άνοιγμα στο Outlook", links);
+                return;
+            }
+
+            if (string.Equals(toolName, "open_document", StringComparison.OrdinalIgnoreCase))
+            {
+                if (parsed == null) return;
+                AddSoft1DocumentLink(parsed, links);
+            }
         }
 
         private static void AddSoft1CrmLinks(JarvisTaskExecutionResult result, List<string> links)
@@ -210,6 +351,16 @@ namespace S1Jarvis.Core
                 .Replace("|", "\\|")
                 .Replace("\r", " ")
                 .Replace("\n", " ");
+        }
+
+        private static string ReadMarkdownTarget(string markdownLink)
+        {
+            string value = markdownLink ?? string.Empty;
+            int open = value.IndexOf("](", StringComparison.Ordinal);
+            if (open < 0) return string.Empty;
+            int close = value.LastIndexOf(')');
+            if (close <= open + 2) return string.Empty;
+            return value.Substring(open + 2, close - open - 2).Trim();
         }
 
         private static int ReadInt(JObject outputs, string property)
