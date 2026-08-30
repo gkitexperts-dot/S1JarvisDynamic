@@ -117,28 +117,48 @@ namespace S1Jarvis.Core
 
         private static void ValidateStructuredDocumentScope(List<string> issues)
         {
+            // FPRMS is the authoritative document-category discriminator. SERIES
+            // is descriptive metadata only, so smoke-test fixtures must exercise
+            // the same contract as production validation.
             string invoiceDataset = new JObject
             {
-                ["rows"] = new JArray(new JObject { ["SeriesType"] = "Τιμολόγιο" })
+                ["rows"] = new JArray(new JObject
+                {
+                    ["FPRMS_NAME"] = "Τιμολόγιο",
+                    ["SERIES_NAME"] = "Τιμολόγια Πωλήσεων"
+                })
             }.ToString();
             if (JarvisDocumentScopeValidator.Validate("invoice", invoiceDataset).Length != 0)
-                issues.Add("Document regression: invoice scope rejected an invoice row.");
+                issues.Add("Document regression: invoice scope rejected an invoice FPRMS row.");
 
             string mixedDataset = new JObject
             {
                 ["rows"] = new JArray(
-                    new JObject { ["SeriesType"] = "Τιμολόγιο" },
-                    new JObject { ["SeriesType"] = "Δελτίο Αποστολής" })
+                    new JObject { ["FPRMS_NAME"] = "Τιμολόγιο", ["SERIES_NAME"] = "Τιμολόγια Πωλήσεων" },
+                    new JObject { ["FPRMS_NAME"] = "Δελτίο Αποστολής", ["SERIES_NAME"] = "Δελτία Αποστολής" })
             }.ToString();
             if (JarvisDocumentScopeValidator.Validate("invoice", mixedDataset).Length == 0)
-                issues.Add("Document regression: invoice scope accepted a delivery-note row.");
+                issues.Add("Document regression: invoice scope accepted a delivery-note FPRMS row.");
+
+            string creditInvoiceDataset = new JObject
+            {
+                ["rows"] = new JArray(new JObject
+                {
+                    ["FPRMS_NAME"] = "Πιστωτικό Τιμολόγιο",
+                    ["SERIES_NAME"] = "Πιστωτικά Πωλήσεων"
+                })
+            }.ToString();
+            if (JarvisDocumentScopeValidator.Validate("invoice", creditInvoiceDataset).Length == 0)
+                issues.Add("Document regression: invoice scope accepted a credit-invoice FPRMS row.");
+            if (JarvisDocumentScopeValidator.Validate("credit", creditInvoiceDataset).Length != 0)
+                issues.Add("Document regression: credit scope rejected a credit-invoice FPRMS row.");
 
             string unverifiableDataset = new JObject
             {
                 ["rows"] = new JArray(new JObject { ["FINCODE"] = "X" })
             }.ToString();
             if (JarvisDocumentScopeValidator.Validate("invoice", unverifiableDataset).Length == 0)
-                issues.Add("Document regression: specific scope must fail closed without authoritative type metadata.");
+                issues.Add("Document regression: specific scope must fail closed without authoritative FPRMS metadata.");
         }
 
         private static int Count(string text, string token)
