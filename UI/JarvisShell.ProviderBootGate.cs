@@ -1,6 +1,7 @@
 using System;
 using System.Threading.Tasks;
 using System.Windows;
+using S1Jarvis.Access.Verilic;
 using S1Jarvis.Core;
 
 namespace S1Jarvis.UI
@@ -49,7 +50,10 @@ namespace S1Jarvis.UI
                 }
 
                 if (webView == null || webView.CoreWebView2 == null)
+                {
+                    DebugLog.Log("[provider-boot-gate] webview_not_ready");
                     return;
+                }
 
                 // Local file links are rendered through the WebView2 page. Chromium
                 // may URL-encode spaces in a filesystem path (for example
@@ -61,6 +65,20 @@ namespace S1Jarvis.UI
                 await InstallLocalFilePathNormalizationAsync();
 
                 await SetProviderBootInteractionLockedAsync(true);
+
+                // This class-level Loaded handler is the guaranteed startup entry.
+                // Start provisioning here directly; do not wait for a second Loaded
+                // subscription that may never be attached or fired.
+                if (!_providerHealthCheckEnabled)
+                {
+                    _providerHealthCheckEnabled = true;
+                    Unloaded += ProviderHealthCheck_Unloaded;
+                }
+
+                JarvisAgentRuntimeSnapshot.Reset();
+                VerilicAiMessagesClient.ResetRuntimeTargetSnapshot();
+                DebugLog.Log("[AI-SESSION-REGISTRY] boot provisioning start (boot gate)");
+                await RefreshProviderHealthStatusAsync(false);
 
                 // ProviderHealth owns the authoritative startup state. Keep the
                 // gate closed through licence/routing/model/provider checks and
