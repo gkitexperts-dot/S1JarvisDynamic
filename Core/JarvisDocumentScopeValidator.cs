@@ -1,6 +1,8 @@
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.Linq;
+using System.Text;
 using Newtonsoft.Json.Linq;
 
 namespace S1Jarvis.Core
@@ -60,7 +62,7 @@ namespace S1Jarvis.Core
 
         private static string NormalizeScope(string value)
         {
-            string v = (value ?? string.Empty).Trim().ToLowerInvariant();
+            string v = NormalizeText(value);
             if (v == "invoice" || v == "invoices") return "invoice";
             if (v == "order" || v == "orders") return "order";
             if (v == "quotation" || v == "quote" || v == "quotes") return "quotation";
@@ -75,7 +77,7 @@ namespace S1Jarvis.Core
             if (row == null) yield break;
             foreach (JProperty property in row.Properties())
             {
-                string name = (property.Name ?? string.Empty).ToLowerInvariant();
+                string name = NormalizeText(property.Name);
                 if (!(name.Contains("series") || name.Contains("type") || name.Contains("σειρ") || name.Contains("τυπ")))
                     continue;
                 if (property.Value == null || property.Value.Type == JTokenType.Null) continue;
@@ -87,13 +89,28 @@ namespace S1Jarvis.Core
 
         private static string Classify(string value)
         {
-            string v = (value ?? string.Empty).ToLowerInvariant();
+            string v = NormalizeText(value);
             if (v.Contains("πιστω") || v.Contains("credit")) return "credit";
             if (v.Contains("παραγγελ") || v.Contains("order")) return "order";
             if (v.Contains("προσφορ") || v.Contains("quotation") || v.Contains("quote")) return "quotation";
-            if (v.Contains("δελτιο αποστο") || v.Contains("δελτίο αποστο") || v.Contains("delivery note")) return "delivery";
+            if (v.Contains("δελτιο αποστο") || v.Contains("delivery note")) return "delivery";
             if (v.Contains("τιμολογ") || v.Contains("invoice")) return "invoice";
             return string.Empty;
+        }
+
+        private static string NormalizeText(string value)
+        {
+            string source = (value ?? string.Empty).Trim().Normalize(NormalizationForm.FormD);
+            var sb = new StringBuilder(source.Length);
+            foreach (char c in source)
+            {
+                UnicodeCategory category = CharUnicodeInfo.GetUnicodeCategory(c);
+                if (category != UnicodeCategory.NonSpacingMark &&
+                    category != UnicodeCategory.SpacingCombiningMark &&
+                    category != UnicodeCategory.EnclosingMark)
+                    sb.Append(char.ToLowerInvariant(c));
+            }
+            return sb.ToString().Normalize(NormalizationForm.FormC);
         }
     }
 }
