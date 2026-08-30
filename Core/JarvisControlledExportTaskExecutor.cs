@@ -46,11 +46,11 @@ namespace S1Jarvis.Core
                     if (string.IsNullOrWhiteSpace(exportRequest))
                         throw new InvalidOperationException("ExportData has neither upstream query provenance nor export_request.");
                     string policyContext = ReadString(dispatchInputs, "__policy_context");
-                    string operatorScope = ReadString(dispatchInputs, "operator_scope");
+                    string planningOperatorScope = ReadString(dispatchInputs, "operator_scope");
                     string resultMode = ReadString(dispatchInputs, "result_mode");
                     int currentUserId = dispatchInputs["__current_user_id"] == null ? 0 : (int)dispatchInputs["__current_user_id"];
                     sql = await JarvisControlledTaskExecutor.PlanValidatedSqlForExportAsync(
-                        xSupport, exportRequest, policyContext, operatorScope, resultMode, currentUserId, cancellationToken).ConfigureAwait(false);
+                        xSupport, exportRequest, policyContext, planningOperatorScope, resultMode, currentUserId, cancellationToken).ConfigureAwait(false);
                 }
 
                 string entityRole = ReadString(dispatchInputs, "entity_role");
