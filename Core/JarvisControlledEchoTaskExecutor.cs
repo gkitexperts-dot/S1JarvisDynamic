@@ -24,6 +24,7 @@ namespace S1Jarvis.Core
             try
             {
                 string fragment = ReadFragment(dispatchInputs);
+                string runtimeNow = DateTime.Now.ToString("yyyy-MM-ddTHH:mm:ss");
                 int currentUserId = xSupport != null && xSupport.ConnectionInfo != null
                     ? xSupport.ConnectionInfo.UserId
                     : 0;
@@ -46,10 +47,11 @@ namespace S1Jarvis.Core
                             ["text"] =
                                 "Εκτελείς ΕΝΑ atomic Jarvis task: CreateCrmTask. " +
                                 "Δεν αποφασίζεις capabilities ή άλλα tasks. Χρησιμοποίησε μόνο τα attached tools. " +
+                                "Τρέχουσα τοπική ημερομηνία/ώρα Jarvis=" + runtimeNow + ". " +
                                 "Ο τρέχων Soft1 userId είναι " + currentUserId.ToString() + ". " +
                                 "Αν η οδηγία λέει 'μου/σε μένα', actorUserId=" + currentUserId.ToString() + ". " +
-                                "Μετέτρεψε φυσική ημερομηνία/ώρα σε ISO. Αν χρειάζεται άλλος Soft1 χρήστης, " +
-                                "βρες τον με query_data στον USERS πριν το create_crm_task. " +
+                                "Μετέτρεψε φυσική ημερομηνία/ώρα σε ISO σε σχέση με την παραπάνω runtime ημερομηνία. " +
+                                "Αν χρειάζεται άλλος Soft1 χρήστης, βρες τον με query_data στον USERS πριν το create_crm_task. " +
                                 "Μόλις έχεις title, description, fromDate και actorUserId, κάλεσε create_crm_task."
                         }),
                         ["tools"] = JArray.FromObject(new object[]
@@ -148,6 +150,7 @@ namespace S1Jarvis.Core
             try
             {
                 string fragment = ReadFragment(dispatchInputs);
+                string runtimeNow = DateTime.Now.ToString("yyyy-MM-ddTHH:mm:ss");
                 var request = new JObject
                 {
                     ["model"] = "runtime-session-model",
@@ -158,7 +161,9 @@ namespace S1Jarvis.Core
                         ["text"] =
                             "Εκτελείς ΕΝΑ atomic Jarvis task: CreateCalendarEvent. " +
                             "Δεν αποφασίζεις capabilities ή άλλα tasks. Χρησιμοποίησε μόνο το attached create_outlook_event. " +
-                            "Μετέτρεψε φυσική ημερομηνία/ώρα σε ISO. Αν δεν δίνεται διάρκεια, χρησιμοποίησε 30 λεπτά. " +
+                            "Τρέχουσα τοπική ημερομηνία/ώρα Jarvis=" + runtimeNow + ". " +
+                            "Μετέτρεψε φυσική ημερομηνία/ώρα σε ISO σε σχέση με την παραπάνω runtime ημερομηνία. " +
+                            "Αν δεν δίνεται διάρκεια, χρησιμοποίησε 30 λεπτά. " +
                             "Η αναφορά προσώπου μέσα στην περιγραφή ΔΕΝ σημαίνει attendee εκτός αν ο χρήστης ζήτησε ρητά πρόσκληση. " +
                             "Κάλεσε create_outlook_event ακριβώς μία φορά."
                     }),
