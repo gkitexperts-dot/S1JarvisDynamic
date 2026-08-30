@@ -102,13 +102,12 @@ namespace S1Jarvis.Core
                     ["transactionDateField"] = "TRNDATE",
                     ["traderForeignKey"] = "TRDR",
                     ["seriesField"] = "SERIES",
-                    ["parameterField"] = "FPRMS",
                     ["sourceField"] = "SOSOURCE",
                     ["navigationIdentity"] = new JArray("SOSOURCE", "FINDOC"),
                     ["classificationCompanions"] = new JArray("SERIES", "FPRMS"),
                     ["classificationMetadata"] = new JArray("SERIES.NAME", "FPRMS.NAME"),
-                    ["seriesJoinKeys"] = new JArray("COMPANY", "SOSOURCE", "SERIES"),
-                    ["fprmsJoinKeys"] = new JArray("COMPANY", "SOSOURCE", "FPRMS")
+                    ["seriesJoinKeys"] = new JArray("FINDOC.COMPANY=SERIES.COMPANY", "FINDOC.SOSOURCE=SERIES.SOSOURCE", "FINDOC.SERIES=SERIES.SERIES"),
+                    ["fprmsJoinKeys"] = new JArray("SERIES.FPRMS=FPRMS.FPRMS")
                 }
             };
         }
