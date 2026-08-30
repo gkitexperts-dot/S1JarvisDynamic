@@ -1,0 +1,32 @@
+name: One-shot policy consolidation
+
+on:
+  push:
+    branches:
+      - feature/jarvis-orchestration
+
+permissions:
+  contents: write
+
+jobs:
+  consolidate:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feature/jarvis-orchestration
+      - name: Consolidate policy sources
+        run: python3 scripts/consolidate_policy_sources.py
+      - name: Commit consolidation
+        shell: bash
+        run: |
+          if git diff --quiet; then
+            echo "No consolidation changes needed."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add Core/JarvisAgentClient.cs Core/JarvisBusinessEntityCatalog.cs Core/JarvisPolicyRegistry.cs Access/Verilic/VerilicAiMessagesClient.cs
+          git commit -m "Consolidate remaining policy sources"
+          git push origin HEAD:feature/jarvis-orchestration
