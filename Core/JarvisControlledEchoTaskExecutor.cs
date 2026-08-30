@@ -160,6 +160,22 @@ namespace S1Jarvis.Core
 
                 JObject input = call["input"] as JObject ?? new JObject();
                 JObject resolutionContext = BuildResolutionContext(dispatchInputs);
+
+                // External parties are authorization-bearing inputs. The executor
+                // may format an already-resolved attendee list, but it may never
+                // introduce one after Jarvis made the authorization decision.
+                JToken resolvedAttendees = resolutionContext["attendees"];
+                JToken proposedAttendees = input["attendees"];
+                bool resolvedHasAttendees = HasValue(resolvedAttendees);
+                bool proposedHasAttendees = HasValue(proposedAttendees);
+                if (!resolvedHasAttendees && proposedHasAttendees)
+                {
+                    result.Issues.Add("NEEDS_USER_INPUT: create_outlook_event proposed attendees that were not resolved and authorized by Jarvis.");
+                    return result;
+                }
+                if (resolvedHasAttendees)
+                    input["attendees"] = resolvedAttendees.DeepClone();
+
                 JarvisToolContractValidator.ApplyResolutionEvidence("create_outlook_event", input, resolutionContext);
 
                 string[] resolutionIssues = JarvisToolContractValidator.ValidateResolutionEvidence("create_outlook_event", resolutionContext);
@@ -195,6 +211,13 @@ namespace S1Jarvis.Core
                 result.Issues.Add("CreateCalendarEvent controlled executor failed: " + ex.Message);
                 return result;
             }
+        }
+
+        private static bool HasValue(JToken value)
+        {
+            if (value == null || value.Type == JTokenType.Null || value.Type == JTokenType.Undefined) return false;
+            if (value.Type == JTokenType.Array) return ((JArray)value).Count > 0;
+            return !string.IsNullOrWhiteSpace(value.ToString());
         }
 
         private static JObject BuildResolutionContext(JObject dispatchInputs)
