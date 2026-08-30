@@ -454,14 +454,27 @@ namespace S1Jarvis.Access.Verilic
                     string name = (string)block["name"];
                     if (!string.IsNullOrWhiteSpace(id) && !string.IsNullOrWhiteSpace(name))
                         toolNames[id] = name;
-                    parts.Add(new JObject
+
+                    var googlePart = new JObject
                     {
                         ["functionCall"] = new JObject
                         {
                             ["name"] = name ?? string.Empty,
                             ["args"] = (block["input"] as JObject ?? new JObject()).DeepClone()
                         }
-                    });
+                    };
+
+                    // Gemini 3 tool continuations require the opaque thoughtSignature
+                    // returned with the original functionCall to be replayed verbatim.
+                    // Keep this as provider metadata on the neutral tool block; no core
+                    // orchestration semantics depend on it.
+                    string thoughtSignature = (string)block["gemini_thought_signature"];
+                    if (string.IsNullOrWhiteSpace(thoughtSignature))
+                        thoughtSignature = (string)block["provider_metadata"]?["google"]?["thought_signature"];
+                    if (!string.IsNullOrWhiteSpace(thoughtSignature))
+                        googlePart["thoughtSignature"] = thoughtSignature;
+
+                    parts.Add(googlePart);
                 }
             }
         }
@@ -588,13 +601,30 @@ namespace S1Jarvis.Access.Verilic
                     if (call != null)
                     {
                         hasToolUse = true;
-                        content.Add(new JObject
+                        var toolUse = new JObject
                         {
                             ["type"] = "tool_use",
                             ["id"] = "gemini_" + Guid.NewGuid().ToString("N"),
                             ["name"] = (string)call["name"] ?? string.Empty,
                             ["input"] = (call["args"] as JObject ?? new JObject()).DeepClone()
-                        });
+                        };
+
+                        // Preserve Gemini's opaque continuation token without giving
+                        // it semantic meaning in the provider-neutral orchestration.
+                        string thoughtSignature = (string)part["thoughtSignature"];
+                        if (!string.IsNullOrWhiteSpace(thoughtSignature))
+                        {
+                            toolUse["gemini_thought_signature"] = thoughtSignature;
+                            toolUse["provider_metadata"] = new JObject
+                            {
+                                ["google"] = new JObject
+                                {
+                                    ["thought_signature"] = thoughtSignature
+                                }
+                            };
+                        }
+
+                        content.Add(toolUse);
                     }
                 }
             }
