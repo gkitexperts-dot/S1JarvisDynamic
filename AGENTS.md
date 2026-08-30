@@ -60,6 +60,24 @@ This file is a persistent engineering contract for anyone (human or AI) changing
    - Fix the adapter mapping or fail with a diagnostic.
    - Provider/model selection remains exclusively the BOOT/HEALTH-provisioned configuration from Verilic.
 
+## Jarvis supervisory authority — NON-NEGOTIABLE
+
+1. **The runtime task/tool registry is authoritative about capability; an agent's prose is not.**
+   - Jarvis assigns a registered task to a logical owner agent and attaches the scoped tools/capabilities required for that task.
+   - A model response such as “I do not have the tools/access/capability” MUST NOT be exposed to the user when the authoritative runtime request proves that the tools were attached.
+   - In that case Jarvis rejects the response as an invalid execution result and performs one controlled corrective retry with the same logical agent and its same session-provisioned provider/model/credential.
+   - A real tool invocation error is authoritative and must be surfaced/handled normally; supervisory recovery must never hide actual permission, backend, validation, or tool failures.
+
+2. **Task-local tool arguments belong to the registered owner agent when the task contract says they are owner-resolvable.**
+   - Do not invent fake cross-object dependencies merely because an LLM decomposition did not pre-fill native tool arguments such as title, description, date/time, recipient, subject, or similar execution-local fields.
+   - Jarvis keeps business/dependency contracts authoritative; the owner agent may materialize explicitly registered task-local inputs from the atomic intent fragment, current session context, and only its scoped registered tools.
+   - Cross-object data dependencies (for example `ReportData.summary -> SendEmail.body`) remain deterministic Jarvis bindings and may not be inferred agent-to-agent.
+
+3. **A valid decomposed graph must remain Jarvis-owned.**
+   - Agents never call other agents and never advance the graph themselves.
+   - Jarvis validates each result before storing it, materializes registered dependencies, and decides the next dispatch.
+   - Legacy conversational fallback must not become the authority for whether a registered task/capability exists.
+
 ## Provider/model rules — NON-NEGOTIABLE
 
 1. **Never hardcode a concrete AI provider or model in desktop/client business or orchestration code.**
@@ -87,7 +105,7 @@ This file is a persistent engineering contract for anyone (human or AI) changing
 - `Core/JarvisAgentHealthProbe.cs` — signed BOOT/HEALTH provisioning request. This must never be invoked by normal prompt execution.
 - `Core/JarvisAgentRuntimeSnapshot.cs` — in-memory session execution registry; every executable agent requires Provider + Model + API credential; supports atomic HEALTH replacement and secret clearing.
 - `Access/Verilic/JarvisDirectAiTransport.cs` — normal direct provider transport after provisioning. It must never contact Verilic; all provider-specific request/response/schema/tool-choice translation stays here.
-- `Access/Verilic/VerilicAiMessagesClient.cs` — legacy class name retained only as the local session dispatcher/compatibility boundary; it must not send runtime messages to Verilic.
+- `Access/Verilic/VerilicAiMessagesClient.cs` — legacy class name retained only as the local session dispatcher/compatibility boundary; it must not send runtime messages to Verilic. It also enforces provider-neutral supervisory rejection of false capability-denial prose when the request itself proves that registered tools were attached.
 - `Core/JarvisAgentClient.cs` and orchestration clients — select logical agents/tasks only; they must not own provider/model/API-key configuration.
 
 ## Security rules for AI credentials
