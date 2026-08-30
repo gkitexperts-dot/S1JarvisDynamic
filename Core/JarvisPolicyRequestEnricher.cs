@@ -14,6 +14,7 @@ namespace S1Jarvis.Core
     {
         private const string PolicyMarker = "[JARVIS_POLICY_CONTEXT]";
         private const string KnowledgeMarker = "[JARVIS_KNOWLEDGE_CONTEXT]";
+        private const string OrchestrationInvariantMarker = "[JARVIS_ORCHESTRATION_INVARIANTS]";
 
         internal static string Apply(string agentName, string providerRequestJson)
         {
@@ -32,6 +33,12 @@ namespace S1Jarvis.Core
                     AddContextBlock(system, policy);
             }
 
+            // Product-wide orchestration invariants are injected independently of
+            // task/domain selection. They therefore cannot disappear because a
+            // request was routed through a different logical agent or compact mode.
+            if (!ContainsMarker(system, OrchestrationInvariantMarker))
+                AddContextBlock(system, JarvisPolicySettings.Orchestration.BuildPolicyEnvelope());
+
             if (!ContainsMarker(system, KnowledgeMarker))
             {
                 string knowledge = JarvisKnowledgeCompanion.BuildForRequest(
@@ -46,6 +53,7 @@ namespace S1Jarvis.Core
 
         private static void AddContextBlock(JArray system, string text)
         {
+            if (system == null || string.IsNullOrWhiteSpace(text)) return;
             system.Add(new JObject
             {
                 ["type"] = "text",
