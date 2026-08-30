@@ -188,7 +188,11 @@ namespace S1Jarvis.Core
                     ProductId = productId,
                     InstallationId = state.InstallationId,
                     ProductVersion = configuration.ProductVersion,
-                    RequestedFeatures = new[] { "session_credentials" },
+                    // Session credential provisioning is transport/runtime material,
+                    // not a separately licensed product feature. Keep the normal
+                    // licence verification intact without requesting a synthetic
+                    // entitlement that would incorrectly produce feature_denied.
+                    RequestedFeatures = new string[0],
                     Soft1Serial = info.SerialNum == null
                         ? null
                         : info.SerialNum.ToString(),
