@@ -1,4 +1,5 @@
 using System;
+using System.Linq;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
 using System.Threading;
@@ -11,6 +12,8 @@ namespace S1Jarvis.Core
     /// Controlled executor for the registered ExportData task. It consumes the
     /// validated upstream dataset contract and reuses its authoritative query when
     /// available, so export rows bypass LLM context and the artifact is produced once.
+    /// Standalone exports plan one validated SELECT and perform any structured-scope
+    /// verification locally before the full dataset is written to disk.
     /// </summary>
     internal static class JarvisControlledExportTaskExecutor
     {
@@ -50,11 +53,13 @@ namespace S1Jarvis.Core
                         xSupport, exportRequest, policyContext, operatorScope, resultMode, currentUserId, cancellationToken).ConfigureAwait(false);
                 }
 
+                ValidateStructuredDocumentScope(xSupport, sql, ReadString(dispatchInputs, "document_scope"));
+
                 string format = ReadString(dispatchInputs, "format");
                 if (string.IsNullOrWhiteSpace(format)) format = "xlsx";
                 format = format.Trim().ToLowerInvariant();
                 if (format != "xlsx" && format != "csv")
-                    throw new InvalidOperationException("ExportData supports only xlsx or csv.");
+                    throw new InvalidOperationException("ExportData supports only xlsx or csv in the controlled direct-export path.");
 
                 string filename = ReadString(dispatchInputs, "filename");
                 if (string.IsNullOrWhiteSpace(filename)) filename = "Jarvis_export";
@@ -92,6 +97,34 @@ namespace S1Jarvis.Core
                 result.Issues.Add(ex.Message);
                 return result;
             }
+        }
+
+        private static void ValidateStructuredDocumentScope(XSupport xSupport, string sql, string documentScope)
+        {
+            if (string.IsNullOrWhiteSpace(documentScope)) return;
+
+            string scope = documentScope.Trim().ToLowerInvariant();
+            if (scope == "documents" || scope == "movements") return;
+
+            string validationSql = BuildValidationSql(sql);
+            string preview = JarvisTools.ExecuteQueryData(xSupport, validationSql);
+            string[] issues = JarvisDocumentScopeValidator.Validate(documentScope, preview);
+            if (issues.Length > 0)
+                throw new InvalidOperationException(
+                    "Jarvis rejected ExportData document scope before file creation: " + string.Join(" | ", issues));
+        }
+
+        private static string BuildValidationSql(string sql)
+        {
+            string value = (sql ?? string.Empty).Trim();
+            if (value.Length == 0) throw new InvalidOperationException("ExportData SQL is empty.");
+            if (value.StartsWith("SELECT DISTINCT ", StringComparison.OrdinalIgnoreCase))
+                return "SELECT DISTINCT TOP 200 " + value.Substring("SELECT DISTINCT ".Length);
+            if (value.StartsWith("SELECT TOP ", StringComparison.OrdinalIgnoreCase))
+                return value;
+            if (value.StartsWith("SELECT ", StringComparison.OrdinalIgnoreCase))
+                return "SELECT TOP 200 " + value.Substring("SELECT ".Length);
+            return value;
         }
 
         private static JObject ParseSource(JToken token)
