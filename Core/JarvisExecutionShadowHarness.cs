@@ -43,7 +43,7 @@ namespace S1Jarvis.Core
                     return outcome;
 
                 outcome.Handled = true;
-                if (activeContext != null) activeContext.CapturePlanning(planning);
+                if (activeContext != null && !activeContext.HasOpenRun) activeContext.Begin(userPrompt);
                 bool hasEmail = HasTask(planning, "SendEmail");
                 if (hasEmail && pendingSession == null)
                 {
@@ -52,6 +52,15 @@ namespace S1Jarvis.Core
                 }
                 ResolveDeterministicSendRecipient(planning);
                 ResolveDeterministicRuntimeContext(planning, xSupport);
+                if (activeContext != null) activeContext.CapturePlanning(planning);
+
+                // A supported re-plan without SendEmail supersedes any previously
+                // frozen email payload. Never leave stale confirmation state alive.
+                if (!hasEmail && pendingSession != null && pendingSession.HasPending)
+                {
+                    pendingSession.Clear();
+                    if (activeContext != null) activeContext.ClearPendingConfirmation();
+                }
 
                 var coordinator = new JarvisExecutionCoordinator(planning.Graph, planning.Preview);
                 JarvisExecutionControlSnapshot before = coordinator.Inspect();
