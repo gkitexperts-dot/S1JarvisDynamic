@@ -24,12 +24,9 @@ namespace S1Jarvis.Core
     }
 
     /// <summary>
-    /// Authoritative business-entity semantics shared by orchestration, agents
-    /// and deterministic resolvers. Models may interpret user language, but they
-    /// must never invent Soft1 entity discriminators or Designer object names.
-    ///
-    /// Only mappings already confirmed elsewhere in the repository are allowed
-    /// here. Unknown roles/types remain unknown; fail closed instead of guessing.
+    /// Authoritative business-entity knowledge shared by orchestration, agents
+    /// and deterministic resolvers. Behavioral rules belong exclusively to
+    /// JarvisPolicyRegistry; this catalog contains facts/mappings only.
     /// </summary>
     internal static class JarvisBusinessEntityCatalog
     {
@@ -96,8 +93,7 @@ namespace S1Jarvis.Core
                 {
                     ["identityField"] = "TRDR",
                     ["roleDiscriminator"] = "SODTYPE",
-                    ["roles"] = roles,
-                    ["policy"] = "Use only registered role discriminators. Unknown SODTYPE/object mappings must never be invented."
+                    ["roles"] = roles
                 },
                 ["FINDOC"] = new JObject
                 {
