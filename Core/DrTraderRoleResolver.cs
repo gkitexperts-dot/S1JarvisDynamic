@@ -8,6 +8,7 @@ namespace S1Jarvis.Core
     /// <summary>
     /// Deterministic AFM lookup for DR. Returns every active TRDR role for the AFM
     /// instead of an arbitrary TOP 1 record. No write is performed.
+    /// Role/SODTYPE semantics come exclusively from JarvisBusinessEntityCatalog.
     /// </summary>
     internal static class DrTraderRoleResolver
     {
@@ -34,6 +35,8 @@ namespace S1Jarvis.Core
                 foreach (DataRow row in table.Rows)
                 {
                     int sodType = ToInt(row["SODTYPE"]);
+                    bool incoming = JarvisBusinessEntityCatalog.IsIncomingTraderRole(sodType);
+                    bool outgoing = JarvisBusinessEntityCatalog.IsOutgoingTraderRole(sodType);
                     var item = new JObject
                     {
                         ["trdrId"] = ToInt(row["TRDR"]),
@@ -41,16 +44,16 @@ namespace S1Jarvis.Core
                         ["name"] = ToString(row["NAME"]),
                         ["afm"] = ToString(row["AFM"]),
                         ["sodType"] = sodType,
-                        ["role"] = RoleName(sodType),
-                        ["incomingCandidate"] = sodType == 12 || sodType == 16,
-                        ["outgoingCandidate"] = sodType == 13 || sodType == 15
+                        ["role"] = JarvisBusinessEntityCatalog.RoleName(sodType),
+                        ["incomingCandidate"] = incoming,
+                        ["outgoingCandidate"] = outgoing
                     };
                     matches.Add(item);
 
-                    if (sodType == 12 || sodType == 16)
+                    if (incoming)
                     {
                         incomingCount++;
-                        // Supplier is preferred over creditor for invoice/expense ingestion.
+                        // Supplier remains preferred over creditor for invoice/expense ingestion.
                         if (preferredIncoming == null || (int)preferredIncoming["sodType"] != 12 && sodType == 12)
                             preferredIncoming = item;
                     }
@@ -77,18 +80,6 @@ namespace S1Jarvis.Core
             foreach (JObject x in matches)
                 if ((int?)x["sodType"] == sodType) return true;
             return false;
-        }
-
-        private static string RoleName(int sodType)
-        {
-            switch (sodType)
-            {
-                case 12: return "Supplier";
-                case 13: return "Customer";
-                case 15: return "Debtor";
-                case 16: return "Creditor";
-                default: return "Other";
-            }
         }
 
         private static string NormalizeAfm(string value)
