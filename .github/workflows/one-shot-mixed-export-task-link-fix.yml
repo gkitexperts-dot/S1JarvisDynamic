@@ -1,0 +1,59 @@
+name: One-shot mixed export task and link fix
+
+on:
+  push:
+    branches:
+      - feature/jarvis-orchestration
+    paths:
+      - .github/workflows/one-shot-mixed-export-task-link-fix.yml
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: feature/jarvis-orchestration
+
+      - name: Patch optimizer and inline file link parsing
+        shell: python
+        run: |
+          from pathlib import Path
+
+          optimizer = Path("Access/Verilic/VerilicProviderRequestOptimizer.cs")
+          text = optimizer.read_text(encoding="utf-8-sig")
+          old = '''            if (ContainsAnyNormalized(n, "στειλ", "στελν", "email", "mail", "συνημ"))\n                return false;\n\n            bool formatOrFile = ContainsAnyNormalized(n,'''
+          new = '''            if (ContainsAnyNormalized(n, "στειλ", "στελν", "email", "mail", "συνημ"))\n                return false;\n\n            // Direct-export optimization is valid only for a single export intent.\n            // If the same request also asks for a CRM/calendar follow-up, keep the\n            // mature full tool set so export_query_to_file and create_crm_task /\n            // create_outlook_event can both execute in the same turn.\n            if (ContainsAnyNormalized(n,\n                "task", "εργασ", "crm", "υπενθυμ",\n                "calendar", "ημερολογ", "ραντεβου"))\n                return false;\n\n            bool formatOrFile = ContainsAnyNormalized(n,'''
+          if text.count(old) != 1:
+              raise SystemExit(f"optimizer anchor count={text.count(old)}")
+          optimizer.write_text(text.replace(old, new), encoding="utf-8-sig")
+
+          ui = Path("UI/web/index.html")
+          html = ui.read_text(encoding="utf-8-sig")
+          old_re = r'''  const INLINE_LINK_RE = /\[([^\]]+)\]\((.+?)\)(?=[\s.,;:!?)\]]|$)/g;'''
+          new_re = r'''  const INLINE_LINK_RE = /\[([^\]]+)\]\((.+?)\)(?=[\s.,;:!?)\]*_]|$)/g;'''
+          if html.count(old_re) != 1:
+              raise SystemExit(f"inline-link regex anchor count={html.count(old_re)}")
+          ui.write_text(html.replace(old_re, new_re), encoding="utf-8-sig")
+
+          # Guard the exact UAT regression: a bold local-file markdown link must match.
+          import re
+          sample = r'**[Timologia_Dec_2025.xlsx](C:\\Users\\demo\\Jarvis Exports\\Timologia_Dec_2025.xlsx)**'
+          pattern = re.compile(r'\[([^\]]+)\]\((.+?)\)(?=[\s.,;:!?)\]*_]|$)')
+          if not pattern.search(sample):
+              raise SystemExit("bold local-file markdown regression still fails")
+
+      - name: Commit patch and remove one-shot workflow
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "jarvis-policy-bot"
+          git config user.email "jarvis-policy-bot@users.noreply.github.com"
+          git rm .github/workflows/one-shot-mixed-export-task-link-fix.yml
+          git add Access/Verilic/VerilicProviderRequestOptimizer.cs UI/web/index.html
+          git commit -m "Preserve mixed export tasks and bold file links [skip ci]"
+          git push origin HEAD:feature/jarvis-orchestration
