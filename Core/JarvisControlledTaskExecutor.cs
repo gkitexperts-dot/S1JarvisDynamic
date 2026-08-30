@@ -84,17 +84,19 @@ namespace S1Jarvis.Core
 
         private static JObject BuildQueryRequest(string question, string previousSql, string previousDiagnostic, int attempt)
         {
-            string entityCatalog = JarvisBusinessEntityCatalog.BuildAgentContext().ToString(Formatting.None);
+            string knowledgeContext = JarvisBusinessEntityCatalog.BuildAgentContext().ToString(Formatting.None);
+            string policyContext = JarvisPolicyRegistry.BuildTrainingContext(
+                "Atlas", "ReportData", new[] { "Reporting", "Traders" }, new[] { "query_data" });
+
             string userContent = "business_question: " + (question ?? string.Empty) +
-                                 "\n\nauthoritative_entity_catalog: " + entityCatalog;
+                                 "\n\nauthoritative_knowledge_context: " + knowledgeContext;
             if (attempt > 1)
             {
                 userContent += "\n\n[JARVIS_VALIDATION_RETRY]" +
-                               "\nΤο προηγούμενο SQL απορρίφθηκε από τον Jarvis και ΔΕΝ εκτελέστηκε." +
                                "\nprevious_sql: " + (previousSql ?? string.Empty) +
-                               "\nvalidation_issues: " + (previousDiagnostic ?? string.Empty) +
-                               "\nΕπέστρεψε νέο query_data call που διορθώνει ΟΛΑ τα παραπάνω. Μην εξηγήσεις με κείμενο.";
+                               "\nvalidation_issues: " + (previousDiagnostic ?? string.Empty);
             }
+
             return new JObject
             {
                 ["max_tokens"] = MaxTokens,
@@ -104,17 +106,10 @@ namespace S1Jarvis.Core
                     new JObject
                     {
                         ["type"] = "text",
-                        ["text"] = "Είσαι ο Atlas executor υπό τον έλεγχο του Jarvis. Εκτελείς μόνο το συγκεκριμένο ReportData task. " +
-                                   "Επιτρέπεται αποκλειστικά query_data και αποκλειστικά SELECT. Κάνε ΕΝΑ στοχευμένο query που απαντά το business_question. " +
-                                   "Το authoritative_entity_catalog του user payload είναι η μοναδική πηγή αλήθειας για business entity discriminators, Soft1 role mappings και identity fields. Δεν επιτρέπεται να επινοήσεις SODTYPE, object name ή άλλο entity discriminator που δεν υπάρχει εκεί. " +
-                                   "Αν το business_question ζητά ΕΝΑ τελευταίο/πιο πρόσφατο αποτέλεσμα, χρησιμοποίησε TOP 1 και deterministic ORDER BY. " +
-                                   "Όταν το business_question αναφέρει συγκεκριμένη επιχειρησιακή οντότητα, διατήρησε πιστά την ταυτότητα και τον ρόλο που έδωσε ο χειριστής. Μην επεκτείνεις αυθαίρετα το όνομα με μεταφράσεις, συνώνυμα, φωνητικά ισοδύναμα ή άλλες παρόμοιες επωνυμίες. " +
-                                   "Αν ο ρόλος είναι ρητός, χρησιμοποίησε αποκλειστικά τον αντίστοιχο discriminator από το authoritative_entity_catalog. Το τελικό dataset δεν πρέπει να συγχωνεύει διαφορετικές master οντότητες σαν να είναι η ίδια μόνο επειδή έχουν παρόμοιο όνομα. " +
-                                   "Για παραστατικά χρησιμοποίησε FINDOC: FINDOC, FINCODE, TRNDATE, SUMAMNT, SERIES, SOSOURCE, COMPANY, TRDR. " +
-                                   "Για όνομα συναλλασσόμενου JOIN TRDR ON TRDR.TRDR=FINDOC.TRDR. " +
-                                   "Για όνομα σειράς το SERIES είναι composite identity: JOIN SERIES με COMPANY + SERIES + SOSOURCE, όχι μόνο SERIES. " +
-                                   "Μην επιστρέφεις lookup/master rows ως τελικό αποτέλεσμα όταν το business_question ζητά συναλλαγές/παραστατικά. " +
-                                   "Μην χρησιμοποιείς άγνωστες στήλες. Ο Jarvis θα ελέγξει το SQL ΠΡΙΝ το εκτελέσει και θα απορρίψει query που δεν εκφράζει σωστά το intent."
+                        ["text"] =
+                            "Εκτελείς το registered atomic task ReportData ως Atlas με scoped tool query_data. " +
+                            "Το authoritative_knowledge_context περιέχει business/schema knowledge και το JARVIS_POLICY_CONTEXT περιέχει τους behavioral κανόνες. " +
+                            "Εφάρμοσέ τα υποχρεωτικά και επέστρεψε το required tool call.\n\n" + policyContext
                     }
                 },
                 ["tools"] = new JArray(BuildQueryDataTool()),
@@ -189,7 +184,7 @@ namespace S1Jarvis.Core
                 int sodType;
                 if (!match.Success || match.Groups.Count < 2 || !int.TryParse(match.Groups[1].Value, out sodType)) continue;
                 if (JarvisBusinessEntityCatalog.FindTraderRole(sodType) == null)
-                    issues.Add("SQL uses unregistered TRDR.SODTYPE=" + sodType + ". Entity discriminators must come from JarvisBusinessEntityCatalog.");
+                    issues.Add("SQL uses unregistered TRDR.SODTYPE=" + sodType + ". Entity discriminators must come from authoritative knowledge.");
             }
         }
 
