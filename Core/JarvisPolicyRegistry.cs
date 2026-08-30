@@ -63,12 +63,9 @@ namespace S1Jarvis.Core
 
     /// <summary>
     /// Central policy inventory for Jarvis and every logical agent.
-    ///
     /// Structural contracts remain authoritative in JarvisTaskRegistry and
-    /// JarvisToolRegistry. This registry owns behavioral policy: how an agent
-    /// must reason/act/present, and which deterministic invariants must be
-    /// enforced by the control plane. No execution path should carry its own
-    /// copy of policy prose; it resolves the applicable policy set here.
+    /// JarvisToolRegistry. This registry owns behavioral policy and the policy
+    /// identities enforced deterministically by the control plane.
     /// </summary>
     internal static class JarvisPolicyRegistry
     {
@@ -112,6 +109,21 @@ namespace S1Jarvis.Core
 
             P("DECOMPOSER.REGISTERED_TASKS_ONLY", JarvisPolicyScope.Task, JarvisPolicyEnforcement.Both,
                 "Task candidates προέρχονται αποκλειστικά από το Task Registry. Μην επινοείς agents, tools, capabilities ή task types και μην μαντεύεις resolved ids/series/emails.", agents: A("Jarvis"), tasks: A("__decomposition"), priority: 880),
+
+            P("PLANNER.REGISTERED_TASKS_ONLY", JarvisPolicyScope.Task, JarvisPolicyEnforcement.Both,
+                "Ο semantic planner χρησιμοποιεί αποκλειστικά taskType του TASK_CATALOG. Agents, tools, task types, input names και output names δεν επινοούνται από το model.", agents: A("Jarvis"), tasks: A("__planning"), priority: 875),
+
+            P("PLANNER.REAL_DEPENDENCIES_ONLY", JarvisPolicyScope.Orchestration, JarvisPolicyEnforcement.Both,
+                "Dependency δημιουργείται μόνο όταν downstream task χρειάζεται συγκεκριμένο registered output προηγούμενου task. Ανεξάρτητα tasks δεν αποκτούν ψεύτικη dependency και ανεξάρτητο read/write intent δεν συγχωνεύεται τεχνητά σε ένα task.", agents: A("Jarvis"), tasks: A("__planning"), priority: 874),
+
+            P("PLANNER.BIND_REGISTERED_OUTPUTS", JarvisPolicyScope.Orchestration, JarvisPolicyEnforcement.Both,
+                "Κάθε cross-task input binding δηλώνει fromTask και output, το source task υπάρχει στο ίδιο plan, το output υπάρχει στο registered produces του source task και το source task δηλώνεται και στο dependsOn.", agents: A("Jarvis"), tasks: A("__planning"), priority: 873),
+
+            P("PLANNER.LITERAL_INPUT_EVIDENCE", JarvisPolicyScope.Validation, JarvisPolicyEnforcement.Both,
+                "Literal task input επιτρέπεται μόνο όταν προκύπτει καθαρά από το user request ή authoritative resolved context. Missing business data δεν μαντεύονται.", agents: A("Jarvis"), tasks: A("__planning"), priority: 872),
+
+            P("PLANNER.MINIMAL_ATOMIC_GRAPH", JarvisPolicyScope.Orchestration, JarvisPolicyEnforcement.Training,
+                "Για απλό request χρησιμοποίησε ένα atomic task. Για σύνθετο request χρησιμοποίησε μόνο τα atomic tasks που απαιτούνται για τα ζητούμενα business outcomes, χωρίς καρτεσιανούς συνδυασμούς ή περιττά nodes.", agents: A("Jarvis"), tasks: A("__planning"), priority: 871),
 
             P("ATLAS.REPORT_SINGLE_TARGET_QUERY", JarvisPolicyScope.Task, JarvisPolicyEnforcement.Training,
                 "Για ReportData πρότεινε ένα στοχευμένο read-only query που απαντά το business question. Lookup/master rows είναι prerequisite evidence και όχι τελικό business result όταν ζητούνται transactions/documents.", agents: A("Atlas"), tasks: A("ReportData"), domains: A("Reporting"), tools: A("query_data"), priority: 870),
