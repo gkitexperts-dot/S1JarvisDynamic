@@ -30,6 +30,36 @@ namespace S1Jarvis.Core
         }
 
         /// <summary>
+        /// Non-negotiable orchestration invariants. These are product-wide policy,
+        /// not prompt/domain heuristics. Runtime routers, supervisors and UI lifecycle
+        /// observers consume these values instead of owning private exceptions.
+        /// </summary>
+        internal static class Orchestration
+        {
+            internal const bool SingleBusinessRouter = true;
+            internal const bool RegistryCapabilitiesAreAuthoritative = true;
+            internal const bool ClarifyAnyAmbiguityThatChangesBusinessOutcome = true;
+            internal const bool DatasetRefinementIsPureReadOnly = true;
+            internal const bool ActivityLifecycleCoversEveryBusinessTurn = true;
+            internal const bool FinalBusinessOutputUsesPresentationGateway = true;
+            internal const string CanonicalBusinessRouter = "OrchestrationPrimary_WebMessageReceived";
+            internal const string CanonicalPresentationGateway = "JarvisPresentationGateway";
+            internal const string DefaultActivityCaption = "Επεξεργάζομαι το αίτημα…";
+
+            internal static string BuildPolicyEnvelope()
+            {
+                return "[JARVIS_ORCHESTRATION_INVARIANTS]\n" +
+                       "single_business_router=" + SingleBusinessRouter.ToString().ToLowerInvariant() + "\n" +
+                       "canonical_router=" + CanonicalBusinessRouter + "\n" +
+                       "registry_capabilities_authoritative=" + RegistryCapabilitiesAreAuthoritative.ToString().ToLowerInvariant() + "\n" +
+                       "ambiguity_that_changes_business_outcome=clarify_before_read_export_or_write\n" +
+                       "dataset_refinement=pure_read_only_existing_validated_facts\n" +
+                       "activity_lifecycle=begin_update_end_every_business_turn\n" +
+                       "final_business_output=" + CanonicalPresentationGateway;
+            }
+        }
+
+        /// <summary>
         /// Canonical user-facing presentation policy. These values are consumed by
         /// every deterministic renderer and are also exposed to the Jarvis
         /// presentation context. No agent/task owns a private date/number/table
@@ -49,15 +79,10 @@ namespace S1Jarvis.Core
             internal const string NumericAlignmentMarker = "---:";
             internal const string DateAlignmentMarker = ":---:";
 
-            // Presentation precedence is itself policy: existing rules are mandatory.
-            // Model initiative is permitted only for a presentation aspect for which
-            // the central policy inventory has no clear applicable instruction.
             internal const bool ApplyPoliciesBeforeModelInitiative = true;
             internal const bool AllowModelInitiativeOnlyWhenNoClearPolicy = true;
             internal const string CanonicalPresentationChannel = "JarvisPresentationGateway";
 
-            // Registered addressable URI templates. Presentation may instantiate
-            // them only from authoritative ids already present in verified output.
             internal const string CrmTaskUriTemplate = "doc:2021:{soactionId}";
             internal const string DocumentUriTemplate = "doc:{sosource}:{findoc}";
             internal const string ItemUriTemplate = "item:{mtrl}";
@@ -65,8 +90,6 @@ namespace S1Jarvis.Core
             internal const int DefaultPreviewRows = 50;
             internal const int MaxChatTableRows = 250;
 
-            // Canonical side-effect labels. Executors return structured results only;
-            // this wording belongs to the presentation policy plane.
             internal const string CrmTaskCreatedLabel = "✓ Η εργασία CRM στο Soft1 δημιουργήθηκε.";
             internal const string CalendarCreatedLabel = "✓ Το προσωπικό Outlook calendar event δημιουργήθηκε.";
             internal const string ExportCreatedLabel = "✓ Το αρχείο εξαγωγής δημιουργήθηκε.";
