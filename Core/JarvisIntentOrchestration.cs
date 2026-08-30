@@ -79,21 +79,15 @@ namespace S1Jarvis.Core
     {
         internal static string BuildDecomposerSystemPrompt()
         {
+            string policyContext = JarvisPolicyRegistry.BuildTrainingContext(
+                "Jarvis", "__decomposition", new string[0], new string[0]);
+
             return
-                "Είσαι ο semantic decomposer του Jarvis. Σπάσε το user prompt σε ανεξάρτητα atomic intent objects. " +
-                "Μην εκτελείς εργαλεία, μην απαντάς στον χρήστη και μην δημιουργείς dependencies σε αυτό το στάδιο. " +
-                "Κάθε object πρέπει να αντιστοιχεί σε ένα μόνο business outcome. " +
-                "Κάθε object πρέπει επίσης να είναι self-contained: αν ένα outcome μοιράζεται πρόσωπο, οντότητα, ημερομηνία, ώρα, ποσότητα, παραλήπτη, περιγραφή ή άλλο business fact με προηγούμενο/γειτονικό μέρος του ίδιου user prompt, κληρονόμησε μέσα στο intentFragment και στα inputs ΜΟΝΟ τα shared facts που είναι απαραίτητα για να εκτελεστεί αυτόνομα το συγκεκριμένο outcome. " +
-                "Μην αφήνεις atomic object ως αποσπασματική αναφορά τύπου 'και στο calendar', 'στείλτα κι εκεί' ή άλλη φράση που χάνει το κοινό business context. Η αυτοτέλεια δεν δημιουργεί dependency ούτε νέο fact· απλώς διατηρεί τα ήδη ρητά facts του ίδιου prompt. " +
-                "Για κάθε object επέστρεψε ranked task candidates ΜΟΝΟ από το TASK_CATALOG. " +
-                "Μην επινοείς agents, tools, capabilities ή task types. " +
-                "Δώσε confidence από 0.0 έως 1.0 για κάθε candidate και κράτησε το intentFragment πιστό στο συγκεκριμένο business outcome μαζί με τα αναγκαία shared facts του αρχικού prompt. " +
-                "Στο inputs βάλε μόνο business values που αναφέρονται ρητά ή είναι σαφώς κοινά στο ίδιο user prompt και απαιτούνται από το συγκεκριμένο outcome. " +
-                "Τα input names πρέπει να προέρχονται από requiredInputs/optionalInputs κάποιου σχετικού candidate task. Μην μαντεύεις ids, series, emails ή άλλα resolved values. " +
-                "Αν ένα σύνθετο prompt ζητά παραγγελία, export, email και calendar, δημιούργησε τέσσερα διαφορετικά objects, αλλά κάνε κάθε object εκτελέσιμο από μόνο του με τα αναγκαία shared facts. " +
-                "Μην βάζεις whole-prompt confidence. Κάθε object έχει το δικό του confidence/ranking. " +
+                "Είσαι ο semantic decomposer του Jarvis. Εφάρμοσε υποχρεωτικά το JARVIS_POLICY_CONTEXT. " +
+                "Για κάθε object επέστρεψε ranked task candidates μόνο από το TASK_CATALOG, confidence 0.0-1.0 ανά candidate, και inputs μόνο από τα registered requiredInputs/optionalInputs του σχετικού candidate task. " +
                 "Επέστρεψε ΜΟΝΟ έγκυρο JSON στο schema: " +
-                "{\"intentObjects\":[{\"id\":\"o1\",\"intentFragment\":\"...\",\"inputs\":{\"name\":\"value\"},\"candidates\":[{\"taskType\":\"CreateOrder\",\"confidence\":0.94},{\"taskType\":\"...\",\"confidence\":0.20}]}]}";
+                "{\"intentObjects\":[{\"id\":\"o1\",\"intentFragment\":\"...\",\"inputs\":{\"name\":\"value\"},\"candidates\":[{\"taskType\":\"CreateOrder\",\"confidence\":0.94},{\"taskType\":\"...\",\"confidence\":0.20}]}]}\n\n" +
+                policyContext;
         }
 
         internal static string BuildDecomposerUserPayload(string userPrompt)
