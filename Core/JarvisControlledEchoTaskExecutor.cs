@@ -88,8 +88,12 @@ namespace S1Jarvis.Core
                         JObject input = block["input"] as JObject ?? new JObject();
                         if (string.Equals(name, "query_data", StringComparison.OrdinalIgnoreCase))
                         {
-                            string toolResult = JarvisTools.ExecuteQueryData(xSupport, input);
-                            toolResults.Add(ToolResult(id, toolResult, false));
+                            string sql = input["sql"] == null ? string.Empty : input["sql"].ToString();
+                            string toolResult;
+                            bool isError = false;
+                            try { toolResult = JarvisTools.ExecuteQueryData(xSupport, sql); }
+                            catch (Exception ex) { toolResult = "Σφάλμα: " + ex.Message; isError = true; }
+                            toolResults.Add(ToolResult(id, toolResult, isError));
                             continue;
                         }
                         if (!string.Equals(name, "create_crm_task", StringComparison.OrdinalIgnoreCase))
