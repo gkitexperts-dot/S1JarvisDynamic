@@ -62,7 +62,8 @@ namespace S1Jarvis.Core
     /// Jarvis-owned execution control plane. Executors never advance the graph
     /// and never pass results directly to another executor. Jarvis validates
     /// dispatch, validates returned results, stores them, materializes registered
-    /// dependency bindings, then decides which object may run next.
+    /// dependency bindings, injects centralized policy context, then decides which
+    /// object may run next.
     /// </summary>
     internal sealed class JarvisExecutionCoordinator
     {
@@ -134,9 +135,6 @@ namespace S1Jarvis.Core
             issues = localIssues.ToArray(); return issues.Length == 0;
         }
 
-        // Core implementation shared by the public string-objectId overload and the
-        // internal call sites (GrantConfirmation, ValidateBeforeDispatch, BuildStepSnapshot)
-        // that already hold the resolved entry, so they don't pay for a second lookup.
         private bool TryGetDispatchInputsCore(JarvisExecutionPlanEntry entry, string objectId, out JObject inputs, out string[] issues)
         {
             inputs = new JObject();
@@ -152,9 +150,12 @@ namespace S1Jarvis.Core
                     localIssues.Add("Execution object has no authoritative task node: " + entry.ObjectId);
                 else
                 {
-                    // Internal execution context. This is consumed by controlled
-                    // executors only and is never forwarded as a native tool arg.
+                    // Internal execution context. Controlled executors consume these
+                    // values; names beginning with __ are never forwarded as native
+                    // tool arguments.
                     inputs["__intent_fragment"] = node.IntentFragment ?? string.Empty;
+                    inputs["__policy_context"] = JarvisAgentContextBuilder.BuildTrainingPolicyContext(entry.OwnerAgent, entry.TaskType);
+                    inputs["__deterministic_policy_ids"] = JarvisAgentContextBuilder.BuildDeterministicPolicyIds(entry.OwnerAgent, entry.TaskType);
 
                     foreach (JarvisPrerequisiteResolutionItem prerequisite in node.Prerequisites.Where(x => x != null))
                     {
@@ -172,8 +173,7 @@ namespace S1Jarvis.Core
                         {
                             // Validated execution work belonging to the registered
                             // owner agent. The controlled executor receives the
-                            // atomic fragment and ONLY the registered task/lookup
-                            // tools, then Jarvis validates the returned result.
+                            // atomic fragment and only the registered task/tool scope.
                         }
                         else if (prerequisite.Kind == JarvisPrerequisiteResolutionKind.NeedsUserInput)
                             localIssues.Add("User input remains unresolved for " + entry.ObjectId + "." + prerequisite.InputName + ".");
@@ -231,6 +231,10 @@ namespace S1Jarvis.Core
             if (!_graph.IsValid) issues.Add("Execution coordinator refuses an invalid dependency graph.");
             if (!_preview.IsValid) issues.Add("Execution coordinator refuses an invalid execution preview.");
             if (_preview.Entries.Count != _graph.Nodes.Count) issues.Add("Execution preview and dependency graph task counts differ.");
+
+            string[] policyIssues = JarvisPolicyRegistry.ValidateInventory();
+            if (policyIssues.Length > 0)
+                issues.AddRange(policyIssues.Select(x => "Policy inventory invalid: " + x));
         }
 
         private void ValidateBeforeDispatch(JarvisExecutionPlanEntry entry, List<string> issues)
