@@ -78,9 +78,12 @@ if provider_health.exists():
         errors.append(
             'UI/JarvisShell.ProviderHealth.cs: explicit HEALTH must atomically refresh the session registry.'
         )
-    if 'Closed += ProviderHealthCheck_Closed' not in text or 'JarvisAgentRuntimeSnapshot.Reset()' not in text:
+    # JarvisShell is a UserControl, therefore Unloaded is the authoritative
+    # shutdown/session-detach lifecycle hook. The old Window.Closed pattern is
+    # invalid for this type and previously caused compile failures.
+    if 'Unloaded += ProviderHealthCheck_Unloaded' not in text or 'JarvisAgentRuntimeSnapshot.Reset()' not in text:
         errors.append(
-            'UI/JarvisShell.ProviderHealth.cs: Jarvis shutdown must clear the in-memory agent registry.'
+            'UI/JarvisShell.ProviderHealth.cs: Jarvis shutdown/unload must clear the in-memory agent registry.'
         )
 
 # The session registry must enforce all execution material and secret clearing.
