@@ -39,7 +39,6 @@ namespace S1Jarvis.Core
                 {
                     var request = new JObject
                     {
-                        ["model"] = "runtime-session-model",
                         ["max_tokens"] = 4000,
                         ["system"] = new JArray(new JObject
                         {
@@ -153,7 +152,6 @@ namespace S1Jarvis.Core
                 string runtimeNow = DateTime.Now.ToString("yyyy-MM-ddTHH:mm:ss");
                 var request = new JObject
                 {
-                    ["model"] = "runtime-session-model",
                     ["max_tokens"] = 3000,
                     ["system"] = new JArray(new JObject
                     {
