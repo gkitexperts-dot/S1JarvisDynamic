@@ -22,12 +22,12 @@ namespace S1Jarvis.UI
 
             _providerHealthCheckEnabled = true;
             Loaded += ProviderHealthCheck_Loaded;
-            Closed += ProviderHealthCheck_Closed;
+            Unloaded += ProviderHealthCheck_Unloaded;
         }
 
-        private void ProviderHealthCheck_Closed(object sender, EventArgs e)
+        private void ProviderHealthCheck_Unloaded(object sender, RoutedEventArgs e)
         {
-            Closed -= ProviderHealthCheck_Closed;
+            Unloaded -= ProviderHealthCheck_Unloaded;
             JarvisAgentRuntimeSnapshot.Reset();
             VerilicAiMessagesClient.ResetRuntimeTargetSnapshot();
             DebugLog.Log("[AI-SESSION-REGISTRY] cleared on Jarvis shutdown");
