@@ -51,7 +51,7 @@ namespace S1Jarvis.Core
 
         internal static string BuildPresentationPolicyContext()
         {
-            return BuildInternalStagePolicyContext("__presentation");
+            return AppendPresentationProfile(BuildInternalStagePolicyContext("__presentation"));
         }
 
         internal static string BuildHelpPolicyContext()
@@ -72,7 +72,12 @@ namespace S1Jarvis.Core
             {
                 JarvisTaskDescriptor registeredTask = JarvisTaskRegistry.Find(explicitTask);
                 if (registeredTask != null)
-                    return BuildTrainingPolicyContext(registeredTask.OwnerAgent, registeredTask.TaskType);
+                {
+                    string explicitContext = BuildTrainingPolicyContext(registeredTask.OwnerAgent, registeredTask.TaskType);
+                    return string.Equals(agentName, "Jarvis", StringComparison.OrdinalIgnoreCase)
+                        ? AppendPresentationProfile(explicitContext)
+                        : explicitContext;
+                }
             }
 
             JarvisTaskDescriptor[] candidateTasks = requestTools.Length == 0
@@ -104,7 +109,10 @@ namespace S1Jarvis.Core
                     JarvisPolicyRegistry.Resolve("Sage", "__help", new string[] { "Help" }, new string[0], null));
             }
 
-            return FormatTrainingContext(policies.Values);
+            string context = FormatTrainingContext(policies.Values);
+            return string.Equals(agentName, "Jarvis", StringComparison.OrdinalIgnoreCase)
+                ? AppendPresentationProfile(context)
+                : context;
         }
 
         /// <summary>
@@ -158,6 +166,13 @@ namespace S1Jarvis.Core
         {
             return JarvisPolicyRegistry.BuildTrainingContext(
                 "Jarvis", taskType, new string[0], new string[0]);
+        }
+
+        private static string AppendPresentationProfile(string policyContext)
+        {
+            string profile = JarvisPolicySettings.Presentation.BuildPolicyEnvelope();
+            if (string.IsNullOrWhiteSpace(policyContext)) return profile;
+            return policyContext.TrimEnd() + "\n" + profile;
         }
 
         private static JObject TryParse(string json)
