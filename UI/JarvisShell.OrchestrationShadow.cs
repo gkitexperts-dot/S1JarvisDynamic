@@ -98,6 +98,7 @@ namespace S1Jarvis.UI
             object sender,
             Microsoft.Web.WebView2.Core.CoreWebView2WebMessageReceivedEventArgs e)
         {
+            bool businessTurnActivityStarted = false;
             try
             {
                 string userText = e.TryGetWebMessageAsString();
@@ -107,9 +108,7 @@ namespace S1Jarvis.UI
                 JObject command = null;
                 try { command = JObject.Parse(trimmed); } catch { }
 
-                // Structured UI commands are not business-response paths. They keep
-                // their existing synchronous/specialized handlers. All ordinary
-                // operator chat below has one processing router and one presentation gateway.
+                // Structured UI commands are not business-response paths.
                 if (command != null && command["type"] != null)
                 {
                     DrRecognitionFlow_WebMessageReceived(sender, e);
@@ -122,8 +121,14 @@ namespace S1Jarvis.UI
                     return;
                 }
 
-                // Confirmation always wins over dataset refinement: it resumes the
-                // exact frozen action and must never be interpreted as a new filter.
+                // Central policy: every ordinary business turn starts one shared
+                // activity lifecycle before decomposition/planning and ends in finally.
+                if (JarvisPolicySettings.Orchestration.ActivityLifecycleCoversEveryBusinessTurn)
+                {
+                    businessTurnActivityStarted = true;
+                    JarvisOrchestrationActivityBus.BeginBusinessTurn();
+                }
+
                 if (_orchestrationPendingConfirmation.HasPending &&
                     JarvisPendingConfirmationSession.IsAffirmativeConfirmation(userText))
                 {
@@ -140,8 +145,6 @@ namespace S1Jarvis.UI
                     }
                 }
 
-                // Dataset continuity is decided semantically by the local refinement
-                // planner. Phrase/keyword lists are not orchestration authority.
                 if (!_orchestrationPendingConfirmation.HasPending &&
                     _orchestrationDatasetSession.HasDataset)
                 {
@@ -165,10 +168,8 @@ namespace S1Jarvis.UI
                     return;
                 }
 
-                // One path: the mature agent loop may still be the processing engine
-                // for tasks not yet promoted to controlled executors, but it no longer
-                // owns presentation or posts directly to the UI. Its returned content
-                // always crosses the same final presentation gateway.
+                // Compatibility processing may remain for unpromoted tasks, but it
+                // cannot own final presentation. The canonical gateway remains final.
                 string fallbackAnswer = await RunLegacyAgentAsProcessingEngineAsync(userText);
                 PostMainChatPresentation(fallbackAnswer);
             }
@@ -178,6 +179,11 @@ namespace S1Jarvis.UI
                 PostMainChatPresentation(JarvisPresentationGateway.BuildFailureMessage(
                     "✖ Απρόσμενο σφάλμα - δοκίμασε ξανά ή ξανάνοιξε τον Jarvis.",
                     new[] { ex.Message }));
+            }
+            finally
+            {
+                if (businessTurnActivityStarted)
+                    JarvisOrchestrationActivityBus.EndBusinessTurn();
             }
         }
 
