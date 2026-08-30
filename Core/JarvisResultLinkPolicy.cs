@@ -9,9 +9,9 @@ namespace S1Jarvis.Core
     /// <summary>
     /// Presentation-only policy for addressable task results. It never invents
     /// object identities or URLs: links are emitted only from authoritative
-    /// executor outputs and only using schemes supported by Jarvis UI/WebView.
-    /// Local artifacts are normalized to canonical file:// URIs; raw Windows paths
-    /// must never be placed directly in markdown href values.
+    /// executor outputs. Local artifact links deliberately carry a canonical raw
+    /// Windows path because the Jarvis renderer stores that target in its private
+    /// file-link registry and dispatches open_file to the C# host on click.
     /// </summary>
     internal static class JarvisResultLinkPolicy
     {
@@ -86,12 +86,10 @@ namespace S1Jarvis.Core
 
             string fullPath;
             string label;
-            string uri;
             try
             {
                 fullPath = Path.GetFullPath(path.Trim());
                 label = Path.GetFileName(fullPath);
-                uri = new Uri(fullPath, UriKind.Absolute).AbsoluteUri;
             }
             catch
             {
@@ -99,12 +97,12 @@ namespace S1Jarvis.Core
             }
 
             if (string.IsNullOrWhiteSpace(label)) label = "Άνοιγμα αρχείου";
-            if (string.IsNullOrWhiteSpace(uri) || !uri.StartsWith("file://", StringComparison.OrdinalIgnoreCase)) return;
 
-            // Escape only visible markdown text. Never mutate/escape the URI itself;
-            // doing so turns underscores and other valid path characters into a
-            // different filesystem path after WebView navigation.
-            links.Add("[" + EscapeMarkdownLabel(label) + "](" + uri + ")");
+            // The target is authoritative runtime data, not model-authored markdown.
+            // Never add markdown escaping to the target itself. In particular, "_"
+            // must remain "_" and never become "\\_", otherwise File.Exists sees a
+            // different path when the UI dispatches open_file.
+            links.Add("[" + EscapeMarkdownLabel(label) + "](" + fullPath + ")");
         }
 
         private static void AddFileArtifactLink(JObject outputs, List<string> links)
