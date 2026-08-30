@@ -58,13 +58,6 @@ namespace S1Jarvis.Core
         public bool IsValid { get { return ValidationIssues.Count == 0 && Steps.All(x => x.ValidationIssues.Count == 0); } }
     }
 
-    /// <summary>
-    /// Jarvis-owned execution control plane. Executors never advance the graph
-    /// and never pass results directly to another executor. Jarvis validates
-    /// dispatch, validates returned results, stores them, materializes registered
-    /// dependency bindings, injects centralized policy context, then decides which
-    /// object may run next.
-    /// </summary>
     internal sealed class JarvisExecutionCoordinator
     {
         private readonly JarvisDependencyGraph _graph;
@@ -106,16 +99,48 @@ namespace S1Jarvis.Core
         {
             var localIssues = new List<string>();
             JarvisExecutionPlanEntry entry = FindEntry(objectId);
-            if (entry == null) localIssues.Add("Cannot confirm unknown execution object: " + (objectId ?? "<null>"));
+            JObject materialized;
+            ValidateConfirmationCandidate(entry, localIssues, out materialized);
+            if (entry != null && localIssues.Count == 0)
+            {
+                JarvisExecutionStepSnapshot step = BuildStepSnapshot(entry);
+                JarvisAuthorizationDecision decision = JarvisAuthorizationPolicy.EvaluateInitialInstruction(step, materialized);
+                if (decision.Action == JarvisAuthorizationAction.Allow)
+                {
+                    _confirmed.Add(entry.ObjectId);
+                    DebugLog.Log("[ORCH-CONTROL] initial-instruction authorization policy=" + decision.PolicyId + " object=" + entry.ObjectId + " task=" + entry.TaskType);
+                }
+                else
+                {
+                    localIssues.Add((decision.PolicyId ?? "AUTHORIZATION") + ": " + (decision.Reason ?? "Explicit confirmation is required."));
+                }
+            }
+            issues = localIssues.Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+            return issues.Length == 0;
+        }
+
+        internal bool GrantExplicitConfirmation(string objectId, out string[] issues)
+        {
+            var localIssues = new List<string>();
+            JarvisExecutionPlanEntry entry = FindEntry(objectId);
+            JObject materialized;
+            ValidateConfirmationCandidate(entry, localIssues, out materialized);
+            if (entry != null && localIssues.Count == 0) _confirmed.Add(entry.ObjectId);
+            issues = localIssues.Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+            return issues.Length == 0;
+        }
+
+        private void ValidateConfirmationCandidate(JarvisExecutionPlanEntry entry, List<string> localIssues, out JObject materialized)
+        {
+            materialized = null;
+            if (entry == null) localIssues.Add("Cannot confirm unknown execution object.");
             else if (!entry.RequiresConfirmation) localIssues.Add("Execution object does not require confirmation: " + entry.ObjectId);
             else if (!DependenciesSucceeded(entry)) localIssues.Add("Confirmation cannot unlock a task before all dependencies succeed: " + entry.ObjectId);
             else
             {
-                JObject ignored; string[] materializationIssues;
-                if (!TryGetDispatchInputsCore(entry, entry.ObjectId, out ignored, out materializationIssues)) localIssues.AddRange(materializationIssues);
+                string[] materializationIssues;
+                if (!TryGetDispatchInputsCore(entry, entry.ObjectId, out materialized, out materializationIssues)) localIssues.AddRange(materializationIssues);
             }
-            if (entry != null && localIssues.Count == 0) _confirmed.Add(entry.ObjectId);
-            issues = localIssues.ToArray(); return issues.Length == 0;
         }
 
         internal bool TryBeginDispatch(string objectId, out string[] issues)
@@ -156,19 +181,12 @@ namespace S1Jarvis.Core
 
                     foreach (JarvisPrerequisiteResolutionItem prerequisite in node.Prerequisites.Where(x => x != null))
                     {
-                        if (prerequisite.Kind == JarvisPrerequisiteResolutionKind.ResolvedFromIntent ||
-                            prerequisite.Kind == JarvisPrerequisiteResolutionKind.ResolvedFromRouting)
+                        if (prerequisite.Kind == JarvisPrerequisiteResolutionKind.ResolvedFromIntent || prerequisite.Kind == JarvisPrerequisiteResolutionKind.ResolvedFromRouting)
                         {
                             if (prerequisite.Value != null) inputs[prerequisite.InputName] = prerequisite.Value.DeepClone();
                         }
                         else if (prerequisite.Kind == JarvisPrerequisiteResolutionKind.DependencyPending)
-                        {
                             MaterializeBoundInput(entry, prerequisite.InputName, inputs, localIssues);
-                        }
-                        else if (prerequisite.Kind == JarvisPrerequisiteResolutionKind.LookupPlanned ||
-                                 prerequisite.Kind == JarvisPrerequisiteResolutionKind.OwnerAgentPending)
-                        {
-                        }
                         else if (prerequisite.Kind == JarvisPrerequisiteResolutionKind.NeedsUserInput)
                             localIssues.Add("User input remains unresolved for " + entry.ObjectId + "." + prerequisite.InputName + ".");
                         else if (prerequisite.Kind == JarvisPrerequisiteResolutionKind.Invalid)
