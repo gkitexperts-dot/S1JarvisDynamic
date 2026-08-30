@@ -169,8 +169,15 @@ namespace S1Jarvis.UI
                 }
 
                 // Compatibility processing may remain for unpromoted tasks, but it
-                // cannot own final presentation. The canonical gateway remains final.
+                // cannot own final presentation. Capture only protocol messages
+                // added by THIS compatibility turn so verified tool results can be
+                // materialized by the same central addressable-link policy.
+                int legacyTraceStart = _conversation == null ? 0 : _conversation.Count;
                 string fallbackAnswer = await RunLegacyAgentAsProcessingEngineAsync(userText);
+                string[] verifiedLinks = JarvisResultLinkMaterializer.BuildMarkdownLinksFromLegacyTrace(
+                    _conversation, legacyTraceStart);
+                fallbackAnswer = JarvisResultLinkMaterializer.AppendMissingVerifiedLinks(
+                    fallbackAnswer, verifiedLinks);
                 PostMainChatPresentation(fallbackAnswer);
             }
             catch (Exception ex)
