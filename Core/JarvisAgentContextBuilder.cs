@@ -51,11 +51,12 @@ namespace S1Jarvis.Core
         }
 
         /// <summary>
-        /// Resolves the authoritative training policy context for any AI request.
-        /// This is intentionally agent-generic: Atlas, Forge, Compass, Echo,
-        /// Sprint, Scout, Sage and Jarvis all pass through the same resolver.
-        /// When the request maps to several registered tasks (legacy multi-tool
-        /// mode), their applicable policy sets are unioned and de-duplicated.
+        /// Resolves authoritative policy for any outbound AI request. In modern
+        /// orchestration an explicit registered task is enough. In legacy
+        /// multi-tool requests we inspect every attached registered tool and
+        /// union the policies of ALL task owners represented by that surface,
+        /// so a request spanning Forge+Echo+Compass, for example, cannot lose
+        /// policies merely because one model/agent was chosen for transport.
         /// </summary>
         internal static string BuildPolicyContextForRequest(string agentName, string providerRequestJson)
         {
@@ -65,53 +66,46 @@ namespace S1Jarvis.Core
             string[] requestTools = ReadToolNames(request);
             string explicitTask = ReadExplicitTask(request);
 
-            if (!string.IsNullOrWhiteSpace(explicitTask) && JarvisTaskRegistry.Find(explicitTask) != null)
-                return BuildTrainingPolicyContext(agentName, explicitTask);
+            if (!string.IsNullOrWhiteSpace(explicitTask))
+            {
+                JarvisTaskDescriptor registeredTask = JarvisTaskRegistry.Find(explicitTask);
+                if (registeredTask != null)
+                    return BuildTrainingPolicyContext(registeredTask.OwnerAgent, registeredTask.TaskType);
+            }
 
-            JarvisTaskDescriptor[] candidateTasks = JarvisTaskRegistry.ForAgent(agentName)
-                .Where(task => task != null &&
-                    (requestTools.Length == 0 || (task.Tools ?? new string[0]).Any(t => requestTools.Contains(t, StringComparer.OrdinalIgnoreCase))))
-                .ToArray();
-
-            if (candidateTasks.Length == 1)
-                return BuildTrainingPolicyContext(agentName, candidateTasks[0].TaskType);
+            JarvisTaskDescriptor[] candidateTasks = requestTools.Length == 0
+                ? JarvisTaskRegistry.ForAgent(agentName).Where(x => x != null).ToArray()
+                : JarvisTaskRegistry.AllTasks
+                    .Where(task => task != null &&
+                        (task.Tools ?? new string[0]).Any(t => requestTools.Contains(t, StringComparer.OrdinalIgnoreCase)))
+                    .ToArray();
 
             var policies = new Dictionary<string, JarvisPolicyDescriptor>(StringComparer.OrdinalIgnoreCase);
 
-            foreach (JarvisPolicyDescriptor policy in JarvisPolicyRegistry.Resolve(
-                agentName, null, ResolveDomains(requestTools), requestTools, null))
-            {
-                if (policy.Enforcement == JarvisPolicyEnforcement.Training ||
-                    policy.Enforcement == JarvisPolicyEnforcement.Both)
-                    policies[policy.PolicyId] = policy;
-            }
+            // Global rules applicable to the physical request surface.
+            AddTrainingPolicies(
+                policies,
+                JarvisPolicyRegistry.Resolve(agentName, null, ResolveDomains(requestTools), requestTools, null));
 
+            // Task/owner/domain/tool rules for every registered task represented
+            // by the attached tools, not only the transport-selected agent.
             foreach (JarvisTaskDescriptor task in candidateTasks)
             {
                 string[] tools;
                 string[] domains;
                 ResolveTaskScope(task.TaskType, out tools, out domains);
-                foreach (JarvisPolicyDescriptor policy in JarvisPolicyRegistry.Resolve(
-                    agentName, task.TaskType, domains, tools, null))
-                {
-                    if (policy.Enforcement == JarvisPolicyEnforcement.Training ||
-                        policy.Enforcement == JarvisPolicyEnforcement.Both)
-                        policies[policy.PolicyId] = policy;
-                }
+                AddTrainingPolicies(
+                    policies,
+                    JarvisPolicyRegistry.Resolve(task.OwnerAgent, task.TaskType, domains, tools, null));
             }
 
             // HelpLookup is the registered Sage task while __help is the
             // internal conversational stage. They intentionally share policy.
-            if (string.Equals(agentName, "Sage", StringComparison.OrdinalIgnoreCase) &&
-                candidateTasks.Any(x => string.Equals(x.TaskType, "HelpLookup", StringComparison.OrdinalIgnoreCase)))
+            if (candidateTasks.Any(x => string.Equals(x.TaskType, "HelpLookup", StringComparison.OrdinalIgnoreCase)))
             {
-                foreach (JarvisPolicyDescriptor policy in JarvisPolicyRegistry.Resolve(
-                    "Sage", "__help", new string[] { "Help" }, new string[0], null))
-                {
-                    if (policy.Enforcement == JarvisPolicyEnforcement.Training ||
-                        policy.Enforcement == JarvisPolicyEnforcement.Both)
-                        policies[policy.PolicyId] = policy;
-                }
+                AddTrainingPolicies(
+                    policies,
+                    JarvisPolicyRegistry.Resolve("Sage", "__help", new string[] { "Help" }, new string[0], null));
             }
 
             return FormatTrainingContext(policies.Values);
@@ -207,6 +201,20 @@ namespace S1Jarvis.Core
                     domains.Add(tool.Domain.Trim());
             }
             return domains.ToArray();
+        }
+
+        private static void AddTrainingPolicies(
+            IDictionary<string, JarvisPolicyDescriptor> destination,
+            IEnumerable<JarvisPolicyDescriptor> source)
+        {
+            if (destination == null) return;
+            foreach (JarvisPolicyDescriptor policy in source ?? Enumerable.Empty<JarvisPolicyDescriptor>())
+            {
+                if (policy == null) continue;
+                if (policy.Enforcement == JarvisPolicyEnforcement.Training ||
+                    policy.Enforcement == JarvisPolicyEnforcement.Both)
+                    destination[policy.PolicyId] = policy;
+            }
         }
 
         private static string FormatTrainingContext(IEnumerable<JarvisPolicyDescriptor> policies)
