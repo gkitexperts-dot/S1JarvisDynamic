@@ -67,19 +67,7 @@ namespace S1Jarvis.Core
             }
         }
 
-        internal static bool LooksLikeRefinement(string userText)
-        {
-            string value = NormalizeText(userText);
-            if (value.Length == 0 || value.Length > 220) return false;
-            string[] hints =
-            {
-                "μονο ", "απο αυτ", "χωρις ", "κρατα ", "βγαλε ", "φιλτρα",
-                "πανω απο", "κατω απο", "μεγαλυτερ", "μικροτερ", "ταξινομ",
-                "πρωτ", "τελευται", "only ", "from these", "without ", "filter ",
-                "sort ", "greater than", "less than", "top "
-            };
-            return hints.Any(value.Contains);
-        }
+
 
         internal async Task<JarvisDatasetRefinementOutcome> TryRefineAsync(
             XSupport xSupport,
@@ -94,7 +82,7 @@ namespace S1Jarvis.Core
                 source = _dataset == null ? null : (JObject)_dataset.DeepClone();
                 originalQuestion = _businessQuestion ?? string.Empty;
             }
-            if (source == null || !(source["rows"] is JArray) || !LooksLikeRefinement(userText))
+            if (source == null || !(source["rows"] is JArray))
                 return outcome;
 
             JObject plan = await BuildRefinementPlanAsync(
@@ -142,6 +130,8 @@ namespace S1Jarvis.Core
             CancellationToken cancellationToken)
         {
             JObject catalog = BuildCompactCatalog(dataset);
+            string policyContext = JarvisPolicyRegistry.BuildTrainingContext(
+                "Jarvis", "__dataset_refinement", new string[] { "Reporting" }, new string[0]);
             JObject request = new JObject
             {
                 ["max_tokens"] = 1200,
@@ -151,10 +141,7 @@ namespace S1Jarvis.Core
                     new JObject
                     {
                         ["type"] = "text",
-                        ["text"] = "Είσαι ο Jarvis local dataset refinement planner. Αποφασίζεις αν το follow-up μπορεί να απαντηθεί ΜΟΝΟ από τις υπάρχουσες στήλες του validated dataset. " +
-                                   "Δεν βλέπεις και δεν επεξεργάζεσαι όλες τις γραμμές. Αν χρειάζεται νέα πληροφορία ή στήλη, βάλε canRefine=false. " +
-                                   "Αν γίνεται τοπικά, επέστρεψε JSON μόνο: {\"canRefine\":true,\"filters\":[{\"column\":\"...\",\"op\":\"eq|neq|contains|not_contains|gt|gte|lt|lte\",\"value\":\"...\"}],\"sort\":[{\"column\":\"...\",\"direction\":\"asc|desc\"}],\"limit\":null}. " +
-                                   "Χρησιμοποίησε αποκλειστικά column names που υπάρχουν στο catalog. Μην εφεύρεις mapping αν το catalog δεν το υποστηρίζει."
+                        ["text"] = "Jarvis local dataset refinement protocol. Return JSON only: {\"canRefine\":true|false,\"filters\":[{\"column\":\"...\",\"op\":\"eq|neq|contains|not_contains|gt|gte|lt|lte\",\"value\":\"...\"}],\"sort\":[{\"column\":\"...\",\"direction\":\"asc|desc\"}],\"limit\":null}.\n\n" + policyContext
                     }
                 },
                 ["messages"] = new JArray

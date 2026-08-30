@@ -118,6 +118,12 @@ namespace S1Jarvis.Core
             P("GLOBAL.VERIFIED_SUCCESS_ONLY", JarvisPolicyScope.Validation, JarvisPolicyEnforcement.Both,
                 "Success σημαίνει validated terminal result με τα registered outputs. Model prose, draft, lookup result ή tool intention δεν θεωρούνται ολοκληρωμένο business outcome.", priority: 935),
 
+            P("ORCHESTRATION.ACTIVE_CONTEXT_IS_DURABLE", JarvisPolicyScope.Orchestration, JarvisPolicyEnforcement.Both,
+                "Σε multi-turn active run διατήρησε original intent, explicit user facts, validated graph/results, completed/invalidated nodes και pending confirmations. Follow-up interpretation χρησιμοποιεί αυτό το structured context και όχι phrase/keyword heuristics. Νέο user fact μπορεί να αλλάξει μόνο τα σχετικά downstream nodes/payloads.", agents: A("Jarvis"), priority: 934),
+
+            P("ORCHESTRATION.DATASET_REFINEMENT_EXISTING_FACTS_ONLY", JarvisPolicyScope.Orchestration, JarvisPolicyEnforcement.Both,
+                "Local dataset refinement επιτρέπεται μόνο όταν το follow-up απαντιέται αποκλειστικά από τις υπάρχουσες validated στήλες/τιμές. Αν απαιτείται νέα πληροφορία ή νέα στήλη, canRefine=false και το request επιστρέφει στο κανονικό orchestration.", agents: A("Jarvis"), tasks: A("__dataset_refinement"), domains: A("Reporting"), priority: 933),
+
             // ── Decomposition / planning ─────────────────────────────────────
             P("DECOMPOSER.ATOMIC_OUTCOME", JarvisPolicyScope.Task, JarvisPolicyEnforcement.Training,
                 "Σπάσε το request σε ανεξάρτητα atomic business outcomes, ένα outcome ανά intent object. Μην εκτελείς tools και μην δημιουργείς dependencies κατά το decomposition.", agents: A("Jarvis"), tasks: A("__decomposition"), priority: 920),

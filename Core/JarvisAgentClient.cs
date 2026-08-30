@@ -1216,8 +1216,7 @@ namespace S1Jarvis.Core
                 ["currentUserName"] = currentUserName ?? string.Empty,
                 ["mode"] = mode,
                 ["reportDecimalPlaces"] = reportDecimalPlaces,
-                ["forceFinalAnswer"] = forceFinalAnswer,
-                ["businessEntityKnowledge"] = JarvisBusinessEntityCatalog.BuildAgentContext()
+                ["forceFinalAnswer"] = forceFinalAnswer
             };
 
             if (!string.IsNullOrWhiteSpace(extraInstructions))

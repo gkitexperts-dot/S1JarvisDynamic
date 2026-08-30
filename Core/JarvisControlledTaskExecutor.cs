@@ -85,9 +85,7 @@ namespace S1Jarvis.Core
 
         private static JObject BuildQueryRequest(string question, string policyContext, string previousSql, string previousDiagnostic, int attempt)
         {
-            string knowledgeContext = JarvisBusinessEntityCatalog.BuildAgentContext().ToString(Formatting.None);
-            string userContent = "business_question: " + (question ?? string.Empty) +
-                                 "\n\nauthoritative_knowledge_context: " + knowledgeContext;
+            string userContent = "business_question: " + (question ?? string.Empty);
             if (attempt > 1)
             {
                 userContent += "\n\n[JARVIS_VALIDATION_RETRY]" +
@@ -99,6 +97,7 @@ namespace S1Jarvis.Core
             {
                 ["max_tokens"] = MaxTokens,
                 ["output_config"] = new JObject { ["effort"] = "low" },
+                ["metadata"] = new JObject { ["jarvis_task"] = "ReportData" },
                 ["system"] = new JArray
                 {
                     new JObject
@@ -106,8 +105,8 @@ namespace S1Jarvis.Core
                         ["type"] = "text",
                         ["text"] =
                             "Εκτελείς το registered atomic task ReportData ως Atlas με scoped tool query_data. " +
-                            "Το authoritative_knowledge_context περιέχει business/schema knowledge και το JARVIS_POLICY_CONTEXT περιέχει τους behavioral κανόνες. " +
-                            "Εφάρμοσέ τα υποχρεωτικά και επέστρεψε το required tool call.\n\n" + (policyContext ?? string.Empty)
+                            "Το JARVIS_KNOWLEDGE_CONTEXT περιέχει authoritative business/schema facts και το JARVIS_POLICY_CONTEXT τους behavioral κανόνες. " +
+                            "Το envelope ορίζει μόνο το atomic protocol και το required tool call.\n\n" + (policyContext ?? string.Empty)
                     }
                 },
                 ["tools"] = new JArray(BuildQueryDataTool()),

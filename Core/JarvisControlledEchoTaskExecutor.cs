@@ -32,6 +32,7 @@ namespace S1Jarvis.Core
                 var request = new JObject
                 {
                     ["max_tokens"] = 3000,
+                    ["metadata"] = new JObject { ["jarvis_task"] = "CreateCrmTask" },
                     ["system"] = new JArray(new JObject
                     {
                         ["type"] = "text",
@@ -126,6 +127,7 @@ namespace S1Jarvis.Core
                 var request = new JObject
                 {
                     ["max_tokens"] = 3000,
+                    ["metadata"] = new JObject { ["jarvis_task"] = "CreateCalendarEvent" },
                     ["system"] = new JArray(new JObject
                     {
                         ["type"] = "text",

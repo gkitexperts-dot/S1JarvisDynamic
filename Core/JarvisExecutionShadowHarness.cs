@@ -23,32 +23,33 @@ namespace S1Jarvis.Core
             StringComparer.OrdinalIgnoreCase);
 
         internal static async Task RunAndLogSafeAsync(XSupport xSupport, string userPrompt,
-            JarvisPendingConfirmationSession pendingSession = null, JarvisDatasetSession datasetSession = null)
+            JarvisPendingConfirmationSession pendingSession = null, JarvisDatasetSession datasetSession = null,
+            JarvisActiveOrchestrationContext activeContext = null)
         {
-            try { await TryRunControlledPilotAsync(xSupport, userPrompt, pendingSession, datasetSession); }
+            try { await TryRunControlledPilotAsync(xSupport, userPrompt, pendingSession, datasetSession, activeContext); }
             catch (Exception ex) { DebugLog.Log("[ORCH-CONTROL] shadow harness suppressed exception: " + ex); }
         }
 
         internal static async Task<JarvisControlledPilotOutcome> TryRunControlledPilotAsync(
             XSupport xSupport, string userPrompt, JarvisPendingConfirmationSession pendingSession,
-            JarvisDatasetSession datasetSession = null)
+            JarvisDatasetSession datasetSession = null, JarvisActiveOrchestrationContext activeContext = null)
         {
             var outcome = new JarvisControlledPilotOutcome { Handled = false, Completed = false };
             try
             {
-                JarvisShadowOrchestrationResult planning = await JarvisOrchestrationShadowCoordinator.RunAsync(xSupport, userPrompt);
+                string planningPrompt = activeContext == null ? userPrompt : activeContext.PreparePrompt(userPrompt);
+                JarvisShadowOrchestrationResult planning = await JarvisOrchestrationShadowCoordinator.RunAsync(xSupport, planningPrompt);
                 if (!IsSupportedControlledPlan(planning))
                     return outcome;
 
                 outcome.Handled = true;
+                if (activeContext != null) activeContext.CapturePlanning(planning);
                 bool hasEmail = HasTask(planning, "SendEmail");
                 if (hasEmail && pendingSession == null)
                 {
                     outcome.UserMessage = "Το controlled orchestration δεν έχει διαθέσιμο confirmation session.";
                     return outcome;
                 }
-                if (pendingSession != null) pendingSession.Clear();
-
                 ResolveDeterministicSendRecipient(planning);
                 ResolveDeterministicRuntimeContext(planning, xSupport);
 
@@ -122,6 +123,7 @@ namespace S1Jarvis.Core
                         return outcome;
                     }
                     LogSnapshot("result_accepted", coordinator.Inspect(), coordinator.GetDispatchableObjectIds(), reportStep.ObjectId, null, null);
+                    if (activeContext != null) activeContext.CaptureVerifiedResult(reportResult);
                 }
 
                 var completedSideEffects = new List<string>();
@@ -163,7 +165,10 @@ namespace S1Jarvis.Core
                                 {
                                     LogSnapshot(crmResult.Success ? "echo_crm_accepted" : "echo_crm_failed", coordinator.Inspect(), coordinator.GetDispatchableObjectIds(), crmStep.ObjectId, crmResult.Success ? null : crmResult.Issues.ToArray(), null);
                                     if (crmResult.Success)
+                                    {
                                         completedSideEffects.Add(BuildCrmStatus(crmResult));
+                                        if (activeContext != null) activeContext.CaptureVerifiedResult(crmResult);
+                                    }
                                     else
                                         deferredIssues.Add(BuildFailureMessage("Η εργασία CRM δεν ολοκληρώθηκε.", crmResult.Issues.ToArray()));
                                 }
@@ -208,7 +213,10 @@ namespace S1Jarvis.Core
                                 {
                                     LogSnapshot(calendarResult.Success ? "echo_calendar_accepted" : "echo_calendar_failed", coordinator.Inspect(), coordinator.GetDispatchableObjectIds(), calendarStep.ObjectId, calendarResult.Success ? null : calendarResult.Issues.ToArray(), null);
                                     if (calendarResult.Success)
+                                    {
                                         completedSideEffects.Add(BuildCalendarStatus(calendarResult));
+                                        if (activeContext != null) activeContext.CaptureVerifiedResult(calendarResult);
+                                    }
                                     else
                                         deferredIssues.Add(BuildFailureMessage("Το Outlook calendar event δεν ολοκληρώθηκε.", calendarResult.Issues.ToArray()));
                                 }
@@ -226,6 +234,7 @@ namespace S1Jarvis.Core
                     string intro = presentation == null ? null : presentation.Intro;
                     if (string.IsNullOrWhiteSpace(intro)) intro = deferredIssues.Count == 0 ? "Ολοκλήρωσα την εντολή." : "Εκτέλεσα όσα βήματα ήταν διαθέσιμα και χρειάζομαι διευκρίνιση για τα υπόλοιπα.";
                     outcome.Completed = deferredIssues.Count == 0;
+                    if (outcome.Completed && activeContext != null) activeContext.Complete();
                     outcome.UserMessage = BuildCombinedMessage(intro, table, completedSideEffects, null);
                     return outcome;
                 }
@@ -248,6 +257,7 @@ namespace S1Jarvis.Core
                 }
 
                 LogSnapshot("confirmation_payload_frozen", coordinator.Inspect(), coordinator.GetDispatchableObjectIds(), pendingSession.PendingObjectId, null, pendingSession.PayloadHash);
+                if (activeContext != null) activeContext.CapturePendingConfirmation(pendingSession);
                 string reportTable = string.IsNullOrWhiteSpace(datasetJson) ? string.Empty : JarvisPresentationComposer.BuildMarkdownTable(datasetJson, 250);
                 string confirmation = BuildConfirmationMessage(pendingSession.FrozenPayload, presentation == null ? null : presentation.Intro);
                 outcome.UserMessage = BuildCombinedMessage(null, reportTable, completedSideEffects, confirmation);
@@ -262,7 +272,8 @@ namespace S1Jarvis.Core
         }
 
         internal static async Task<JarvisControlledPilotOutcome> TryResumeConfirmationAndExecuteAsync(
-            XSupport xSupport, JarvisPendingConfirmationSession pendingSession, string userText)
+            XSupport xSupport, JarvisPendingConfirmationSession pendingSession, string userText,
+            JarvisActiveOrchestrationContext activeContext = null)
         {
             var outcome = new JarvisControlledPilotOutcome { Handled = false, Completed = false };
             if (pendingSession == null || !pendingSession.HasPending || !JarvisPendingConfirmationSession.IsAffirmativeConfirmation(userText)) return outcome;
@@ -285,6 +296,7 @@ namespace S1Jarvis.Core
             if (sendStep == null || !string.Equals(sendStep.TaskType, "SendEmail", StringComparison.OrdinalIgnoreCase) || !string.Equals(sendStep.OwnerAgent, "Echo", StringComparison.OrdinalIgnoreCase))
             {
                 pendingSession.Clear();
+                if (activeContext != null) activeContext.ClearPendingConfirmation();
                 outcome.UserMessage = "Ο Jarvis απέρριψε την επιβεβαίωση: το pending task δεν είναι SendEmail/Echo.";
                 return outcome;
             }
@@ -294,6 +306,7 @@ namespace S1Jarvis.Core
             {
                 LogSnapshot("echo_dispatch_rejected", coordinator.Inspect(), coordinator.GetDispatchableObjectIds(), objectId, beginIssues, payloadHash);
                 pendingSession.Clear();
+                if (activeContext != null) activeContext.ClearPendingConfirmation();
                 outcome.UserMessage = BuildFailureMessage("Ο Jarvis δεν επέτρεψε την αποστολή.", beginIssues);
                 return outcome;
             }
@@ -301,6 +314,7 @@ namespace S1Jarvis.Core
             LogSnapshot("echo_running", coordinator.Inspect(), coordinator.GetDispatchableObjectIds(), objectId, null, payloadHash);
             JarvisTaskExecutionResult echoResult = await JarvisControlledEchoExecutor.ExecuteSendEmailAsync(xSupport, objectId, frozenPayload);
             pendingSession.Clear();
+            if (activeContext != null) activeContext.ClearPendingConfirmation();
 
             string[] acceptIssues;
             if (!coordinator.TryAcceptResult(echoResult, out acceptIssues))
@@ -319,6 +333,11 @@ namespace S1Jarvis.Core
             }
 
             outcome.Completed = true;
+            if (activeContext != null)
+            {
+                activeContext.CaptureVerifiedResult(echoResult);
+                activeContext.Complete();
+            }
             string to = frozenPayload == null || frozenPayload["to"] == null ? string.Empty : frozenPayload["to"].ToString();
             outcome.UserMessage = "Το email στάλθηκε με επιτυχία" + (string.IsNullOrWhiteSpace(to) ? "." : " στο " + to + ".");
             return outcome;

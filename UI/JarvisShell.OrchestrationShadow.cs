@@ -35,6 +35,7 @@ namespace S1Jarvis.UI
         private readonly bool _orchestrationShadowBootstrapRegistered = JarvisOrchestrationShadowBootstrap.EnsureRegistered();
         private readonly JarvisPendingConfirmationSession _orchestrationPendingConfirmation = new JarvisPendingConfirmationSession();
         private readonly JarvisDatasetSession _orchestrationDatasetSession = new JarvisDatasetSession();
+        private readonly JarvisActiveOrchestrationContext _orchestrationActiveContext = new JarvisActiveOrchestrationContext();
 
         private bool _orchestrationShadowHookAttached;
         private bool _orchestrationShadowHookInstalling;
@@ -116,7 +117,7 @@ namespace S1Jarvis.UI
                     JarvisPendingConfirmationSession.IsAffirmativeConfirmation(userText))
                 {
                     JarvisControlledPilotOutcome resumed = await JarvisExecutionShadowHarness.TryResumeConfirmationAndExecuteAsync(
-                        _xSupport, _orchestrationPendingConfirmation, userText);
+                        _xSupport, _orchestrationPendingConfirmation, userText, _orchestrationActiveContext);
                     if (resumed != null && resumed.Handled)
                     {
                         if (!string.IsNullOrWhiteSpace(resumed.UserMessage))
@@ -130,11 +131,10 @@ namespace S1Jarvis.UI
                     }
                 }
 
-                // Cheap lexical gate avoids an AI call on unrelated new prompts.
-                // Only likely follow-ups are offered to the local dataset planner.
+                // Dataset continuity is decided semantically by the local refinement
+                // planner. Phrase/keyword lists are not orchestration authority.
                 if (!_orchestrationPendingConfirmation.HasPending &&
-                    _orchestrationDatasetSession.HasDataset &&
-                    JarvisDatasetSession.LooksLikeRefinement(userText))
+                    _orchestrationDatasetSession.HasDataset)
                 {
                     JarvisDatasetRefinementOutcome refined = await _orchestrationDatasetSession.TryRefineAsync(_xSupport, userText);
                     if (refined != null && refined.Handled)
@@ -146,7 +146,7 @@ namespace S1Jarvis.UI
                 }
 
                 JarvisControlledPilotOutcome pilot = await JarvisExecutionShadowHarness.TryRunControlledPilotAsync(
-                    _xSupport, userText, _orchestrationPendingConfirmation, _orchestrationDatasetSession);
+                    _xSupport, userText, _orchestrationPendingConfirmation, _orchestrationDatasetSession, _orchestrationActiveContext);
                 if (pilot != null && pilot.Handled)
                 {
                     if (!string.IsNullOrWhiteSpace(pilot.UserMessage))
