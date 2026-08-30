@@ -1,0 +1,53 @@
+name: One-shot legacy company scope patch
+
+on:
+  push:
+    branches:
+      - feature/jarvis-orchestration
+    paths:
+      - .github/workflows/one-shot-legacy-company-scope.yml
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: feature/jarvis-orchestration
+
+      - name: Patch legacy SQL execution through central company policy
+        shell: python
+        run: |
+          from pathlib import Path
+
+          path = Path("Core/JarvisAgentClient.cs")
+          text = path.read_text(encoding="utf-8-sig")
+
+          old_query = '''                case "query_data":\n                    return JarvisTools.ExecuteQueryData(xSupport, input["sql"]?.ToString());'''
+          new_query = '''                case "query_data":\n                {\n                    string scopedSql = JarvisDocumentCompanyScopePolicy.EnforceIfFindocQuery(\n                        xSupport, input["sql"]?.ToString());\n                    return JarvisTools.ExecuteQueryData(xSupport, scopedSql);\n                }'''
+
+          old_export = '''                case "export_query_to_file":\n                    return JarvisTools.ExecuteExportQueryToFile(xSupport, input);'''
+          new_export = '''                case "export_query_to_file":\n                {\n                    JObject scopedInput = input == null ? new JObject() : (JObject)input.DeepClone();\n                    scopedInput["sql"] = JarvisDocumentCompanyScopePolicy.EnforceIfFindocQuery(\n                        xSupport, scopedInput["sql"]?.ToString());\n                    return JarvisTools.ExecuteExportQueryToFile(xSupport, scopedInput);\n                }'''
+
+          if text.count(old_query) != 1:
+              raise SystemExit(f"Expected exactly one legacy query_data dispatch, found {text.count(old_query)}")
+          if text.count(old_export) != 1:
+              raise SystemExit(f"Expected exactly one legacy export_query_to_file dispatch, found {text.count(old_export)}")
+
+          text = text.replace(old_query, new_query).replace(old_export, new_export)
+          path.write_text(text, encoding="utf-8-sig")
+
+      - name: Commit exact patch and remove one-shot workflow
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "jarvis-policy-bot"
+          git config user.email "jarvis-policy-bot@users.noreply.github.com"
+          git rm .github/workflows/one-shot-legacy-company-scope.yml
+          git add Core/JarvisAgentClient.cs
+          git commit -m "Route legacy SQL through current company policy [skip ci]"
+          git push origin HEAD:feature/jarvis-orchestration
