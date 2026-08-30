@@ -6,13 +6,43 @@ using Newtonsoft.Json.Linq;
 namespace S1Jarvis.Core
 {
     /// <summary>
-    /// Deterministic validation against the authoritative JarvisToolRegistry.
-    /// HardInputs are native tool arguments. ResolutionInputs are orchestration
-    /// evidence and are validated separately; they are not assumed to be JSON
-    /// fields of the native tool call.
+    /// Deterministic validation/materialization of native tool arguments against
+    /// the authoritative JarvisToolRegistry prerequisite contract.
+    /// No tool-specific required-field lists are allowed here.
     /// </summary>
     internal static class JarvisToolContractValidator
     {
+        internal static void ApplyResolutionEvidence(string toolName, JObject input, JObject resolutionContext)
+        {
+            if (input == null || resolutionContext == null) return;
+
+            JarvisToolPrerequisiteDescriptor contract = JarvisToolRegistry.FindPrerequisites(toolName);
+            if (contract == null) return;
+
+            foreach (string resolution in contract.ResolutionInputs ?? new string[0])
+            {
+                if (string.IsNullOrWhiteSpace(resolution)) continue;
+
+                string token = resolution.Trim();
+                if (token.EndsWith("_optional", StringComparison.OrdinalIgnoreCase))
+                    token = token.Substring(0, token.Length - "_optional".Length);
+
+                string[] alternatives = token
+                    .Split(new[] { "_or_" }, StringSplitOptions.RemoveEmptyEntries)
+                    .Where(x => !string.IsNullOrWhiteSpace(x))
+                    .Select(x => x.Trim())
+                    .ToArray();
+
+                foreach (string name in alternatives)
+                {
+                    if (HasValue(input[name])) continue;
+                    JToken resolved = resolutionContext[name];
+                    if (HasValue(resolved))
+                        input[name] = resolved.DeepClone();
+                }
+            }
+        }
+
         internal static string[] ValidateProposedInput(string toolName, JObject input)
         {
             var issues = new List<string>();
@@ -24,6 +54,7 @@ namespace S1Jarvis.Core
             }
 
             JObject values = input ?? new JObject();
+
             foreach (string hardInput in contract.HardInputs ?? new string[0])
             {
                 if (!HasValue(values[hardInput]))
@@ -46,13 +77,12 @@ namespace S1Jarvis.Core
             JObject values = resolutionContext ?? new JObject();
             foreach (string resolution in contract.ResolutionInputs ?? new string[0])
             {
-                if (string.IsNullOrWhiteSpace(resolution))
-                    continue;
+                if (string.IsNullOrWhiteSpace(resolution)) continue;
 
                 string token = resolution.Trim();
                 bool optional = token.EndsWith("_optional", StringComparison.OrdinalIgnoreCase);
                 if (optional)
-                    continue;
+                    token = token.Substring(0, token.Length - "_optional".Length);
 
                 string[] alternatives = token
                     .Split(new[] { "_or_" }, StringSplitOptions.RemoveEmptyEntries)
@@ -60,7 +90,8 @@ namespace S1Jarvis.Core
                     .Select(x => x.Trim())
                     .ToArray();
 
-                if (alternatives.Length > 0 && !alternatives.Any(name => HasValue(values[name])))
+                if (optional || alternatives.Length == 0) continue;
+                if (!alternatives.Any(name => HasValue(values[name])))
                     issues.Add("Missing required resolution evidence: " + string.Join(" or ", alternatives));
             }
 
