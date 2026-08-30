@@ -43,6 +43,11 @@ namespace S1Jarvis.Core
 
         internal bool TryCapture(JarvisExecutionCoordinator coordinator, out string[] issues)
         {
+            return TryCapture(coordinator, null, out issues);
+        }
+
+        internal bool TryCapture(JarvisExecutionCoordinator coordinator, string objectId, out string[] issues)
+        {
             var localIssues = new System.Collections.Generic.List<string>();
             if (coordinator == null)
             {
@@ -51,13 +56,24 @@ namespace S1Jarvis.Core
                 return false;
             }
 
-            JarvisExecutionStepSnapshot pending = coordinator.Inspect().Steps
-                .Where(x => x != null && x.State == JarvisExecutionStepState.WaitingForConfirmation)
-                .OrderBy(x => x.Ordinal)
-                .FirstOrDefault();
+            var waiting = coordinator.Inspect().Steps
+                .Where(x => x != null && x.State == JarvisExecutionStepState.WaitingForConfirmation);
+
+            JarvisExecutionStepSnapshot pending;
+            if (string.IsNullOrWhiteSpace(objectId))
+            {
+                pending = waiting.OrderBy(x => x.Ordinal).FirstOrDefault();
+            }
+            else
+            {
+                pending = waiting.FirstOrDefault(x => string.Equals(x.ObjectId, objectId, StringComparison.OrdinalIgnoreCase));
+            }
+
             if (pending == null)
             {
-                localIssues.Add("No execution task is waiting for confirmation.");
+                localIssues.Add(string.IsNullOrWhiteSpace(objectId)
+                    ? "No execution task is waiting for confirmation."
+                    : "Requested execution task is not waiting for confirmation: " + objectId);
                 issues = localIssues.ToArray();
                 return false;
             }
