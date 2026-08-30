@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Data;
 using System.Linq;
 using Newtonsoft.Json.Linq;
 using Softone;
@@ -32,18 +33,15 @@ namespace S1Jarvis.Core
                     company, reference.Trim());
                 if (table == null || table.Count == 0) return null;
 
+                DataTable data = table.CreateDataTable(true);
                 var roles = new HashSet<int>();
                 var roleNames = new List<string>();
-                table.First();
-                for (int i = 0; i < table.Count; i++)
+                foreach (DataRow row in data.Rows)
                 {
                     int sodType;
-                    if (int.TryParse(Convert.ToString(table.Current["SODTYPE"]), out sodType))
-                    {
-                        JarvisTraderRoleDescriptor descriptor = JarvisBusinessEntityCatalog.FindTraderRole(sodType);
-                        if (descriptor != null && roles.Add(sodType)) roleNames.Add(descriptor.Role);
-                    }
-                    table.Next();
+                    if (!int.TryParse(Convert.ToString(row["SODTYPE"]), out sodType)) continue;
+                    JarvisTraderRoleDescriptor descriptor = JarvisBusinessEntityCatalog.FindTraderRole(sodType);
+                    if (descriptor != null && roles.Add(sodType)) roleNames.Add(descriptor.Role);
                 }
 
                 if (roles.Count <= 1) return null;
