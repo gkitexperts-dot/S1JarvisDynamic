@@ -20,6 +20,7 @@ namespace S1Jarvis.Core
         public string ReasonCode { get; set; }
         public string Provider { get; set; }
         public string Model { get; set; }
+        public string ApiKey { get; set; }
         public bool Inherited { get; set; }
         public string DiagnosticCode { get; set; }
         public string DiagnosticMessage { get; set; }
@@ -82,10 +83,11 @@ namespace S1Jarvis.Core
     }
 
     /// <summary>
-    /// Performs the ONE authoritative agent/provider/model load for an opened
-    /// Jarvis shell. The signed Verilic Health response itself is authoritative;
-    /// callers do not resolve a model first and do not perform a separate routing
-    /// lookup. The complete target set is stored by JarvisAgentRuntimeSnapshot.
+    /// Performs the only normal-session Verilic AI provisioning request.
+    /// It is called at Jarvis boot, and may be called again only by the
+    /// explicit HEALTH command. The response supplies the complete execution
+    /// material for every logical agent: Provider + Model + session API key.
+    /// Normal prompts must never call this endpoint.
     /// </summary>
     internal sealed class JarvisAgentHealthProbe
     {
@@ -99,6 +101,7 @@ namespace S1Jarvis.Core
             public string ReasonCode { get; set; }
             public string Provider { get; set; }
             public string Model { get; set; }
+            public string ApiKey { get; set; }
             public bool Inherited { get; set; }
             public string DiagnosticCode { get; set; }
             public string DiagnosticMessage { get; set; }
@@ -128,9 +131,9 @@ namespace S1Jarvis.Core
             return ProbeAsync(xSupport, expectedAgentAccountRef, null);
         }
 
-        // Compatibility overload. expectedModel is optional and is used only
-        // by old callers that explicitly want a consistency assertion. It is
-        // NEVER needed for normal Jarvis startup; Health supplies the model.
+        // Compatibility overload. expectedModel is optional and used only as
+        // a consistency assertion by old callers. Boot/HEALTH provisioning
+        // never pre-resolves a model.
         public async Task<JarvisAgentHealthResult> ProbeAsync(
             XSupport xSupport,
             string expectedAgentAccountRef,
@@ -185,7 +188,7 @@ namespace S1Jarvis.Core
                     ProductId = productId,
                     InstallationId = state.InstallationId,
                     ProductVersion = configuration.ProductVersion,
-                    RequestedFeatures = new string[0],
+                    RequestedFeatures = new[] { "session_credentials" },
                     Soft1Serial = info.SerialNum == null
                         ? null
                         : info.SerialNum.ToString(),
@@ -260,9 +263,6 @@ namespace S1Jarvis.Core
                                 diagnosticCode: health.DiagnosticCode,
                                 diagnosticMessage: health.DiagnosticMessage);
 
-                        // Only compatibility callers that explicitly supplied an
-                        // expected model get a consistency check. Startup does not
-                        // pre-resolve a model; the Health response is authoritative.
                         if (!string.IsNullOrWhiteSpace(selectedModel) &&
                             !string.Equals(
                                 returnedModel,
@@ -335,6 +335,9 @@ namespace S1Jarvis.Core
                     Model = string.IsNullOrWhiteSpace(target.Model)
                         ? null
                         : target.Model.Trim(),
+                    ApiKey = string.IsNullOrWhiteSpace(target.ApiKey)
+                        ? null
+                        : target.ApiKey.Trim(),
                     Inherited = target.Inherited,
                     DiagnosticCode = string.IsNullOrWhiteSpace(target.DiagnosticCode)
                         ? null
