@@ -8,32 +8,22 @@ namespace S1Jarvis.Core
 {
     /// <summary>
     /// Provider-neutral semantic planning protocol.
-    ///
-    /// The model is allowed to select only registered atomic TaskTypes and to
-    /// describe dependencies/input bindings. Capability, owner agent and tools
-    /// are always resolved locally from JarvisTaskRegistry; they are never
-    /// trusted from model output.
-    ///
-    /// This layer is side-effect free and is not wired into Main Chat yet.
+    /// The model selects only registered atomic TaskTypes and describes dependency
+    /// bindings. Behavioral planning policy is resolved centrally; capability,
+    /// owner agent and tools are always resolved locally from JarvisTaskRegistry.
     /// </summary>
     internal static class JarvisSemanticPlanning
     {
         internal static string BuildPlannerSystemPrompt()
         {
+            string policies = JarvisAgentContextBuilder.BuildPlanningPolicyContext();
             return
-                "Είσαι ο εσωτερικός planner του Jarvis. Ανάλυσε το αίτημα του χειριστή σε atomic business tasks. " +
-                "Χρησιμοποίησε ΜΟΝΟ taskType που υπάρχουν στο TASK_CATALOG. Μην επινοείς agents, tools ή task types. " +
-                "Μην εκτελείς την εργασία και μην απαντάς στον χειριστή. Επέστρεψε ΜΟΝΟ έγκυρο JSON. " +
-                "Κάθε task πρέπει να έχει μοναδικό id, taskType, intentFragment, inputs και dependsOn. " +
-                "Το dependsOn περιέχει ids άλλων tasks του ίδιου plan. " +
-                "Κάθε input είναι είτε literal τιμή είτε binding {\"fromTask\":\"t1\",\"output\":\"output_name\"}. " +
-                "Χρησιμοποίησε binding όταν ένα task χρειάζεται συγκεκριμένο output προηγούμενου task και βάλε το ίδιο task και στο dependsOn. " +
-                "Το output πρέπει να υπάρχει στο produces του source task. Μην επινοείς output names. " +
-                "Βάλε literal input μόνο όταν προκύπτει καθαρά από το αίτημα. Μην μαντεύεις missing business data. " +
-                "Μην ενώνεις ανεξάρτητο read και write intent στο ίδιο task. Για απλό αίτημα χρησιμοποίησε ένα task. " +
-                "Για σύνθετο αίτημα χρησιμοποίησε όσα atomic tasks χρειάζονται, χωρίς καρτεσιανούς συνδυασμούς. " +
-                "Ανεξάρτητα tasks δεν πρέπει να έχουν ψεύτικη dependency. " +
-                "Schema: {\"tasks\":[{\"id\":\"t1\",\"taskType\":\"...\",\"intentFragment\":\"...\",\"inputs\":{\"name\":value,\"other\":{\"fromTask\":\"t0\",\"output\":\"output_name\"}},\"dependsOn\":[\"t0\"]}]}";
+                "Είσαι ο εσωτερικός semantic planner του Jarvis. Εφάρμοσε υποχρεωτικά το JARVIS_POLICY_CONTEXT. " +
+                "Μην εκτελείς tasks/tools και μην απαντάς στον χειριστή. " +
+                "Επέστρεψε ΜΟΝΟ έγκυρο JSON. Κάθε task έχει μοναδικό id, taskType, intentFragment, inputs και dependsOn. " +
+                "Κάθε input είναι literal JSON value ή binding {\"fromTask\":\"t1\",\"output\":\"output_name\"}. " +
+                "Schema: {\"tasks\":[{\"id\":\"t1\",\"taskType\":\"...\",\"intentFragment\":\"...\",\"inputs\":{\"name\":value,\"other\":{\"fromTask\":\"t0\",\"output\":\"output_name\"}},\"dependsOn\":[\"t0\"]}]}\n\n" +
+                policies;
         }
 
         internal static string BuildTaskCatalogJson()
