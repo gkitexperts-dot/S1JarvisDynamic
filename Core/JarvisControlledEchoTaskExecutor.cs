@@ -76,7 +76,11 @@ namespace S1Jarvis.Core
                 }
 
                 JObject input = call["input"] as JObject ?? new JObject();
-                string[] contractIssues = JarvisToolContractValidator.ValidateProposedInput("create_crm_task", input);
+                string[] nativeIssues = JarvisToolContractValidator.ValidateProposedInput("create_crm_task", input);
+                string[] resolutionIssues = JarvisToolContractValidator.ValidateResolutionEvidence("create_crm_task", input);
+                string[] contractIssues = nativeIssues.Concat(resolutionIssues)
+                    .Distinct(StringComparer.OrdinalIgnoreCase)
+                    .ToArray();
                 if (contractIssues.Length > 0)
                 {
                     result.Issues.Add("NEEDS_USER_INPUT: " + string.Join(" | ", contractIssues));
