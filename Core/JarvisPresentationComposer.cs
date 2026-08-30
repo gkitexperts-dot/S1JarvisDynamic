@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.Linq;
 using System.Text;
 using System.Threading;
@@ -17,11 +18,20 @@ namespace S1Jarvis.Core
         internal string EmailBody { get; set; }
     }
 
+    internal enum JarvisPresentationValueKind
+    {
+        Text,
+        Number,
+        Currency,
+        Date,
+        DateTime,
+        Boolean
+    }
+
     internal static class JarvisPresentationComposer
     {
         private const string RuntimeAiAgent = "Jarvis";
         private const int MaxTokens = 2400;
-        private const int MaxPresentationRows = 50;
 
         internal static async Task<JarvisPresentationResult> ComposeReportAsync(XSupport xSupport, string businessQuestion, string datasetJson, CancellationToken cancellationToken = default(CancellationToken))
         {
@@ -57,6 +67,11 @@ namespace S1Jarvis.Core
             return new JarvisPresentationResult { Intro = intro, EmailSubject = subject, EmailBody = body };
         }
 
+        /// <summary>
+        /// Canonical deterministic table renderer. All user-visible tabular data
+        /// uses the central Policies Inventory presentation profile for labels,
+        /// dates, numbers, currency, nulls, alignment and authoritative links.
+        /// </summary>
         internal static string BuildMarkdownTable(string datasetJson, int maxRows)
         {
             try
@@ -66,35 +81,55 @@ namespace S1Jarvis.Core
                 if (rows == null || rows.Count == 0) return "_Δεν βρέθηκαν εγγραφές._";
                 List<JObject> objects = rows.OfType<JObject>().ToList();
                 if (objects.Count == 0) return "_Δεν βρέθηκαν εγγραφές._";
+
                 var columns = new List<string>();
                 foreach (JObject row in objects)
                     foreach (JProperty property in row.Properties())
-                        if (!columns.Any(x => string.Equals(x, property.Name, StringComparison.OrdinalIgnoreCase))) columns.Add(property.Name);
+                        if (!columns.Any(x => string.Equals(x, property.Name, StringComparison.OrdinalIgnoreCase)))
+                            columns.Add(property.Name);
                 if (columns.Count == 0) return "_Δεν βρέθηκαν στήλες._";
-                int take = maxRows <= 0 ? objects.Count : Math.Min(objects.Count, maxRows);
+
+                Dictionary<string, JarvisPresentationValueKind> kinds = columns.ToDictionary(
+                    x => x,
+                    x => DetectColumnKind(objects, x),
+                    StringComparer.OrdinalIgnoreCase);
+
+                int policyMax = JarvisPolicySettings.Presentation.MaxChatTableRows;
+                int requestedMax = maxRows <= 0 ? policyMax : Math.Min(maxRows, policyMax);
+                int take = Math.Min(objects.Count, requestedMax);
                 var lines = new List<string>();
-                lines.Add("| " + string.Join(" | ", columns.Select(EscapeMarkdownCell)) + " |");
-                lines.Add("| " + string.Join(" | ", columns.Select(x => "---")) + " |");
+
+                lines.Add("| " + string.Join(" | ", columns.Select(c => EscapeMarkdownCell(JarvisPolicySettings.Presentation.GetColumnLabel(c)))) + " |");
+                lines.Add("| " + string.Join(" | ", columns.Select(c => AlignmentMarker(kinds[c]))) + " |");
+
                 for (int i = 0; i < take; i++)
                 {
                     JObject row = objects[i];
-                    lines.Add("| " + string.Join(" | ", columns.Select(c => EscapeMarkdownCell(GetValue(row, c)))) + " |");
+                    lines.Add("| " + string.Join(" | ", columns.Select(c => RenderCell(row, c, kinds[c]))) + " |");
                 }
-                if (take < objects.Count) lines.Add("\n_Εμφανίζονται " + take + " από " + objects.Count + " εγγραφές._");
+
+                if (take < objects.Count)
+                    lines.Add("\n_Εμφανίζονται " + take.ToString(CultureInfo.InvariantCulture) + " από " + objects.Count.ToString(CultureInfo.InvariantCulture) + " εγγραφές._");
                 return string.Join("\n", lines);
             }
-            catch { return string.Empty; }
+            catch (Exception ex)
+            {
+                DebugLog.Log("[JARVIS-PRESENTATION] canonical table render failed: " + ex.Message);
+                return string.Empty;
+            }
         }
 
         private static JObject BuildCompactDatasetContext(string businessQuestion, string datasetJson)
         {
+            int maxPresentationRows = JarvisPolicySettings.Presentation.DefaultPreviewRows;
             var context = new JObject
             {
                 ["businessQuestion"] = businessQuestion ?? string.Empty,
                 ["rowCount"] = 0,
                 ["columns"] = new JArray(),
                 ["validatedRows"] = new JArray(),
-                ["rowsComplete"] = true
+                ["rowsComplete"] = true,
+                ["presentationPolicy"] = JarvisPolicySettings.Presentation.BuildPolicyEnvelope()
             };
             try
             {
@@ -103,14 +138,16 @@ namespace S1Jarvis.Core
                 int total = (int?)root["totalRowCount"] ?? rows.Count;
                 context["rowCount"] = total;
                 var columns = new List<string>();
-                foreach (JObject row in rows.OfType<JObject>().Take(MaxPresentationRows))
+                foreach (JObject row in rows.OfType<JObject>().Take(maxPresentationRows))
                     foreach (JProperty p in row.Properties())
-                        if (!columns.Any(x => string.Equals(x, p.Name, StringComparison.OrdinalIgnoreCase))) columns.Add(p.Name);
-                context["columns"] = new JArray(columns);
+                        if (!columns.Any(x => string.Equals(x, p.Name, StringComparison.OrdinalIgnoreCase)))
+                            columns.Add(p.Name);
+                context["columns"] = new JArray(columns.Select(JarvisPolicySettings.Presentation.GetColumnLabel));
                 var validatedRows = new JArray();
-                foreach (JObject row in rows.OfType<JObject>().Take(MaxPresentationRows)) validatedRows.Add(row.DeepClone());
+                foreach (JObject row in rows.OfType<JObject>().Take(maxPresentationRows))
+                    validatedRows.Add(row.DeepClone());
                 context["validatedRows"] = validatedRows;
-                context["rowsComplete"] = total <= MaxPresentationRows && validatedRows.Count == total;
+                context["rowsComplete"] = total <= maxPresentationRows && validatedRows.Count == total;
             }
             catch { context["datasetParseError"] = true; }
             return context;
@@ -133,9 +170,9 @@ namespace S1Jarvis.Core
                 sb.AppendLine();
                 sb.Append("Παρακάτω είναι τα στοιχεία που προέκυψαν για το αίτημα: ").AppendLine(businessQuestion ?? string.Empty);
                 sb.AppendLine();
-                sb.Append("Σύνολο εγγραφών: ").AppendLine(total.ToString());
+                sb.Append("Σύνολο εγγραφών: ").AppendLine(total.ToString(CultureInfo.GetCultureInfo(JarvisPolicySettings.Presentation.CultureName)));
                 sb.AppendLine();
-                int take = Math.Min(rows.Count, MaxPresentationRows);
+                int take = Math.Min(rows.Count, JarvisPolicySettings.Presentation.DefaultPreviewRows);
                 for (int i = 0; i < take; i++)
                 {
                     JObject row = rows[i] as JObject;
@@ -146,7 +183,9 @@ namespace S1Jarvis.Core
                     {
                         if (!first) sb.Append(" | ");
                         first = false;
-                        sb.Append(HumanizeColumn(p.Name)).Append(": ").Append(p.Value == null || p.Value.Type == JTokenType.Null ? "-" : p.Value.ToString(Formatting.None).Trim('"'));
+                        JarvisPresentationValueKind kind = DetectColumnKind(rows.OfType<JObject>().ToList(), p.Name);
+                        sb.Append(JarvisPolicySettings.Presentation.GetColumnLabel(p.Name)).Append(": ")
+                          .Append(FormatValue(p.Value, p.Name, kind));
                     }
                     sb.AppendLine();
                 }
@@ -163,22 +202,6 @@ namespace S1Jarvis.Core
             return result;
         }
 
-        private static string HumanizeColumn(string name)
-        {
-            if (string.IsNullOrWhiteSpace(name)) return string.Empty;
-            switch (name.Trim().ToUpperInvariant())
-            {
-                case "FINDOC": return "ID";
-                case "FINCODE": return "Παραστατικό";
-                case "TRNDATE": return "Ημερομηνία";
-                case "SUMAMNT": return "Ποσό";
-                case "CUSTOMER_CODE": return "Κωδικός πελάτη";
-                case "CUSTOMER_NAME": return "Πελάτης";
-                case "SERIES": return "Σειρά";
-                default: return name.Replace("_", " ");
-            }
-        }
-
         private static JObject BuildRequest(string mode, JObject context, string recipient, string outputContract)
         {
             string policyContext = JarvisAgentContextBuilder.BuildPresentationPolicyContext();
@@ -193,7 +216,7 @@ namespace S1Jarvis.Core
                     {
                         ["type"] = "text",
                         ["text"] =
-                            "Είσαι το registered Jarvis presentation layer. Εφάρμοσε υποχρεωτικά το JARVIS_POLICY_CONTEXT. " +
+                            "Είσαι το registered Jarvis presentation layer. Εφάρμοσε υποχρεωτικά το JARVIS_POLICY_CONTEXT και το JARVIS_PRESENTATION_POLICY_PROFILE. " +
                             outputContract + "\n\n" + policyContext
                     }
                 },
@@ -249,15 +272,158 @@ namespace S1Jarvis.Core
             try { return JObject.Parse(value); } catch { return null; }
         }
 
-        private static string GetValue(JObject row, string column)
+        private static string RenderCell(JObject row, string column, JarvisPresentationValueKind kind)
         {
-            if (row == null || string.IsNullOrWhiteSpace(column)) return string.Empty;
-            JProperty property = row.Properties().FirstOrDefault(x => string.Equals(x.Name, column, StringComparison.OrdinalIgnoreCase));
-            if (property == null || property.Value == null || property.Value.Type == JTokenType.Null) return string.Empty;
-            return property.Value.Type == JTokenType.String ? property.Value.ToString() : property.Value.ToString(Formatting.None);
+            JToken value = FindValue(row, column);
+            string formatted = FormatValue(value, column, kind);
+            string linked = JarvisResultLinkMaterializer.MaterializeDatasetCell(row, column, formatted);
+            return string.IsNullOrWhiteSpace(linked) ? EscapeMarkdownCell(formatted) : linked;
         }
 
-        private static string EscapeMarkdownCell(string value) { return (value ?? string.Empty).Replace("|", "\\|").Replace("\r", " ").Replace("\n", " "); }
-        private static string Truncate(string value, int max) { string text = value ?? string.Empty; return text.Length <= max ? text : text.Substring(0, max) + "..."; }
+        private static string FormatValue(JToken value, string column, JarvisPresentationValueKind kind)
+        {
+            if (value == null || value.Type == JTokenType.Null || value.Type == JTokenType.Undefined)
+                return JarvisPolicySettings.Presentation.NullDisplay;
+
+            CultureInfo culture = CultureInfo.GetCultureInfo(JarvisPolicySettings.Presentation.CultureName);
+            if (kind == JarvisPresentationValueKind.Date || kind == JarvisPresentationValueKind.DateTime)
+            {
+                DateTime date;
+                if (TryReadDate(value, out date))
+                    return date.ToString(kind == JarvisPresentationValueKind.Date
+                        ? JarvisPolicySettings.Presentation.DateFormat
+                        : JarvisPolicySettings.Presentation.DateTimeFormat, culture);
+            }
+
+            if (kind == JarvisPresentationValueKind.Currency || kind == JarvisPresentationValueKind.Number)
+            {
+                decimal number;
+                if (TryReadDecimal(value, out number))
+                {
+                    if (kind == JarvisPresentationValueKind.Currency)
+                        return number.ToString(JarvisPolicySettings.Presentation.CurrencyNumberFormat, culture) + JarvisPolicySettings.Presentation.CurrencySuffix;
+                    return number.ToString(JarvisPolicySettings.Presentation.NumberFormat, culture);
+                }
+            }
+
+            if (kind == JarvisPresentationValueKind.Boolean)
+            {
+                bool flag;
+                if (bool.TryParse(value.ToString(), out flag)) return flag ? "Ναι" : "Όχι";
+            }
+
+            return value.Type == JTokenType.String
+                ? value.ToString()
+                : value.ToString(Formatting.None).Trim('"');
+        }
+
+        private static JarvisPresentationValueKind DetectColumnKind(IEnumerable<JObject> rows, string column)
+        {
+            List<JToken> values = (rows ?? Enumerable.Empty<JObject>())
+                .Select(x => FindValue(x, column))
+                .Where(x => x != null && x.Type != JTokenType.Null && x.Type != JTokenType.Undefined)
+                .Take(25)
+                .ToList();
+
+            bool dateHint = JarvisPolicySettings.Presentation.ColumnNameMatches(column, JarvisPolicySettings.Presentation.DateColumnHints);
+            bool currencyHint = JarvisPolicySettings.Presentation.ColumnNameMatches(column, JarvisPolicySettings.Presentation.CurrencyColumnHints);
+
+            if (dateHint && values.Any())
+            {
+                DateTime d;
+                if (values.All(v => TryReadDate(v, out d)))
+                {
+                    bool hasTime = values.Any(v =>
+                    {
+                        DateTime parsed;
+                        return TryReadDate(v, out parsed) && parsed.TimeOfDay != TimeSpan.Zero;
+                    });
+                    return hasTime ? JarvisPresentationValueKind.DateTime : JarvisPresentationValueKind.Date;
+                }
+            }
+
+            if (values.Count > 0 && values.All(v => v.Type == JTokenType.Boolean))
+                return JarvisPresentationValueKind.Boolean;
+
+            decimal n;
+            if (values.Count > 0 && values.All(v => TryReadDecimal(v, out n)))
+                return currencyHint ? JarvisPresentationValueKind.Currency : JarvisPresentationValueKind.Number;
+
+            return JarvisPresentationValueKind.Text;
+        }
+
+        private static string AlignmentMarker(JarvisPresentationValueKind kind)
+        {
+            switch (kind)
+            {
+                case JarvisPresentationValueKind.Number:
+                case JarvisPresentationValueKind.Currency:
+                    return JarvisPolicySettings.Presentation.NumericAlignmentMarker;
+                case JarvisPresentationValueKind.Date:
+                case JarvisPresentationValueKind.DateTime:
+                case JarvisPresentationValueKind.Boolean:
+                    return JarvisPolicySettings.Presentation.DateAlignmentMarker;
+                default:
+                    return JarvisPolicySettings.Presentation.TextAlignmentMarker;
+            }
+        }
+
+        private static JToken FindValue(JObject row, string column)
+        {
+            if (row == null || string.IsNullOrWhiteSpace(column)) return null;
+            JProperty property = row.Properties().FirstOrDefault(x => string.Equals(x.Name, column, StringComparison.OrdinalIgnoreCase));
+            return property == null ? null : property.Value;
+        }
+
+        private static bool TryReadDecimal(JToken token, out decimal value)
+        {
+            value = 0m;
+            if (token == null) return false;
+            if (token.Type == JTokenType.Integer || token.Type == JTokenType.Float)
+            {
+                try { value = token.Value<decimal>(); return true; }
+                catch { return false; }
+            }
+            string text = token.ToString().Trim();
+            if (decimal.TryParse(text, NumberStyles.Any, CultureInfo.InvariantCulture, out value)) return true;
+            return decimal.TryParse(text, NumberStyles.Any, CultureInfo.GetCultureInfo(JarvisPolicySettings.Presentation.CultureName), out value);
+        }
+
+        private static bool TryReadDate(JToken token, out DateTime value)
+        {
+            value = default(DateTime);
+            if (token == null) return false;
+            if (token.Type == JTokenType.Date)
+            {
+                try { value = token.Value<DateTime>(); return true; }
+                catch { return false; }
+            }
+
+            string text = token.ToString().Trim();
+            if (string.IsNullOrWhiteSpace(text)) return false;
+            DateTime parsed;
+            if (DateTime.TryParse(text, CultureInfo.InvariantCulture, DateTimeStyles.AllowWhiteSpaces, out parsed))
+            {
+                value = parsed;
+                return true;
+            }
+            if (DateTime.TryParse(text, CultureInfo.GetCultureInfo(JarvisPolicySettings.Presentation.CultureName), DateTimeStyles.AllowWhiteSpaces, out parsed))
+            {
+                value = parsed;
+                return true;
+            }
+            return false;
+        }
+
+        private static string EscapeMarkdownCell(string value)
+        {
+            return (value ?? string.Empty).Replace("|", "\\|").Replace("\r", " ").Replace("\n", " ");
+        }
+
+        private static string Truncate(string value, int max)
+        {
+            string text = value ?? string.Empty;
+            return text.Length <= max ? text : text.Substring(0, max) + "...";
+        }
     }
 }
