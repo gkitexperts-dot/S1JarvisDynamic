@@ -212,7 +212,6 @@ namespace S1Jarvis.Core
         {
             lock (Sync)
             {
-                // Do not copy credentials for display/health reporting.
                 return _targets.Values
                     .OrderBy(x => x.Agent, StringComparer.OrdinalIgnoreCase)
                     .Select(x => x.CloneWithoutSecret())
@@ -243,7 +242,11 @@ namespace S1Jarvis.Core
                     "AI session registry is unavailable for agent " +
                     (agentName ?? "<null>") + ". Run HEALTH or restart Jarvis.");
 
-            JObject request = JObject.Parse(providerRequestJson ?? string.Empty);
+            string policyEnriched = JarvisPolicyRequestEnricher.Apply(
+                agentName,
+                providerRequestJson);
+
+            JObject request = JObject.Parse(policyEnriched ?? string.Empty);
             request["model"] = model;
             return request.ToString(Formatting.None);
         }
