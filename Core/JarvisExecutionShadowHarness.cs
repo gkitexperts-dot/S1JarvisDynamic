@@ -49,10 +49,8 @@ namespace S1Jarvis.Core
                 }
                 if (pendingSession != null) pendingSession.Clear();
 
-                // Resolve literals that are deterministic in the atomic fragment before
-                // the execution coordinator freezes any payload. Named recipients remain
-                // owner-agent/contact-resolution work; literal addresses do not need AI.
                 ResolveDeterministicSendRecipient(planning);
+                ResolveDeterministicRuntimeContext(planning, xSupport);
 
                 var coordinator = new JarvisExecutionCoordinator(planning.Graph, planning.Preview);
                 JarvisExecutionControlSnapshot before = coordinator.Inspect();
@@ -127,49 +125,51 @@ namespace S1Jarvis.Core
                 }
 
                 var completedSideEffects = new List<string>();
+                var deferredIssues = new List<string>();
 
-                // The initial imperative is authorization for the user's own Soft1 CRM
-                // task and a personal Outlook calendar item. They are reversible/local
-                // productivity actions in the mature product behavior. Email remains a
-                // separately-confirmed external send. Calendar invitations/attendees are
-                // NOT auto-authorized here.
                 JarvisExecutionStepSnapshot crmStep = FindStep(coordinator.Inspect(), "CreateCrmTask", "Echo");
                 if (crmStep != null)
                 {
-                    if (!GrantInitialInstructionAuthorization(coordinator, crmStep, out string[] crmAuthIssues))
+                    string[] crmAuthIssues;
+                    if (!GrantInitialInstructionAuthorization(coordinator, crmStep, out crmAuthIssues))
                     {
-                        outcome.UserMessage = BuildFailureMessage("Ο Jarvis δεν μπόρεσε να εξουσιοδοτήσει την εργασία CRM από τη ρητή αρχική εντολή.", crmAuthIssues);
-                        return outcome;
+                        deferredIssues.Add(BuildFailureMessage("Η εργασία CRM χρειάζεται επίλυση πριν εκτελεστεί.", crmAuthIssues));
                     }
-
-                    JObject crmInputs;
-                    string[] crmInputIssues;
-                    if (!coordinator.TryGetDispatchInputs(crmStep.ObjectId, out crmInputs, out crmInputIssues))
+                    else
                     {
-                        outcome.UserMessage = BuildFailureMessage("Ο Jarvis απέρριψε τα inputs της εργασίας CRM.", crmInputIssues);
-                        return outcome;
+                        JObject crmInputs;
+                        string[] crmInputIssues;
+                        if (!coordinator.TryGetDispatchInputs(crmStep.ObjectId, out crmInputs, out crmInputIssues))
+                        {
+                            deferredIssues.Add(BuildFailureMessage("Η εργασία CRM χρειάζεται επιπλέον πληροφορίες.", crmInputIssues));
+                        }
+                        else
+                        {
+                            string[] crmBeginIssues;
+                            if (!coordinator.TryBeginDispatch(crmStep.ObjectId, out crmBeginIssues))
+                            {
+                                deferredIssues.Add(BuildFailureMessage("Η εργασία CRM δεν είναι ακόμη dispatchable.", crmBeginIssues));
+                            }
+                            else
+                            {
+                                LogSnapshot("echo_crm_running", coordinator.Inspect(), coordinator.GetDispatchableObjectIds(), crmStep.ObjectId, null, null);
+                                JarvisTaskExecutionResult crmResult = await JarvisControlledEchoTaskExecutor.ExecuteCreateCrmTaskAsync(xSupport, crmStep.ObjectId, crmInputs);
+                                string[] crmAcceptIssues;
+                                if (!coordinator.TryAcceptResult(crmResult, out crmAcceptIssues))
+                                {
+                                    deferredIssues.Add(BuildFailureMessage("Ο Jarvis απέρριψε το αποτέλεσμα της εργασίας CRM.", crmAcceptIssues));
+                                }
+                                else
+                                {
+                                    LogSnapshot(crmResult.Success ? "echo_crm_accepted" : "echo_crm_failed", coordinator.Inspect(), coordinator.GetDispatchableObjectIds(), crmStep.ObjectId, crmResult.Success ? null : crmResult.Issues.ToArray(), null);
+                                    if (crmResult.Success)
+                                        completedSideEffects.Add(BuildCrmStatus(crmResult));
+                                    else
+                                        deferredIssues.Add(BuildFailureMessage("Η εργασία CRM δεν ολοκληρώθηκε.", crmResult.Issues.ToArray()));
+                                }
+                            }
+                        }
                     }
-                    string[] crmBeginIssues;
-                    if (!coordinator.TryBeginDispatch(crmStep.ObjectId, out crmBeginIssues))
-                    {
-                        outcome.UserMessage = BuildFailureMessage("Ο Jarvis δεν επέτρεψε την εργασία CRM.", crmBeginIssues);
-                        return outcome;
-                    }
-                    LogSnapshot("echo_crm_running", coordinator.Inspect(), coordinator.GetDispatchableObjectIds(), crmStep.ObjectId, null, null);
-                    JarvisTaskExecutionResult crmResult = await JarvisControlledEchoTaskExecutor.ExecuteCreateCrmTaskAsync(xSupport, crmStep.ObjectId, crmInputs);
-                    string[] crmAcceptIssues;
-                    if (!coordinator.TryAcceptResult(crmResult, out crmAcceptIssues))
-                    {
-                        outcome.UserMessage = BuildFailureMessage("Ο Jarvis απέρριψε το αποτέλεσμα της εργασίας CRM.", crmAcceptIssues);
-                        return outcome;
-                    }
-                    LogSnapshot(crmResult.Success ? "echo_crm_accepted" : "echo_crm_failed", coordinator.Inspect(), coordinator.GetDispatchableObjectIds(), crmStep.ObjectId, crmResult.Success ? null : crmResult.Issues.ToArray(), null);
-                    if (!crmResult.Success)
-                    {
-                        outcome.UserMessage = BuildFailureMessage("Η δημιουργία εργασίας CRM απέτυχε.", crmResult.Issues.ToArray());
-                        return outcome;
-                    }
-                    completedSideEffects.Add(BuildCrmStatus(crmResult));
                 }
 
                 JarvisExecutionStepSnapshot calendarStep = FindStep(coordinator.Inspect(), "CreateCalendarEvent", "Echo");
@@ -178,52 +178,62 @@ namespace S1Jarvis.Core
                     string calendarFragment = ReadIntentFragment(planning, calendarStep.ObjectId);
                     if (LooksLikeExternalInvitation(calendarFragment))
                     {
-                        outcome.UserMessage = "Ο Jarvis χρειάζεται ξεχωριστή επιβεβαίωση πριν στείλει Outlook πρόσκληση σε τρίτους. Η προσωπική καταχώρηση χωρίς attendees μπορεί να εκτελεστεί άμεσα.";
-                        return outcome;
+                        deferredIssues.Add("Το Outlook event περιλαμβάνει πιθανή πρόσκληση τρίτου και χρειάζεται ξεχωριστή επιβεβαίωση για attendees.");
                     }
-
-                    if (!GrantInitialInstructionAuthorization(coordinator, calendarStep, out string[] calendarAuthIssues))
+                    else
                     {
-                        outcome.UserMessage = BuildFailureMessage("Ο Jarvis δεν μπόρεσε να εξουσιοδοτήσει το προσωπικό calendar event από τη ρητή αρχική εντολή.", calendarAuthIssues);
-                        return outcome;
+                        string[] calendarAuthIssues;
+                        if (!GrantInitialInstructionAuthorization(coordinator, calendarStep, out calendarAuthIssues))
+                        {
+                            deferredIssues.Add(BuildFailureMessage("Το calendar event χρειάζεται επίλυση πριν εκτελεστεί.", calendarAuthIssues));
+                        }
+                        else
+                        {
+                            JObject calendarInputs;
+                            string[] calendarInputIssues;
+                            if (!coordinator.TryGetDispatchInputs(calendarStep.ObjectId, out calendarInputs, out calendarInputIssues))
+                            {
+                                deferredIssues.Add(BuildFailureMessage("Το calendar event χρειάζεται επιπλέον πληροφορίες.", calendarInputIssues));
+                            }
+                            else
+                            {
+                                string[] calendarBeginIssues;
+                                if (!coordinator.TryBeginDispatch(calendarStep.ObjectId, out calendarBeginIssues))
+                                {
+                                    deferredIssues.Add(BuildFailureMessage("Το calendar event δεν είναι ακόμη dispatchable.", calendarBeginIssues));
+                                }
+                                else
+                                {
+                                    LogSnapshot("echo_calendar_running", coordinator.Inspect(), coordinator.GetDispatchableObjectIds(), calendarStep.ObjectId, null, null);
+                                    JarvisTaskExecutionResult calendarResult = await JarvisControlledEchoTaskExecutor.ExecuteCreateCalendarEventAsync(xSupport, calendarStep.ObjectId, calendarInputs);
+                                    string[] calendarAcceptIssues;
+                                    if (!coordinator.TryAcceptResult(calendarResult, out calendarAcceptIssues))
+                                    {
+                                        deferredIssues.Add(BuildFailureMessage("Ο Jarvis απέρριψε το αποτέλεσμα του calendar event.", calendarAcceptIssues));
+                                    }
+                                    else
+                                    {
+                                        LogSnapshot(calendarResult.Success ? "echo_calendar_accepted" : "echo_calendar_failed", coordinator.Inspect(), coordinator.GetDispatchableObjectIds(), calendarStep.ObjectId, calendarResult.Success ? null : calendarResult.Issues.ToArray(), null);
+                                        if (calendarResult.Success)
+                                            completedSideEffects.Add(BuildCalendarStatus(calendarResult));
+                                        else
+                                            deferredIssues.Add(BuildFailureMessage("Το Outlook calendar event δεν ολοκληρώθηκε.", calendarResult.Issues.ToArray()));
+                                    }
+                                }
+                            }
+                        }
                     }
-
-                    JObject calendarInputs;
-                    string[] calendarInputIssues;
-                    if (!coordinator.TryGetDispatchInputs(calendarStep.ObjectId, out calendarInputs, out calendarInputIssues))
-                    {
-                        outcome.UserMessage = BuildFailureMessage("Ο Jarvis απέρριψε τα inputs του calendar event.", calendarInputIssues);
-                        return outcome;
-                    }
-                    string[] calendarBeginIssues;
-                    if (!coordinator.TryBeginDispatch(calendarStep.ObjectId, out calendarBeginIssues))
-                    {
-                        outcome.UserMessage = BuildFailureMessage("Ο Jarvis δεν επέτρεψε το calendar event.", calendarBeginIssues);
-                        return outcome;
-                    }
-                    LogSnapshot("echo_calendar_running", coordinator.Inspect(), coordinator.GetDispatchableObjectIds(), calendarStep.ObjectId, null, null);
-                    JarvisTaskExecutionResult calendarResult = await JarvisControlledEchoTaskExecutor.ExecuteCreateCalendarEventAsync(xSupport, calendarStep.ObjectId, calendarInputs);
-                    string[] calendarAcceptIssues;
-                    if (!coordinator.TryAcceptResult(calendarResult, out calendarAcceptIssues))
-                    {
-                        outcome.UserMessage = BuildFailureMessage("Ο Jarvis απέρριψε το αποτέλεσμα του calendar event.", calendarAcceptIssues);
-                        return outcome;
-                    }
-                    LogSnapshot(calendarResult.Success ? "echo_calendar_accepted" : "echo_calendar_failed", coordinator.Inspect(), coordinator.GetDispatchableObjectIds(), calendarStep.ObjectId, calendarResult.Success ? null : calendarResult.Issues.ToArray(), null);
-                    if (!calendarResult.Success)
-                    {
-                        outcome.UserMessage = BuildFailureMessage("Η δημιουργία Outlook calendar event απέτυχε.", calendarResult.Issues.ToArray());
-                        return outcome;
-                    }
-                    completedSideEffects.Add(BuildCalendarStatus(calendarResult));
                 }
+
+                foreach (string issue in deferredIssues)
+                    completedSideEffects.Add("⚠ " + issue);
 
                 if (!hasEmail)
                 {
                     string table = string.IsNullOrWhiteSpace(datasetJson) ? string.Empty : JarvisPresentationComposer.BuildMarkdownTable(datasetJson, 250);
                     string intro = presentation == null ? null : presentation.Intro;
-                    if (string.IsNullOrWhiteSpace(intro)) intro = "Ολοκλήρωσα την εντολή.";
-                    outcome.Completed = true;
+                    if (string.IsNullOrWhiteSpace(intro)) intro = deferredIssues.Count == 0 ? "Ολοκλήρωσα την εντολή." : "Εκτέλεσα όσα βήματα ήταν διαθέσιμα και χρειάζομαι διευκρίνιση για τα υπόλοιπα.";
+                    outcome.Completed = deferredIssues.Count == 0;
                     outcome.UserMessage = BuildCombinedMessage(intro, table, completedSideEffects, null);
                     return outcome;
                 }
@@ -231,7 +241,7 @@ namespace S1Jarvis.Core
                 JarvisExecutionStepSnapshot emailStep = FindStep(coordinator.Inspect(), "SendEmail", "Echo");
                 if (emailStep == null)
                 {
-                    outcome.UserMessage = "Ο Jarvis απέρριψε το plan: λείπει το SendEmail/Echo βήμα.";
+                    outcome.UserMessage = BuildCombinedMessage(null, null, completedSideEffects, "Ο Jarvis απέρριψε το plan: λείπει το SendEmail/Echo βήμα.");
                     return outcome;
                 }
 
@@ -239,7 +249,9 @@ namespace S1Jarvis.Core
                 if (!pendingSession.TryCapture(coordinator, out captureIssues))
                 {
                     LogSnapshot("confirmation_payload_rejected", coordinator.Inspect(), coordinator.GetDispatchableObjectIds(), emailStep.ObjectId, captureIssues, null);
-                    outcome.UserMessage = BuildFailureMessage("Ο Jarvis δεν μπόρεσε να παγώσει το payload για επιβεβαίωση.", captureIssues);
+                    completedSideEffects.Add("⚠ " + BuildFailureMessage("Το email δεν μπόρεσε να προετοιμαστεί για επιβεβαίωση.", captureIssues));
+                    string failedTable = string.IsNullOrWhiteSpace(datasetJson) ? string.Empty : JarvisPresentationComposer.BuildMarkdownTable(datasetJson, 250);
+                    outcome.UserMessage = BuildCombinedMessage("Εκτέλεσα όσα ανεξάρτητα βήματα ήταν διαθέσιμα.", failedTable, completedSideEffects, null);
                     return outcome;
                 }
 
@@ -380,6 +392,66 @@ namespace S1Jarvis.Core
             item.Value = new JValue(match.Value);
             item.Kind = JarvisPrerequisiteResolutionKind.ResolvedFromRouting;
             item.Reason = "Literal email recipient extracted deterministically from the atomic SendEmail intent fragment.";
+        }
+
+        private static void ResolveDeterministicRuntimeContext(JarvisShadowOrchestrationResult planning, XSupport xSupport)
+        {
+            if (planning == null || planning.Graph == null || xSupport == null || xSupport.ConnectionInfo == null) return;
+            int currentUserId = xSupport.ConnectionInfo.UserId;
+            if (currentUserId <= 0) return;
+
+            foreach (JarvisValidatedTaskNode node in planning.Graph.Nodes.Where(x => x != null && x.Descriptor != null))
+            {
+                if (!RefersToCurrentOperator(node.IntentFragment)) continue;
+
+                bool needsActor = false;
+                foreach (string toolName in node.Descriptor.Tools ?? new string[0])
+                {
+                    JarvisToolPrerequisiteDescriptor contract = JarvisToolRegistry.FindPrerequisites(toolName);
+                    if (contract == null) continue;
+                    foreach (string resolution in contract.ResolutionInputs ?? new string[0])
+                    {
+                        string token = resolution ?? string.Empty;
+                        if (token.IndexOf("actorUserId", StringComparison.OrdinalIgnoreCase) >= 0)
+                        {
+                            needsActor = true;
+                            break;
+                        }
+                    }
+                    if (needsActor) break;
+                }
+
+                if (!needsActor) continue;
+
+                SetResolvedRuntimeValue(node, "actorUserId", new JValue(currentUserId), "Current operator resolved deterministically from the active Soft1 session.");
+                JarvisPrerequisiteResolutionItem assignee = node.Prerequisites.FirstOrDefault(x => x != null && string.Equals(x.InputName, "assignee", StringComparison.OrdinalIgnoreCase));
+                if (assignee != null && assignee.Value == null)
+                {
+                    assignee.Value = new JValue(currentUserId);
+                    assignee.Kind = JarvisPrerequisiteResolutionKind.ResolvedFromRouting;
+                    assignee.Reason = "Self-assignment resolved deterministically to the active Soft1 operator.";
+                }
+            }
+        }
+
+        private static bool RefersToCurrentOperator(string fragment)
+        {
+            string value = (fragment ?? string.Empty).ToLowerInvariant();
+            return value.Contains("βάλε μου") || value.Contains("βαλε μου") || value.Contains("για μένα") || value.Contains("για μενα") ||
+                   value.Contains("σε εμένα") || value.Contains("σε εμενα") || value.Contains("my task") || value.Contains("assign to me");
+        }
+
+        private static void SetResolvedRuntimeValue(JarvisValidatedTaskNode node, string inputName, JToken value, string reason)
+        {
+            JarvisPrerequisiteResolutionItem item = node.Prerequisites.FirstOrDefault(x => x != null && string.Equals(x.InputName, inputName, StringComparison.OrdinalIgnoreCase));
+            if (item == null)
+            {
+                item = new JarvisPrerequisiteResolutionItem { InputName = inputName, Required = true };
+                node.Prerequisites.Add(item);
+            }
+            item.Value = value == null ? null : value.DeepClone();
+            item.Kind = JarvisPrerequisiteResolutionKind.ResolvedFromRouting;
+            item.Reason = reason ?? string.Empty;
         }
 
         private static string ReadIntentFragment(JarvisShadowOrchestrationResult planning, string objectId)
