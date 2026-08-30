@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 using Newtonsoft.Json.Linq;
 
 namespace S1Jarvis.Core
@@ -8,7 +9,9 @@ namespace S1Jarvis.Core
     /// <summary>
     /// Presentation-only policy for addressable task results. It never invents
     /// object identities or URLs: links are emitted only from authoritative
-    /// executor outputs and only using schemes already supported by Jarvis UI.
+    /// executor outputs and only using schemes supported by Jarvis UI/WebView.
+    /// Local artifacts are normalized to canonical file:// URIs; raw Windows paths
+    /// must never be placed directly in markdown href values.
     /// </summary>
     internal static class JarvisResultLinkPolicy
     {
@@ -26,7 +29,10 @@ namespace S1Jarvis.Core
             AddFileLink(result.Outputs, "path", links);
             AddFileArtifactLink(result.Outputs, links);
 
-            return links.ToArray();
+            return links
+                .Where(x => !string.IsNullOrWhiteSpace(x))
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToArray();
         }
 
         private static void AddSoft1CrmLinks(JarvisTaskExecutionResult result, List<string> links)
@@ -70,35 +76,60 @@ namespace S1Jarvis.Core
             string url = ReadString(outputs, property);
             if (!string.IsNullOrWhiteSpace(url) &&
                 (url.StartsWith("https://", StringComparison.OrdinalIgnoreCase) || url.StartsWith("http://", StringComparison.OrdinalIgnoreCase)))
-                links.Add("[" + label + "](" + url.Trim() + ")");
+                links.Add("[" + EscapeMarkdownLabel(label) + "](" + url.Trim() + ")");
         }
 
         private static void AddFileLink(JObject outputs, string property, List<string> links)
         {
             string path = ReadString(outputs, property);
             if (string.IsNullOrWhiteSpace(path)) return;
+
+            string fullPath;
             string label;
-            try { label = Path.GetFileName(path); }
-            catch { label = "Άνοιγμα αρχείου"; }
+            string uri;
+            try
+            {
+                fullPath = Path.GetFullPath(path.Trim());
+                label = Path.GetFileName(fullPath);
+                uri = new Uri(fullPath, UriKind.Absolute).AbsoluteUri;
+            }
+            catch
+            {
+                return;
+            }
+
             if (string.IsNullOrWhiteSpace(label)) label = "Άνοιγμα αρχείου";
-            links.Add("[" + label + "](" + path.Trim() + ")");
+            if (string.IsNullOrWhiteSpace(uri) || !uri.StartsWith("file://", StringComparison.OrdinalIgnoreCase)) return;
+
+            // Escape only visible markdown text. Never mutate/escape the URI itself;
+            // doing so turns underscores and other valid path characters into a
+            // different filesystem path after WebView navigation.
+            links.Add("[" + EscapeMarkdownLabel(label) + "](" + uri + ")");
         }
 
         private static void AddFileArtifactLink(JObject outputs, List<string> links)
         {
+            // Top-level path is authoritative when both projections are present.
+            if (!string.IsNullOrWhiteSpace(ReadString(outputs, "path"))) return;
+
             JToken artifact = outputs["file_artifact"];
             if (artifact == null) return;
             if (artifact.Type == JTokenType.String)
             {
-                if (string.IsNullOrWhiteSpace(ReadString(outputs, "path")))
-                {
-                    var wrapper = new JObject { ["path"] = artifact.ToString() };
-                    AddFileLink(wrapper, "path", links);
-                }
+                var wrapper = new JObject { ["path"] = artifact.ToString() };
+                AddFileLink(wrapper, "path", links);
                 return;
             }
             JObject obj = artifact as JObject;
             if (obj != null) AddFileLink(obj, "path", links);
+        }
+
+        private static string EscapeMarkdownLabel(string value)
+        {
+            return (value ?? string.Empty)
+                .Replace("\\", "\\\\")
+                .Replace("[", "\\[")
+                .Replace("]", "\\]");
         }
 
         private static int ReadInt(JObject outputs, string property)
