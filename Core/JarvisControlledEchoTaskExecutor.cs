@@ -13,7 +13,7 @@ namespace S1Jarvis.Core
     /// Controlled execution for promoted Echo write tasks.
     /// Jarvis owns graph state, prerequisites and confirmation. Echo may only
     /// materialize the registered terminal tool for the assigned atomic task.
-    /// Behavioral policy is resolved exclusively from JarvisPolicyRegistry.
+    /// Behavioral policy scope is resolved by JarvisAgentContextBuilder.
     /// </summary>
     internal static class JarvisControlledEchoTaskExecutor
     {
@@ -28,8 +28,7 @@ namespace S1Jarvis.Core
                 int currentUserId = xSupport != null && xSupport.ConnectionInfo != null
                     ? xSupport.ConnectionInfo.UserId
                     : 0;
-                string policies = JarvisPolicyRegistry.BuildTrainingContext(
-                    "Echo", "CreateCrmTask", new[] { "CRM" }, new[] { "create_crm_task" });
+                string policies = JarvisAgentContextBuilder.BuildTrainingPolicyContext("Echo", "CreateCrmTask");
 
                 var request = new JObject
                 {
@@ -123,8 +122,7 @@ namespace S1Jarvis.Core
             {
                 string fragment = ReadFragment(dispatchInputs);
                 string runtimeNow = DateTime.Now.ToString("yyyy-MM-ddTHH:mm:ss");
-                string policies = JarvisPolicyRegistry.BuildTrainingContext(
-                    "Echo", "CreateCalendarEvent", new[] { "Calendar" }, new[] { "create_outlook_event" });
+                string policies = JarvisAgentContextBuilder.BuildTrainingPolicyContext("Echo", "CreateCalendarEvent");
 
                 var request = new JObject
                 {
