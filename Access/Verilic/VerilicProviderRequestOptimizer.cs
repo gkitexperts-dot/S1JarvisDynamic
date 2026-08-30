@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Text;
@@ -942,6 +942,15 @@ namespace S1Jarvis.Access.Verilic
             if (string.IsNullOrWhiteSpace(n)) return false;
 
             if (ContainsAnyNormalized(n, "στειλ", "στελν", "email", "mail", "συνημ"))
+                return false;
+
+            // Direct-export optimization is valid only for a single export intent.
+            // If the same request also asks for a CRM/calendar follow-up, keep the
+            // mature full tool set so export_query_to_file and create_crm_task /
+            // create_outlook_event can both execute in the same turn.
+            if (ContainsAnyNormalized(n,
+                "task", "εργασ", "crm", "υπενθυμ",
+                "calendar", "ημερολογ", "ραντεβου"))
                 return false;
 
             bool formatOrFile = ContainsAnyNormalized(n,
