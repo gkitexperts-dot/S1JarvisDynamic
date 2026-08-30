@@ -11,8 +11,9 @@ namespace S1Jarvis.Core
     /// The authenticated Soft1 runtime company is authoritative. Document SQL is
     /// rewritten before execution so FINDOC is always company-scoped; FPRMS and
     /// SERIES receive the same company predicate when their runtime schema exposes
-    /// a COMPANY column. This avoids cross-company metadata/classification leaks
-    /// without assuming that a master-table id is globally unique.
+    /// a COMPANY column and the table actually participates in the query. This
+    /// avoids cross-company metadata/classification leaks without assuming that a
+    /// master-table id is globally unique.
     /// </summary>
     internal static class JarvisDocumentCompanyScopePolicy
     {
@@ -50,13 +51,13 @@ namespace S1Jarvis.Core
 
             return "[JARVIS_CURRENT_COMPANY_SCOPE] currentCompanyId=" + scope.CompanyId +
                    "; requiredPredicates=" + string.Join(",", parts.ToArray()) +
-                   "; these predicates are mandatory for every FINDOC document query.";
+                   "; these predicates are mandatory whenever the corresponding table participates in a FINDOC document query.";
         }
 
         /// <summary>
         /// Re-applies tenant isolation to an already planned/reused SELECT. This is
-        /// intentionally independent of the natural-language request, so an export
-        /// or continuation cannot bypass company scope by reusing upstream SQL.
+        /// intentionally independent of the natural-language request, so any agent,
+        /// export or continuation cannot bypass company scope by reusing SQL.
         /// Non-FINDOC SQL is returned unchanged.
         /// </summary>
         internal static string EnforceIfFindocQuery(XSupport xSupport, string sql)
@@ -111,18 +112,10 @@ namespace S1Jarvis.Core
             {
                 findocAlias + ".COMPANY=" + scope.CompanyId
             };
-            if (scope.FprmsHasCompany)
-            {
-                if (string.IsNullOrWhiteSpace(fprmsAlias))
-                    throw new InvalidOperationException("FPRMS exposes COMPANY but the document query has no FPRMS join.");
+            if (scope.FprmsHasCompany && !string.IsNullOrWhiteSpace(fprmsAlias))
                 predicates.Add(fprmsAlias + ".COMPANY=" + scope.CompanyId);
-            }
-            if (scope.SeriesHasCompany)
-            {
-                if (string.IsNullOrWhiteSpace(seriesAlias))
-                    throw new InvalidOperationException("SERIES exposes COMPANY but the document query has no SERIES join.");
+            if (scope.SeriesHasCompany && !string.IsNullOrWhiteSpace(seriesAlias))
                 predicates.Add(seriesAlias + ".COMPANY=" + scope.CompanyId);
-            }
 
             string result = sql;
             foreach (string predicate in predicates)
@@ -148,8 +141,10 @@ namespace S1Jarvis.Core
             }
 
             Require(sql, findocAlias, scope.CompanyId, "FINDOC", issues);
-            if (scope.FprmsHasCompany) Require(sql, fprmsAlias, scope.CompanyId, "FPRMS", issues);
-            if (scope.SeriesHasCompany) Require(sql, seriesAlias, scope.CompanyId, "SERIES", issues);
+            if (scope.FprmsHasCompany && !string.IsNullOrWhiteSpace(fprmsAlias))
+                Require(sql, fprmsAlias, scope.CompanyId, "FPRMS", issues);
+            if (scope.SeriesHasCompany && !string.IsNullOrWhiteSpace(seriesAlias))
+                Require(sql, seriesAlias, scope.CompanyId, "SERIES", issues);
             return issues.Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
         }
 
