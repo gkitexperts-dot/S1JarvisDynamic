@@ -23,11 +23,6 @@ namespace S1Jarvis.Core
         internal bool OutgoingCandidate { get; private set; }
     }
 
-    /// <summary>
-    /// Authoritative business-entity knowledge shared by orchestration, agents
-    /// and deterministic resolvers. Behavioral rules belong exclusively to
-    /// JarvisPolicyRegistry; this catalog contains facts/mappings only.
-    /// </summary>
     internal static class JarvisBusinessEntityCatalog
     {
         private static readonly JarvisTraderRoleDescriptor[] TraderRoles =
@@ -38,39 +33,16 @@ namespace S1Jarvis.Core
             new JarvisTraderRoleDescriptor(16, "Creditor", "CREDITOR", true, false)
         };
 
-        internal static IReadOnlyList<JarvisTraderRoleDescriptor> AllTraderRoles
-        {
-            get { return TraderRoles; }
-        }
-
-        internal static JarvisTraderRoleDescriptor FindTraderRole(int sodType)
-        {
-            return TraderRoles.FirstOrDefault(x => x.SodType == sodType);
-        }
-
+        internal static IReadOnlyList<JarvisTraderRoleDescriptor> AllTraderRoles { get { return TraderRoles; } }
+        internal static JarvisTraderRoleDescriptor FindTraderRole(int sodType) { return TraderRoles.FirstOrDefault(x => x.SodType == sodType); }
         internal static JarvisTraderRoleDescriptor FindTraderRole(string role)
         {
             if (string.IsNullOrWhiteSpace(role)) return null;
             return TraderRoles.FirstOrDefault(x => string.Equals(x.Role, role.Trim(), StringComparison.OrdinalIgnoreCase));
         }
-
-        internal static string RoleName(int sodType)
-        {
-            JarvisTraderRoleDescriptor descriptor = FindTraderRole(sodType);
-            return descriptor == null ? "Other" : descriptor.Role;
-        }
-
-        internal static bool IsIncomingTraderRole(int sodType)
-        {
-            JarvisTraderRoleDescriptor descriptor = FindTraderRole(sodType);
-            return descriptor != null && descriptor.IncomingCandidate;
-        }
-
-        internal static bool IsOutgoingTraderRole(int sodType)
-        {
-            JarvisTraderRoleDescriptor descriptor = FindTraderRole(sodType);
-            return descriptor != null && descriptor.OutgoingCandidate;
-        }
+        internal static string RoleName(int sodType) { JarvisTraderRoleDescriptor d = FindTraderRole(sodType); return d == null ? "Other" : d.Role; }
+        internal static bool IsIncomingTraderRole(int sodType) { JarvisTraderRoleDescriptor d = FindTraderRole(sodType); return d != null && d.IncomingCandidate; }
+        internal static bool IsOutgoingTraderRole(int sodType) { JarvisTraderRoleDescriptor d = FindTraderRole(sodType); return d != null && d.OutgoingCandidate; }
 
         internal static JObject BuildAgentContext()
         {
@@ -102,12 +74,13 @@ namespace S1Jarvis.Core
                     ["transactionDateField"] = "TRNDATE",
                     ["traderForeignKey"] = "TRDR",
                     ["seriesField"] = "SERIES",
+                    ["parameterField"] = "FPRMS",
                     ["sourceField"] = "SOSOURCE",
                     ["navigationIdentity"] = new JArray("SOSOURCE", "FINDOC"),
-                    ["classificationCompanions"] = new JArray("SERIES", "FPRMS"),
-                    ["classificationMetadata"] = new JArray("SERIES.NAME", "FPRMS.NAME"),
-                    ["seriesJoinKeys"] = new JArray("FINDOC.COMPANY=SERIES.COMPANY", "FINDOC.SOSOURCE=SERIES.SOSOURCE", "FINDOC.SERIES=SERIES.SERIES"),
-                    ["fprmsJoinKeys"] = new JArray("SERIES.FPRMS=FPRMS.FPRMS")
+                    ["classificationCompanions"] = new JArray("FPRMS", "SERIES"),
+                    ["classificationMetadata"] = new JArray("FPRMS.NAME", "SERIES.NAME"),
+                    ["fprmsJoinKeys"] = new JArray("FINDOC.FPRMS=FPRMS.FPRMS"),
+                    ["seriesJoinKeys"] = new JArray("SERIES.FPRMS=FPRMS.FPRMS")
                 }
             };
         }
