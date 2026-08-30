@@ -59,15 +59,14 @@ namespace S1Jarvis.Core
                 bool hasEmail = HasTask(planning, "SendEmail");
                 if (hasEmail && pendingSession == null)
                 {
-                    outcome.UserMessage = "Το controlled orchestration δεν έχει διαθέσιμο confirmation session.";
+                    outcome.UserMessage = JarvisPresentationGateway.BuildFailureMessage(
+                        "Το controlled orchestration δεν έχει διαθέσιμο confirmation session.", null);
                     return outcome;
                 }
                 ResolveDeterministicSendRecipient(planning);
                 ResolveDeterministicRuntimeContext(planning, runtimeContext);
                 if (activeContext != null) activeContext.CapturePlanning(planning);
 
-                // A supported re-plan without SendEmail supersedes any previously
-                // frozen email payload. Never leave stale confirmation state alive.
                 if (!hasEmail && pendingSession != null && pendingSession.HasPending)
                 {
                     pendingSession.Clear();
@@ -79,7 +78,8 @@ namespace S1Jarvis.Core
                 LogSnapshot("initial", before, coordinator.GetDispatchableObjectIds(), null, null, null);
                 if (!before.IsValid)
                 {
-                    outcome.UserMessage = BuildFailureMessage("Ο Jarvis απέρριψε το execution plan.", before.ValidationIssues.ToArray());
+                    outcome.UserMessage = JarvisPresentationGateway.BuildFailureMessage(
+                        "Ο Jarvis απέρριψε το execution plan.", before.ValidationIssues);
                     return outcome;
                 }
 
@@ -95,14 +95,15 @@ namespace S1Jarvis.Core
                     if (!coordinator.TryGetDispatchInputs(reportStep.ObjectId, out reportInputs, out reportInputIssues))
                     {
                         LogSnapshot("dispatch_input_rejected", coordinator.Inspect(), coordinator.GetDispatchableObjectIds(), reportStep.ObjectId, reportInputIssues, null);
-                        outcome.UserMessage = BuildFailureMessage("Ο Jarvis απέρριψε τα inputs του Atlas.", reportInputIssues);
+                        outcome.UserMessage = JarvisPresentationGateway.BuildFailureMessage(
+                            "Ο Jarvis απέρριψε τα inputs του Atlas.", reportInputIssues);
                         return outcome;
                     }
 
                     string ambiguityMessage = JarvisReportIdentityGuard.GetAmbiguityMessage(xSupport, reportInputs);
                     if (!string.IsNullOrWhiteSpace(ambiguityMessage))
                     {
-                        outcome.UserMessage = ambiguityMessage;
+                        outcome.UserMessage = JarvisPresentationGateway.FinalizeFreeform(ambiguityMessage);
                         return outcome;
                     }
 
@@ -115,7 +116,8 @@ namespace S1Jarvis.Core
                     if (!coordinator.TryBeginDispatch(reportStep.ObjectId, out beginIssues))
                     {
                         LogSnapshot("dispatch_rejected", coordinator.Inspect(), coordinator.GetDispatchableObjectIds(), reportStep.ObjectId, beginIssues, null);
-                        outcome.UserMessage = BuildFailureMessage("Ο Jarvis δεν επέτρεψε την εκτέλεση του Atlas.", beginIssues);
+                        outcome.UserMessage = JarvisPresentationGateway.BuildFailureMessage(
+                            "Ο Jarvis δεν επέτρεψε την εκτέλεση του Atlas.", beginIssues);
                         return outcome;
                     }
 
@@ -142,7 +144,8 @@ namespace S1Jarvis.Core
                         string[] failedAcceptIssues;
                         coordinator.TryAcceptResult(reportResult, out failedAcceptIssues);
                         LogSnapshot("result_failed", coordinator.Inspect(), coordinator.GetDispatchableObjectIds(), reportStep.ObjectId, reportResult.Issues.ToArray(), null);
-                        outcome.UserMessage = BuildFailureMessage("Η ανάκτηση δεδομένων απέτυχε.", reportResult.Issues.ToArray());
+                        outcome.UserMessage = JarvisPresentationGateway.BuildFailureMessage(
+                            "Η ανάκτηση δεδομένων απέτυχε.", reportResult.Issues);
                         return outcome;
                     }
 
@@ -153,7 +156,7 @@ namespace S1Jarvis.Core
                     if (hasEmail)
                     {
                         string recipient = FindResolvedSendInput(planning, "to");
-                        presentation = await JarvisPresentationComposer.ComposeEmailAsync(xSupport, businessQuestion, datasetJson, recipient);
+                        presentation = await JarvisPresentationGateway.ComposeEmailAsync(xSupport, businessQuestion, datasetJson, recipient);
                         if (presentation != null && !string.IsNullOrWhiteSpace(presentation.EmailBody))
                             reportResult.Outputs["summary"] = presentation.EmailBody;
                         if (presentation != null && !string.IsNullOrWhiteSpace(presentation.EmailSubject))
@@ -161,21 +164,22 @@ namespace S1Jarvis.Core
                     }
                     else
                     {
-                        presentation = await JarvisPresentationComposer.ComposeReportAsync(xSupport, businessQuestion, datasetJson);
+                        presentation = await JarvisPresentationGateway.ComposeReportAsync(xSupport, businessQuestion, datasetJson);
                     }
 
                     string[] acceptIssues;
                     if (!coordinator.TryAcceptResult(reportResult, out acceptIssues))
                     {
                         LogSnapshot("result_rejected", coordinator.Inspect(), coordinator.GetDispatchableObjectIds(), reportStep.ObjectId, acceptIssues, null);
-                        outcome.UserMessage = BuildFailureMessage("Ο Jarvis απέρριψε το αποτέλεσμα του Atlas.", acceptIssues);
+                        outcome.UserMessage = JarvisPresentationGateway.BuildFailureMessage(
+                            "Ο Jarvis απέρριψε το αποτέλεσμα του Atlas.", acceptIssues);
                         return outcome;
                     }
                     LogSnapshot("result_accepted", coordinator.Inspect(), coordinator.GetDispatchableObjectIds(), reportStep.ObjectId, null, null);
                     if (activeContext != null) activeContext.CaptureVerifiedResult(reportResult);
                 }
 
-                var completedSideEffects = new List<string>();
+                var completedResults = new List<JarvisTaskExecutionResult>();
                 var deferredIssues = new List<string>();
 
                 JarvisExecutionStepSnapshot exportStep = FindStep(coordinator.Inspect(), "ExportData", "Atlas");
@@ -185,7 +189,8 @@ namespace S1Jarvis.Core
                     string[] exportInputIssues;
                     if (!coordinator.TryGetDispatchInputs(exportStep.ObjectId, out exportInputs, out exportInputIssues))
                     {
-                        deferredIssues.Add(BuildFailureMessage("Η εξαγωγή χρειάζεται επιπλέον πληροφορίες.", exportInputIssues));
+                        deferredIssues.Add(JarvisPresentationGateway.BuildFailureMessage(
+                            "Η εξαγωγή χρειάζεται επιπλέον πληροφορίες.", exportInputIssues));
                     }
                     else
                     {
@@ -196,21 +201,24 @@ namespace S1Jarvis.Core
                         string[] exportBeginIssues;
                         if (!coordinator.TryBeginDispatch(exportStep.ObjectId, out exportBeginIssues))
                         {
-                            deferredIssues.Add(BuildFailureMessage("Η εξαγωγή δεν είναι ακόμη dispatchable.", exportBeginIssues));
+                            deferredIssues.Add(JarvisPresentationGateway.BuildFailureMessage(
+                                "Η εξαγωγή δεν είναι ακόμη dispatchable.", exportBeginIssues));
                         }
                         else
                         {
                             JarvisTaskExecutionResult exportResult = await JarvisControlledExportTaskExecutor.ExecuteAsync(xSupport, exportStep.ObjectId, exportInputs);
                             string[] exportAcceptIssues;
                             if (!coordinator.TryAcceptResult(exportResult, out exportAcceptIssues))
-                                deferredIssues.Add(BuildFailureMessage("Ο Jarvis απέρριψε το αποτέλεσμα της εξαγωγής.", exportAcceptIssues));
+                                deferredIssues.Add(JarvisPresentationGateway.BuildFailureMessage(
+                                    "Ο Jarvis απέρριψε το αποτέλεσμα της εξαγωγής.", exportAcceptIssues));
                             else if (exportResult.Success)
                             {
-                                completedSideEffects.Add(BuildExportStatus(exportResult));
+                                completedResults.Add(exportResult);
                                 if (activeContext != null) activeContext.CaptureVerifiedResult(exportResult);
                             }
                             else
-                                deferredIssues.Add(BuildFailureMessage("Η εξαγωγή αρχείου απέτυχε.", exportResult.Issues.ToArray()));
+                                deferredIssues.Add(JarvisPresentationGateway.BuildFailureMessage(
+                                    "Η εξαγωγή αρχείου απέτυχε.", exportResult.Issues));
                         }
                     }
                 }
@@ -221,7 +229,8 @@ namespace S1Jarvis.Core
                     string[] crmAuthIssues;
                     if (!coordinator.GrantConfirmation(crmStep.ObjectId, out crmAuthIssues))
                     {
-                        deferredIssues.Add(BuildFailureMessage("Η εργασία CRM χρειάζεται επίλυση πριν εκτελεστεί.", crmAuthIssues));
+                        deferredIssues.Add(JarvisPresentationGateway.BuildFailureMessage(
+                            "Η εργασία CRM χρειάζεται επίλυση πριν εκτελεστεί.", crmAuthIssues));
                     }
                     else
                     {
@@ -229,14 +238,16 @@ namespace S1Jarvis.Core
                         string[] crmInputIssues;
                         if (!coordinator.TryGetDispatchInputs(crmStep.ObjectId, out crmInputs, out crmInputIssues))
                         {
-                            deferredIssues.Add(BuildFailureMessage("Η εργασία CRM χρειάζεται επιπλέον πληροφορίες.", crmInputIssues));
+                            deferredIssues.Add(JarvisPresentationGateway.BuildFailureMessage(
+                                "Η εργασία CRM χρειάζεται επιπλέον πληροφορίες.", crmInputIssues));
                         }
                         else
                         {
                             string[] crmBeginIssues;
                             if (!coordinator.TryBeginDispatch(crmStep.ObjectId, out crmBeginIssues))
                             {
-                                deferredIssues.Add(BuildFailureMessage("Η εργασία CRM δεν είναι ακόμη dispatchable.", crmBeginIssues));
+                                deferredIssues.Add(JarvisPresentationGateway.BuildFailureMessage(
+                                    "Η εργασία CRM δεν είναι ακόμη dispatchable.", crmBeginIssues));
                             }
                             else
                             {
@@ -245,18 +256,20 @@ namespace S1Jarvis.Core
                                 string[] crmAcceptIssues;
                                 if (!coordinator.TryAcceptResult(crmResult, out crmAcceptIssues))
                                 {
-                                    deferredIssues.Add(BuildFailureMessage("Ο Jarvis απέρριψε το αποτέλεσμα της εργασίας CRM.", crmAcceptIssues));
+                                    deferredIssues.Add(JarvisPresentationGateway.BuildFailureMessage(
+                                        "Ο Jarvis απέρριψε το αποτέλεσμα της εργασίας CRM.", crmAcceptIssues));
                                 }
                                 else
                                 {
                                     LogSnapshot(crmResult.Success ? "echo_crm_accepted" : "echo_crm_failed", coordinator.Inspect(), coordinator.GetDispatchableObjectIds(), crmStep.ObjectId, crmResult.Success ? null : crmResult.Issues.ToArray(), null);
                                     if (crmResult.Success)
                                     {
-                                        completedSideEffects.Add(BuildCrmStatus(crmResult));
+                                        completedResults.Add(crmResult);
                                         if (activeContext != null) activeContext.CaptureVerifiedResult(crmResult);
                                     }
                                     else
-                                        deferredIssues.Add(BuildFailureMessage("Η εργασία CRM δεν ολοκληρώθηκε.", crmResult.Issues.ToArray()));
+                                        deferredIssues.Add(JarvisPresentationGateway.BuildFailureMessage(
+                                            "Η εργασία CRM δεν ολοκληρώθηκε.", crmResult.Issues));
                                 }
                             }
                         }
@@ -270,21 +283,24 @@ namespace S1Jarvis.Core
                     string[] calendarInputIssues;
                     if (!coordinator.TryGetDispatchInputs(calendarStep.ObjectId, out calendarInputs, out calendarInputIssues))
                     {
-                        deferredIssues.Add(BuildFailureMessage("Το calendar event χρειάζεται επιπλέον πληροφορίες.", calendarInputIssues));
+                        deferredIssues.Add(JarvisPresentationGateway.BuildFailureMessage(
+                            "Το calendar event χρειάζεται επιπλέον πληροφορίες.", calendarInputIssues));
                     }
                     else
                     {
                         string[] calendarAuthIssues;
                         if (!coordinator.GrantConfirmation(calendarStep.ObjectId, out calendarAuthIssues))
                         {
-                            deferredIssues.Add(BuildFailureMessage("Το calendar event χρειάζεται ρητή επιβεβαίωση πριν εκτελεστεί.", calendarAuthIssues));
+                            deferredIssues.Add(JarvisPresentationGateway.BuildFailureMessage(
+                                "Το calendar event χρειάζεται ρητή επιβεβαίωση πριν εκτελεστεί.", calendarAuthIssues));
                         }
                         else
                         {
                             string[] calendarBeginIssues;
                             if (!coordinator.TryBeginDispatch(calendarStep.ObjectId, out calendarBeginIssues))
                             {
-                                deferredIssues.Add(BuildFailureMessage("Το calendar event δεν είναι ακόμη dispatchable.", calendarBeginIssues));
+                                deferredIssues.Add(JarvisPresentationGateway.BuildFailureMessage(
+                                    "Το calendar event δεν είναι ακόμη dispatchable.", calendarBeginIssues));
                             }
                             else
                             {
@@ -293,42 +309,42 @@ namespace S1Jarvis.Core
                                 string[] calendarAcceptIssues;
                                 if (!coordinator.TryAcceptResult(calendarResult, out calendarAcceptIssues))
                                 {
-                                    deferredIssues.Add(BuildFailureMessage("Ο Jarvis απέρριψε το αποτέλεσμα του calendar event.", calendarAcceptIssues));
+                                    deferredIssues.Add(JarvisPresentationGateway.BuildFailureMessage(
+                                        "Ο Jarvis απέρριψε το αποτέλεσμα του calendar event.", calendarAcceptIssues));
                                 }
                                 else
                                 {
                                     LogSnapshot(calendarResult.Success ? "echo_calendar_accepted" : "echo_calendar_failed", coordinator.Inspect(), coordinator.GetDispatchableObjectIds(), calendarStep.ObjectId, calendarResult.Success ? null : calendarResult.Issues.ToArray(), null);
                                     if (calendarResult.Success)
                                     {
-                                        completedSideEffects.Add(BuildCalendarStatus(calendarResult));
+                                        completedResults.Add(calendarResult);
                                         if (activeContext != null) activeContext.CaptureVerifiedResult(calendarResult);
                                     }
                                     else
-                                        deferredIssues.Add(BuildFailureMessage("Το Outlook calendar event δεν ολοκληρώθηκε.", calendarResult.Issues.ToArray()));
+                                        deferredIssues.Add(JarvisPresentationGateway.BuildFailureMessage(
+                                            "Το Outlook calendar event δεν ολοκληρώθηκε.", calendarResult.Issues));
                                 }
                             }
                         }
                     }
                 }
 
-                foreach (string issue in deferredIssues)
-                    completedSideEffects.Add("⚠ " + issue);
-
                 if (!hasEmail)
                 {
-                    string table = string.IsNullOrWhiteSpace(datasetJson) ? string.Empty : JarvisPresentationComposer.BuildMarkdownTable(datasetJson, 250);
                     string intro = presentation == null ? null : presentation.Intro;
-                    if (string.IsNullOrWhiteSpace(intro)) intro = deferredIssues.Count == 0 ? "Ολοκλήρωσα την εντολή." : "Εκτέλεσα όσα βήματα ήταν διαθέσιμα και χρειάζομαι διευκρίνιση για τα υπόλοιπα.";
                     outcome.Completed = deferredIssues.Count == 0;
                     if (outcome.Completed && activeContext != null) activeContext.Complete();
-                    outcome.UserMessage = BuildCombinedMessage(intro, table, completedSideEffects, null);
+                    outcome.UserMessage = JarvisPresentationGateway.BuildCombinedMessage(
+                        intro, datasetJson, completedResults, deferredIssues, null, outcome.Completed);
                     return outcome;
                 }
 
                 JarvisExecutionStepSnapshot emailStep = FindStep(coordinator.Inspect(), "SendEmail", "Echo");
                 if (emailStep == null)
                 {
-                    outcome.UserMessage = BuildCombinedMessage(null, null, completedSideEffects, "Ο Jarvis απέρριψε το plan: λείπει το SendEmail/Echo βήμα.");
+                    outcome.UserMessage = JarvisPresentationGateway.BuildCombinedMessage(
+                        null, datasetJson, completedResults, deferredIssues,
+                        "Ο Jarvis απέρριψε το plan: λείπει το SendEmail/Echo βήμα.", false);
                     return outcome;
                 }
 
@@ -336,23 +352,28 @@ namespace S1Jarvis.Core
                 if (!pendingSession.TryCapture(coordinator, out captureIssues))
                 {
                     LogSnapshot("confirmation_payload_rejected", coordinator.Inspect(), coordinator.GetDispatchableObjectIds(), emailStep.ObjectId, captureIssues, null);
-                    completedSideEffects.Add("⚠ " + BuildFailureMessage("Το email δεν μπόρεσε να προετοιμαστεί για επιβεβαίωση.", captureIssues));
-                    string failedTable = string.IsNullOrWhiteSpace(datasetJson) ? string.Empty : JarvisPresentationComposer.BuildMarkdownTable(datasetJson, 250);
-                    outcome.UserMessage = BuildCombinedMessage("Εκτέλεσα όσα ανεξάρτητα βήματα ήταν διαθέσιμα.", failedTable, completedSideEffects, null);
+                    deferredIssues.Add(JarvisPresentationGateway.BuildFailureMessage(
+                        "Το email δεν μπόρεσε να προετοιμαστεί για επιβεβαίωση.", captureIssues));
+                    outcome.UserMessage = JarvisPresentationGateway.BuildCombinedMessage(
+                        "Εκτέλεσα όσα ανεξάρτητα βήματα ήταν διαθέσιμα.", datasetJson,
+                        completedResults, deferredIssues, null, false);
                     return outcome;
                 }
 
                 LogSnapshot("confirmation_payload_frozen", coordinator.Inspect(), coordinator.GetDispatchableObjectIds(), pendingSession.PendingObjectId, null, pendingSession.PayloadHash);
                 if (activeContext != null) activeContext.CapturePendingConfirmation(pendingSession);
-                string reportTable = string.IsNullOrWhiteSpace(datasetJson) ? string.Empty : JarvisPresentationComposer.BuildMarkdownTable(datasetJson, 250);
-                string confirmation = BuildConfirmationMessage(pendingSession.FrozenPayload, presentation == null ? null : presentation.Intro);
-                outcome.UserMessage = BuildCombinedMessage(null, reportTable, completedSideEffects, confirmation);
+                string confirmation = JarvisPresentationGateway.BuildConfirmationMessage(
+                    pendingSession.FrozenPayload, presentation == null ? null : presentation.Intro);
+                outcome.UserMessage = JarvisPresentationGateway.BuildCombinedMessage(
+                    null, datasetJson, completedResults, deferredIssues, confirmation, false);
                 return outcome;
             }
             catch (Exception ex)
             {
                 DebugLog.Log("[ORCH-CONTROL] controlled pilot exception: " + ex);
-                if (outcome.Handled) outcome.UserMessage = "✖ Σφάλμα controlled orchestration: " + ex.Message;
+                if (outcome.Handled)
+                    outcome.UserMessage = JarvisPresentationGateway.BuildFailureMessage(
+                        "✖ Σφάλμα controlled orchestration:", new[] { ex.Message });
                 return outcome;
             }
         }
@@ -372,7 +393,8 @@ namespace S1Jarvis.Core
             if (!pendingSession.TryConfirm(userText, out coordinator, out objectId, out payloadHash, out issues))
             {
                 LogSnapshot("confirmation_rejected", null, new string[0], pendingSession.PendingObjectId, issues, pendingSession.PayloadHash);
-                outcome.UserMessage = BuildFailureMessage("Η επιβεβαίωση απορρίφθηκε από τον Jarvis.", issues);
+                outcome.UserMessage = JarvisPresentationGateway.BuildFailureMessage(
+                    "Η επιβεβαίωση απορρίφθηκε από τον Jarvis.", issues);
                 return outcome;
             }
 
@@ -383,7 +405,8 @@ namespace S1Jarvis.Core
             {
                 pendingSession.Clear();
                 if (activeContext != null) activeContext.ClearPendingConfirmation();
-                outcome.UserMessage = "Ο Jarvis απέρριψε την επιβεβαίωση: το pending task δεν είναι SendEmail/Echo.";
+                outcome.UserMessage = JarvisPresentationGateway.BuildFailureMessage(
+                    "Ο Jarvis απέρριψε την επιβεβαίωση: το pending task δεν είναι SendEmail/Echo.", null);
                 return outcome;
             }
 
@@ -393,7 +416,8 @@ namespace S1Jarvis.Core
                 LogSnapshot("echo_dispatch_rejected", coordinator.Inspect(), coordinator.GetDispatchableObjectIds(), objectId, beginIssues, payloadHash);
                 pendingSession.Clear();
                 if (activeContext != null) activeContext.ClearPendingConfirmation();
-                outcome.UserMessage = BuildFailureMessage("Ο Jarvis δεν επέτρεψε την αποστολή.", beginIssues);
+                outcome.UserMessage = JarvisPresentationGateway.BuildFailureMessage(
+                    "Ο Jarvis δεν επέτρεψε την αποστολή.", beginIssues);
                 return outcome;
             }
 
@@ -406,7 +430,9 @@ namespace S1Jarvis.Core
             if (!coordinator.TryAcceptResult(echoResult, out acceptIssues))
             {
                 LogSnapshot("echo_result_rejected", coordinator.Inspect(), coordinator.GetDispatchableObjectIds(), objectId, acceptIssues, payloadHash);
-                outcome.UserMessage = "Η ενέργεια αποστολής εκτελέστηκε, αλλά ο Jarvis δεν μπόρεσε να επικυρώσει το αποτέλεσμα. Δεν θα γίνει αυτόματο retry για αποφυγή διπλής αποστολής.";
+                outcome.UserMessage = JarvisPresentationGateway.BuildFailureMessage(
+                    "Η ενέργεια αποστολής εκτελέστηκε, αλλά ο Jarvis δεν μπόρεσε να επικυρώσει το αποτέλεσμα. Δεν θα γίνει αυτόματο retry για αποφυγή διπλής αποστολής.",
+                    acceptIssues);
                 return outcome;
             }
 
@@ -414,7 +440,8 @@ namespace S1Jarvis.Core
                 echoResult.Success ? null : echoResult.Issues.ToArray(), payloadHash);
             if (!echoResult.Success)
             {
-                outcome.UserMessage = BuildFailureMessage("Η αποστολή email απέτυχε.", echoResult.Issues.ToArray());
+                outcome.UserMessage = JarvisPresentationGateway.BuildFailureMessage(
+                    "Η αποστολή email απέτυχε.", echoResult.Issues);
                 return outcome;
             }
 
@@ -424,8 +451,7 @@ namespace S1Jarvis.Core
                 activeContext.CaptureVerifiedResult(echoResult);
                 activeContext.Complete();
             }
-            string to = frozenPayload == null || frozenPayload["to"] == null ? string.Empty : frozenPayload["to"].ToString();
-            outcome.UserMessage = "Το email στάλθηκε με επιτυχία" + (string.IsNullOrWhiteSpace(to) ? "." : " στο " + to + ".");
+            outcome.UserMessage = JarvisPresentationGateway.BuildTaskResultStatus(echoResult);
             return outcome;
         }
 
@@ -529,8 +555,6 @@ namespace S1Jarvis.Core
             }
         }
 
-
-
         private static void SetResolvedRuntimeValue(JarvisValidatedTaskNode node, string inputName, JToken value, string reason)
         {
             JarvisPrerequisiteResolutionItem item = node.Prerequisites.FirstOrDefault(x => x != null && string.Equals(x.InputName, inputName, StringComparison.OrdinalIgnoreCase));
@@ -562,55 +586,7 @@ namespace S1Jarvis.Core
             if (item == null) return;
             item.Value = new JValue(value.Trim());
             item.Kind = JarvisPrerequisiteResolutionKind.ResolvedFromRouting;
-            item.Reason = "Jarvis presentation layer composed/resolved this value before confirmation from validated task context.";
-        }
-
-        private static string BuildCrmStatus(JarvisTaskExecutionResult result)
-        {
-            JToken ids = result == null || result.Outputs == null ? null : result.Outputs["soaction_ids"];
-            string status = ids == null ? "✓ Η εργασία CRM στο Soft1 δημιουργήθηκε." : "✓ Η εργασία CRM στο Soft1 δημιουργήθηκε (ID: " + ids.ToString(Formatting.None) + ").";
-            string[] links = JarvisResultLinkMaterializer.BuildMarkdownLinks(result);
-            return links.Length == 0 ? status : status + " " + string.Join(" ", links);
-        }
-
-        private static string BuildCalendarStatus(JarvisTaskExecutionResult result)
-        {
-            string status = "✓ Το προσωπικό Outlook calendar event δημιουργήθηκε.";
-            string[] links = JarvisResultLinkMaterializer.BuildMarkdownLinks(result);
-            return links.Length == 0 ? status : status + " " + string.Join(" ", links);
-        }
-
-        private static string BuildExportStatus(JarvisTaskExecutionResult result)
-        {
-            string status = "✓ Το αρχείο εξαγωγής δημιουργήθηκε.";
-            string[] links = JarvisResultLinkMaterializer.BuildMarkdownLinks(result);
-            return links.Length == 0 ? status : status + " " + string.Join(" ", links);
-        }
-
-        private static string BuildCombinedMessage(string intro, string table, IList<string> statuses, string confirmation)
-        {
-            var parts = new List<string>();
-            if (!string.IsNullOrWhiteSpace(intro)) parts.Add(intro.Trim());
-            if (!string.IsNullOrWhiteSpace(table)) parts.Add(table.Trim());
-            if (statuses != null && statuses.Count > 0) parts.Add(string.Join("\n", statuses));
-            if (!string.IsNullOrWhiteSpace(confirmation)) parts.Add(confirmation.Trim());
-            return string.Join("\n\n", parts.ToArray());
-        }
-
-        private static string BuildConfirmationMessage(JObject payload, string intro)
-        {
-            if (payload == null) return "Δεν υπάρχει payload για επιβεβαίωση.";
-            string to = payload["to"] == null ? string.Empty : payload["to"].ToString();
-            string subject = payload["subject"] == null ? string.Empty : payload["subject"].ToString();
-            string body = payload["body"] == null ? string.Empty : payload["body"].ToString();
-            string prefix = string.IsNullOrWhiteSpace(intro) ? "Έχω ετοιμάσει το email που θα σταλεί:" : intro.Trim();
-            return prefix + "\n\n**Προς:** " + to + "\n**Θέμα:** " + subject + "\n\n" + body + "\n\nΝα το στείλω;";
-        }
-
-        private static string BuildFailureMessage(string prefix, string[] issues)
-        {
-            string detail = issues == null || issues.Length == 0 ? string.Empty : " " + string.Join(" | ", issues);
-            return prefix + detail;
+            item.Reason = "Canonical presentation channel composed/resolved this value before confirmation from validated task context.";
         }
 
         private static void LogSnapshot(string phase, JarvisExecutionControlSnapshot snapshot, string[] dispatchableObjectIds,
