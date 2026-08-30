@@ -5,13 +5,9 @@ using System.Linq;
 namespace S1Jarvis.Core
 {
     /// <summary>
-    /// Single context-policy entry point for every logical-agent dispatch.
-    /// It derives tools/domains from the authoritative task/tool registries,
-    /// then resolves the applicable central policies. Executors must not carry
-    /// their own lists of policy scopes.
-    ///
-    /// Knowledge/schema companions will be composed through this same boundary;
-    /// policy resolution is centralized here first.
+    /// Single policy-context entry point for every logical-agent dispatch and
+    /// Jarvis internal planning/presentation stage. It derives task scope from
+    /// authoritative registries; callers never maintain local policy lists.
     /// </summary>
     internal static class JarvisAgentContextBuilder
     {
@@ -35,6 +31,12 @@ namespace S1Jarvis.Core
         {
             return JarvisPolicyRegistry.BuildTrainingContext(
                 "Jarvis", "__decomposition", new string[0], new string[0]);
+        }
+
+        internal static string BuildPlanningPolicyContext()
+        {
+            return JarvisPolicyRegistry.BuildTrainingContext(
+                "Jarvis", "__planning", new string[0], new string[0]);
         }
 
         internal static string BuildPresentationPolicyContext()
