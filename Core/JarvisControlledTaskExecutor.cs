@@ -45,9 +45,14 @@ namespace S1Jarvis.Core
                     throw new InvalidOperationException("ReportData dispatch is missing business_question.");
 
                 string question = dispatchInputs["business_question"].ToString();
+                DebugLog.Log("[ORCH-SQL] plan_begin object=" + (objectId ?? string.Empty) + " question=" + OneLine(question));
+
                 string sql = await PlanAndValidateSqlAsync(xSupport, question, cancellationToken).ConfigureAwait(false);
+                DebugLog.Log("[ORCH-SQL] execute object=" + (objectId ?? string.Empty) + " sql=" + OneLine(sql));
 
                 string queryResult = JarvisTools.ExecuteQueryData(xSupport, sql);
+                DebugLog.Log("[ORCH-SQL] result object=" + (objectId ?? string.Empty) + " " + DescribeQueryResult(queryResult));
+
                 if (string.IsNullOrWhiteSpace(queryResult))
                     throw new InvalidOperationException("Atlas ReportData query returned an empty dataset.");
                 if (LooksLikeQueryError(queryResult))
@@ -55,7 +60,10 @@ namespace S1Jarvis.Core
 
                 string[] resultIssues = ValidateQueryResultForQuestion(question, queryResult);
                 if (resultIssues.Length > 0)
+                {
+                    DebugLog.Log("[ORCH-SQL] result_rejected object=" + (objectId ?? string.Empty) + " issues=" + OneLine(string.Join(" | ", resultIssues)));
                     throw new InvalidOperationException("Jarvis rejected Atlas result: " + string.Join(" | ", resultIssues));
+                }
 
                 string normalizedQueryResult = NormalizeQueryResultForQuestion(question, queryResult);
                 string summary = BuildDeterministicSummary(question, normalizedQueryResult);
@@ -65,10 +73,12 @@ namespace S1Jarvis.Core
                 result.Outputs["dataset"] = new JValue(normalizedQueryResult);
                 result.Outputs["summary"] = new JValue(summary);
                 result.Success = true;
+                DebugLog.Log("[ORCH-SQL] result_accepted object=" + (objectId ?? string.Empty) + " " + DescribeQueryResult(normalizedQueryResult));
                 return result;
             }
             catch (Exception ex)
             {
+                DebugLog.Log("[ORCH-SQL] failure object=" + (objectId ?? string.Empty) + " error=" + OneLine(ex.Message));
                 result.Issues.Add(ex.Message);
                 return result;
             }
@@ -99,12 +109,18 @@ namespace S1Jarvis.Core
                 if (string.IsNullOrWhiteSpace(sql))
                     throw new InvalidOperationException("Atlas ReportData returned query_data without SQL.");
 
+                DebugLog.Log("[ORCH-SQL] candidate attempt=" + attempt + " sql=" + OneLine(sql));
+
                 string[] issues = ValidateSqlForQuestion(question, sql);
                 if (issues.Length == 0)
+                {
+                    DebugLog.Log("[ORCH-SQL] accepted attempt=" + attempt + " sql=" + OneLine(sql));
                     return sql;
+                }
 
                 previousSql = sql;
                 previousDiagnostic = string.Join(" | ", issues);
+                DebugLog.Log("[ORCH-SQL] rejected attempt=" + attempt + " issues=" + OneLine(previousDiagnostic) + " sql=" + OneLine(sql));
             }
 
             throw new InvalidOperationException(
@@ -419,6 +435,43 @@ namespace S1Jarvis.Core
             {
                 return queryResult.Trim();
             }
+        }
+
+        private static string DescribeQueryResult(string queryResult)
+        {
+            if (string.IsNullOrWhiteSpace(queryResult))
+                return "chars=0 rowCount=<unknown> columns=[] preview=<empty>";
+
+            try
+            {
+                JObject root = JObject.Parse(queryResult);
+                JArray rows = root["rows"] as JArray;
+                int rowCount = (int?)root["totalRowCount"] ?? (int?)root["rowCount"] ?? (rows == null ? 0 : rows.Count);
+                string[] columns = rows == null
+                    ? new string[0]
+                    : rows.OfType<JObject>().Take(1).SelectMany(x => x.Properties().Select(p => p.Name)).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+                return "chars=" + queryResult.Length +
+                       " rowCount=" + rowCount +
+                       " columns=[" + string.Join(",", columns) + "]" +
+                       " preview=" + OneLine(Truncate(queryResult, 1200));
+            }
+            catch
+            {
+                return "chars=" + queryResult.Length + " rowCount=<unparsed> columns=[] preview=" + OneLine(Truncate(queryResult, 1200));
+            }
+        }
+
+        private static string OneLine(string value)
+        {
+            return (value ?? string.Empty).Replace("\r", " ").Replace("\n", " ").Replace("\t", " ").Trim();
+        }
+
+        private static string Truncate(string value, int maxChars)
+        {
+            string text = value ?? string.Empty;
+            if (maxChars <= 0 || text.Length <= maxChars)
+                return text;
+            return text.Substring(0, maxChars) + "...";
         }
 
         private static void EnsureSuccess(S1Jarvis.Core.AgentProxyResponse response, string fallback)
