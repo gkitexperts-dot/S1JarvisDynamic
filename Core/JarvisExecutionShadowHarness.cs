@@ -491,13 +491,16 @@ namespace S1Jarvis.Core
         private static string BuildCrmStatus(JarvisTaskExecutionResult result)
         {
             JToken ids = result == null || result.Outputs == null ? null : result.Outputs["soaction_ids"];
-            return ids == null ? "✓ Η εργασία CRM στο Soft1 δημιουργήθηκε." : "✓ Η εργασία CRM στο Soft1 δημιουργήθηκε (ID: " + ids.ToString(Formatting.None) + ").";
+            string status = ids == null ? "✓ Η εργασία CRM στο Soft1 δημιουργήθηκε." : "✓ Η εργασία CRM στο Soft1 δημιουργήθηκε (ID: " + ids.ToString(Formatting.None) + ").";
+            string[] links = JarvisResultLinkPolicy.BuildMarkdownLinks(result);
+            return links.Length == 0 ? status : status + " " + string.Join(" ", links);
         }
 
         private static string BuildCalendarStatus(JarvisTaskExecutionResult result)
         {
-            string id = result == null || result.Outputs == null || result.Outputs["eventId"] == null ? string.Empty : result.Outputs["eventId"].ToString();
-            return string.IsNullOrWhiteSpace(id) ? "✓ Το προσωπικό Outlook calendar event δημιουργήθηκε." : "✓ Το προσωπικό Outlook calendar event δημιουργήθηκε.";
+            string status = "✓ Το προσωπικό Outlook calendar event δημιουργήθηκε.";
+            string[] links = JarvisResultLinkPolicy.BuildMarkdownLinks(result);
+            return links.Length == 0 ? status : status + " " + string.Join(" ", links);
         }
 
         private static string BuildCombinedMessage(string intro, string table, IList<string> statuses, string confirmation)
