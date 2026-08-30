@@ -49,6 +49,12 @@ namespace S1Jarvis.Core
             internal const string NumericAlignmentMarker = "---:";
             internal const string DateAlignmentMarker = ":---:";
 
+            // Registered addressable URI templates. Presentation may instantiate
+            // them only from authoritative ids already present in verified output.
+            internal const string CrmTaskUriTemplate = "doc:2021:{soactionId}";
+            internal const string DocumentUriTemplate = "doc:{sosource}:{findoc}";
+            internal const string ItemUriTemplate = "item:{mtrl}";
+
             internal const int DefaultPreviewRows = 50;
             internal const int MaxChatTableRows = 250;
 
@@ -117,6 +123,9 @@ namespace S1Jarvis.Core
                        "currency=" + CurrencyNumberFormat + CurrencySuffix + "\n" +
                        "null=" + NullDisplay + "\n" +
                        "alignment=text:left,number:right,date:center\n" +
+                       "crm_task_uri=" + CrmTaskUriTemplate + "\n" +
+                       "document_uri=" + DocumentUriTemplate + "\n" +
+                       "item_uri=" + ItemUriTemplate + "\n" +
                        "addressable_results=clickable_when_authoritative_reference_exists\n" +
                        "continuations=use_same_presentation_policy";
             }
