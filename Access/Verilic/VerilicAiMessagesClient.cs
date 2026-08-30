@@ -134,6 +134,68 @@ namespace S1Jarvis.Access.Verilic
             if (result == null)
                 result = Failure("provider_upstream_error");
 
+            // JARVIS SUPERVISORY RECOVERY
+            // ---------------------------
+            // A logical agent is not authoritative about its own runtime
+            // capabilities. The request/tool registry is authoritative. If an
+            // otherwise successful model answer claims that a required tool or
+            // access is unavailable while this exact request carried registered
+            // tools, reject that answer and give the SAME logical agent one
+            // corrective retry. This is provider/model-neutral and happens above
+            // Google/OpenAI/Anthropic adapters. A real tool_result error is never
+            // masked or retried by this rule.
+            if (ShouldCorrectFalseCapabilityDenial(providerRequestJson, result))
+            {
+                HashSet<string> attachedTools = ReadToolNamesFromRequest(providerRequestJson);
+                DebugLog.Log("[JARVIS-SUPERVISOR] rejected false capability denial; agent=" +
+                    agentName + " tools=" + string.Join(",", attachedTools.OrderBy(x => x, StringComparer.OrdinalIgnoreCase)));
+
+                string correctedRequest = BuildCapabilityCorrectionRequest(
+                    providerRequestJson,
+                    result.ResponseText,
+                    attachedTools);
+
+                JarvisAgentRuntimeTarget retryTarget;
+                if (JarvisAgentRuntimeSnapshot.TryGet(agentName, out retryTarget) &&
+                    retryTarget != null && retryTarget.HasApiKey)
+                {
+                    AgentProxyResponse retryResult = null;
+                    try
+                    {
+                        retryResult = await JarvisDirectAiTransport.SendAsync(
+                            agentName,
+                            retryTarget,
+                            correctedRequest,
+                            cancellationToken).ConfigureAwait(false);
+                    }
+                    catch (OperationCanceledException)
+                    {
+                        throw;
+                    }
+                    catch (Exception ex)
+                    {
+                        try { retryTarget.Dispose(); } catch { }
+                        DebugLog.Log("[JARVIS-SUPERVISOR] corrective retry failed; agent=" +
+                            agentName + " error=" + ex.Message);
+                    }
+
+                    if (retryResult != null)
+                    {
+                        retryResult.UsageInputTokens += result.UsageInputTokens;
+                        retryResult.UsageOutputTokens += result.UsageOutputTokens;
+                        result = retryResult;
+                        DebugLog.Log("[JARVIS-SUPERVISOR] corrective retry completed; agent=" +
+                            agentName + " success=" + result.Success.ToString());
+                    }
+                }
+                else
+                {
+                    try { retryTarget?.Dispose(); } catch { }
+                    DebugLog.Log("[JARVIS-SUPERVISOR] corrective retry skipped; agent=" +
+                        agentName + " reason=session_target_missing");
+                }
+            }
+
             if (result.Success)
             {
                 LastRuntimeAgent = string.IsNullOrWhiteSpace(result.RuntimeAgent)
@@ -163,6 +225,114 @@ namespace S1Jarvis.Access.Verilic
                 result.UsageOutputTokens.ToString());
 
             return result;
+        }
+
+        private static bool ShouldCorrectFalseCapabilityDenial(
+            string providerRequestJson,
+            AgentProxyResponse result)
+        {
+            if (result == null || !result.Success || string.IsNullOrWhiteSpace(result.ResponseText))
+                return false;
+
+            HashSet<string> tools = ReadToolNamesFromRequest(providerRequestJson);
+            if (tools.Count == 0 || RequestContainsActualToolError(providerRequestJson))
+                return false;
+
+            string text = (result.ResponseText ?? string.Empty).ToLowerInvariant();
+            bool capabilityNoun =
+                text.Contains("εργαλ") || text.Contains("tool") ||
+                text.Contains("πρόσβα") || text.Contains("προσβα") ||
+                text.Contains("access") || text.Contains("capabil");
+            if (!capabilityNoun)
+                return false;
+
+            return text.Contains("δεν διαθέτω") || text.Contains("δεν διαθετω") ||
+                   text.Contains("δεν έχω") || text.Contains("δεν εχω") ||
+                   text.Contains("δεν μπορώ") || text.Contains("δεν μπορω") ||
+                   text.Contains("δεν είναι διαθέ") || text.Contains("δεν ειναι διαθε") ||
+                   text.Contains("do not have") || text.Contains("don't have") ||
+                   text.Contains("cannot access") || text.Contains("can't access") ||
+                   text.Contains("not available") || text.Contains("unavailable");
+        }
+
+        private static HashSet<string> ReadToolNamesFromRequest(string providerRequestJson)
+        {
+            try
+            {
+                JObject request = JObject.Parse(providerRequestJson ?? "{}");
+                return ReadToolNames(request["tools"]);
+            }
+            catch
+            {
+                return new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            }
+        }
+
+        private static bool RequestContainsActualToolError(string providerRequestJson)
+        {
+            try
+            {
+                JObject request = JObject.Parse(providerRequestJson ?? "{}");
+                JArray messages = request["messages"] as JArray;
+                if (messages == null)
+                    return false;
+
+                foreach (JObject message in messages.OfType<JObject>())
+                {
+                    JArray content = message["content"] as JArray;
+                    if (content == null)
+                        continue;
+
+                    foreach (JObject block in content.OfType<JObject>())
+                    {
+                        if (!string.Equals((string)block["type"], "tool_result", StringComparison.OrdinalIgnoreCase))
+                            continue;
+                        if ((bool?)block["is_error"] == true)
+                            return true;
+                    }
+                }
+            }
+            catch { }
+            return false;
+        }
+
+        private static string BuildCapabilityCorrectionRequest(
+            string providerRequestJson,
+            string rejectedText,
+            IEnumerable<string> attachedTools)
+        {
+            JObject request = JObject.Parse(providerRequestJson ?? "{}");
+            JArray messages = request["messages"] as JArray;
+            if (messages == null)
+            {
+                messages = new JArray();
+                request["messages"] = messages;
+            }
+
+            if (!string.IsNullOrWhiteSpace(rejectedText))
+            {
+                messages.Add(new JObject
+                {
+                    ["role"] = "assistant",
+                    ["content"] = rejectedText
+                });
+            }
+
+            string toolList = string.Join(", ", (attachedTools ?? Enumerable.Empty<string>())
+                .OrderBy(x => x, StringComparer.OrdinalIgnoreCase));
+            messages.Add(new JObject
+            {
+                ["role"] = "user",
+                ["content"] =
+                    "[JARVIS_SUPERVISORY_CORRECTION]\n" +
+                    "Η προηγούμενη δήλωση περί έλλειψης εργαλείων/capability απορρίφθηκε από τον Jarvis runtime. " +
+                    "Το authoritative runtime έχει επισυνάψει ρητά τα ακόλουθα εργαλεία σε αυτή την εργασία: " +
+                    toolList + ". Συνέχισε την εργασία χρησιμοποιώντας τα διαθέσιμα εργαλεία. " +
+                    "Μην δηλώνεις ότι λείπει capability αν δεν έχει προηγηθεί πραγματικό tool invocation που επέστρεψε error. " +
+                    "Αν ένα tool αποτύχει, ανέφερε το πραγματικό tool error."
+            });
+
+            return request.ToString(Formatting.None);
         }
 
         private static string ApplyCurrentCompanyContext(
