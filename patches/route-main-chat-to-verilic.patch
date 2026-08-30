@@ -1,0 +1,17 @@
+diff --git a/Core/JarvisAgentClient.cs b/Core/JarvisAgentClient.cs
+--- a/Core/JarvisAgentClient.cs
++++ b/Core/JarvisAgentClient.cs
+@@ -482,5 +482,8 @@
+-                    var proxyResp = await CallProxyAsync(new AgentProxyRequest
+-                    {
+-                        AgentAccountRef = agentAccountRef,
+-                        AnthropicRequestJson = anthropicJson
+-                    }, token);
++                    // Main Jarvis chat goes through the signed Verilic messages endpoint.
++                    // The server re-verifies licence, routing and configured model;
++                    // provider credentials remain server-side.
++                    var proxyResp = await new S1Jarvis.Access.Verilic.VerilicAiMessagesClient()
++                        .SendAsync(xSupport, anthropicJson, token);
+@@ -497,1 +500,1 @@
+-                            : "✖ " + (proxyResp.ErrorMessage ?? "Άγνωστο σφάλμα από τον Nexus.");
++                            : "✖ " + (proxyResp.ErrorMessage ?? "Άγνωστο σφάλμα AI.");

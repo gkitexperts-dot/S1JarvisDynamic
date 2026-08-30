@@ -1,4 +1,4 @@
-<!DOCTYPE html>
+﻿<!DOCTYPE html>
 <html lang="el">
 <head>
 <meta charset="UTF-8" />
@@ -5154,7 +5154,7 @@
   // πολύ συνηθισμένο σε πρόταση που τελειώνει με link) απέτυχε ΟΛΟΚΛΗΡΟ το
   // match, το link έμενε raw ΜΗ-clickable κείμενο. Τώρα δέχεται και κοινά
   // σημεία στίξης/κλεισίματα αμέσως μετά.
-  const INLINE_LINK_RE = /\[([^\]]+)\]\((.+?)\)(?=[\s.,;:!?)\]]|$)/g;
+  const INLINE_LINK_RE = /\[([^\]]+)\]\((.+?)\)(?=[\s.,;:!?)\]*_]|$)/g;
 
   // "doc:SOSOURCE:ID" (π.χ. "doc:1351:12345") - ΞΕΧΩΡΙΣΤΟ scheme από τα
   // file paths πιο πάνω, ο Jarvis το γράφει όταν λιστάρει παραστατικά
@@ -10181,6 +10181,7 @@
         '**CLEARS**: Ίδιο με το CLEAR, αλλά πρώτα αποθηκεύει τη συζήτηση σε αρχείο .md.\n' +
         '**CREATEAADEAFM (ΑΦΜ) [CUS]**: Ελέγχει αν υπάρχει ήδη συναλλασσόμενος με αυτό το ΑΦΜ (Προμηθευτής, ή Πελάτης με CUS) - αν όχι, τον φέρνει από την ΑΑΔΕ και τον δημιουργεί.\n' +
         '**CREATEVOUCHER (αριθμός παραστατικού)**: Ανοίγει την κουρτίνα Courier και ξεκινάει συζήτηση έκδοσης voucher για το συγκεκριμένο παραστατικό - θα σε ρωτήσω ό,τι χρειάζεται (courier, αντικαταβολή κ.λπ.) πριν εκδώσω.\n' +
+        '**HEALTH**: Live check for Jarvis and all AI sub-agents; shows Status, Provider, Model and Dedicated/Inherited routing.\n' +
         '**HelpCommands**: Δείχνει αυτή τη λίστα εντολών.');
       input.value = '';
       autoResize();

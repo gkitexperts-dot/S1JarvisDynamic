@@ -23,7 +23,7 @@ namespace S1Jarvis.Core
     // READ αντί για WRITE).
     //
     // ΡΗΤΑ ΕΚΤΟΣ ΣΚΟΠΕΙΟΥ (ρητά αναφέρθηκε στον χρήστη, ΟΧΙ σιωπηλή
-    // παράλειψη): legacy binary .xls/.xls (pre-2007 OLE format) - ΤΕΛΕΙΩΣ
+    // παράλειψη): legacy binary .xls/.doc (pre-2007 OLE format) - ΤΕΛΕΙΩΣ
     // διαφορετική δυαδική μορφή, χρειάζεται πραγματική βιβλιοθήκη. Αν
     // κάποιος ανεβάσει τέτοιο αρχείο, ρητό φιλικό μήνυμα, ΟΧΙ crash/
     // σιωπηλή αποτυχία.
@@ -48,9 +48,6 @@ namespace S1Jarvis.Core
         private static readonly XNamespace WordNs =
             "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
 
-        // Dispatch με βάση mimeType/όνομα αρχείου - ΡΗΤΟ fail (με φιλικό
-        // μήνυμα ελληνικά) για ΟΤΙΔΗΠΟΤΕ δεν αναγνωρίζεται, ΠΟΤΕ σιωπηλή
-        // προσπάθεια parsing κάτι άγνωστου.
         public static string ReadOfficeDocumentAsText(byte[] bytes, string mimeType, string fileName)
         {
             string ext = (fileName != null && fileName.Contains("."))
@@ -76,8 +73,6 @@ namespace S1Jarvis.Core
             throw new Exception($"Μη αναγνωρίσιμος τύπος αρχείου για ανάγνωση: {mimeType} ({fileName}).");
         }
 
-        // ── XLSX (ZIP: xl/sharedStrings.xml + xl/workbook.xml +
-        // xl/_rels/workbook.xml.rels + xl/worksheets/sheetN.xml) ──────────
         public static string ReadXlsxAsText(byte[] bytes)
         {
             using (var ms = new MemoryStream(bytes))
@@ -89,8 +84,10 @@ namespace S1Jarvis.Core
                     throw new Exception("Δεν βρέθηκαν φύλλα μέσα στο .xlsx (μη έγκυρο/κατεστραμμένο αρχείο;).");
 
                 var sb = new StringBuilder();
-                foreach (var (name, path) in sheets)
+                foreach (var sheetInfo in sheets)
                 {
+                    string name = sheetInfo.Name;
+                    string path = sheetInfo.Path;
                     ZipArchiveEntry sheetEntry = archive.GetEntry(path);
                     if (sheetEntry == null) continue;
 
@@ -129,9 +126,6 @@ namespace S1Jarvis.Core
             }
         }
 
-        // (SheetName, ZipEntryPath) - ΠΡΕΠΕΙ να περάσει από το rels file
-        // (r:id -> Target) γιατί η σειρά/ονόματα sheetN.xml στο ZIP ΔΕΝ
-        // αντιστοιχούν πάντα 1-προς-1 με τη σειρά εμφάνισης στο workbook.
         private static System.Collections.Generic.List<(string Name, string Path)> ReadSheetList(ZipArchive archive)
         {
             var result = new System.Collections.Generic.List<(string, string)>();
@@ -174,9 +168,6 @@ namespace S1Jarvis.Core
             return result;
         }
 
-        // t="s" -> shared string (index στο <v>), t="inlineStr" -> κείμενο
-        // ΜΕΣΑ στο κελί (<is><t>...), t="str" -> αποτέλεσμα formula ως
-        // κείμενο (ήδη cached), ΔΕΝ έχει t -> αριθμός (ή κενό).
         private static string ReadCellText(XElement cell, string[] sharedStrings)
         {
             string type = (string)cell.Attribute("t");
@@ -189,11 +180,9 @@ namespace S1Jarvis.Core
             if (raw == null) return "";
             if (type == "s" && int.TryParse(raw, out int idx) && idx >= 0 && idx < sharedStrings.Length)
                 return sharedStrings[idx];
-            return raw; // αριθμός ή ήδη-κείμενο formula-result
+            return raw;
         }
 
-        // ── DOCX (ZIP: word/document.xml - <w:body> με <w:p> παραγράφους
-        // και <w:tbl> πίνακες) ───────────────────────────────────────────
         public static string ReadDocxAsText(byte[] bytes)
         {
             using (var ms = new MemoryStream(bytes))

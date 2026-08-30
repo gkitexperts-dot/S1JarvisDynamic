@@ -1,0 +1,174 @@
+# S1Jarvis Development Invariants
+
+This file is a persistent engineering contract for anyone (human or AI) changing S1Jarvis. **Read this file first whenever a new coding conversation/session starts** and before modifying licensing, provisioning, routing, providers, models, credentials, Health, agent orchestration, or AI request construction.
+
+## Jarvis ↔ Verilic lifecycle — NON-NEGOTIABLE
+
+1. **Verilic participates in AI configuration only at Jarvis BOOT and explicit HEALTH.**
+   - BOOT keeps all existing licence, activation, installation identity, proof/signature, and readiness checks.
+   - After licence validation, BOOT provisions the complete AI execution configuration for every required logical agent.
+   - Explicit `HEALTH` is the only allowed runtime exception; it may re-check and refresh provisioning.
+   - A normal user prompt, tool iteration, orchestration step, presentation call, dataset refinement, or agent dispatch MUST NOT contact Verilic for AI routing, model selection, credentials, or message proxying.
+
+2. **Every session agent execution object MUST contain all three AI execution values.**
+   - `Provider` / AI company.
+   - `Model`.
+   - `API credential` for that customer's agent account.
+   - Plus the logical agent name (`Jarvis`, `Atlas`, `Forge`, `Compass`, `Echo`, `Sprint`, `Scout`, `Sage`) and routing metadata (`Dedicated/Inherited`) where applicable.
+   - Missing Provider, Model, or credential means the agent is not executable. Fail closed; never invent a fallback.
+
+3. **Credentials are session-only secrets.**
+   - Provider API keys are downloaded only by BOOT provisioning or explicit HEALTH refresh.
+   - They live only in the in-memory Jarvis session registry.
+   - Never persist them to app.config, local JSON, registry, DPAPI state, database, telemetry, exception text, debug log, UI, or exported files.
+   - On Jarvis shutdown/reset, clear/dispose credential buffers.
+   - On the next Jarvis opening, provision them again.
+
+4. **Normal AI execution is direct provider execution.**
+   - Runtime code selects a logical agent locally.
+   - It reads Provider + Model + API credential from `Core/JarvisAgentRuntimeSnapshot.cs`.
+   - It calls that AI provider directly.
+   - `/api/jarvis-ai/messages` (or any equivalent Verilic message relay) MUST NOT be used by normal Jarvis runtime prompts.
+   - Verilic is the licence/provisioning authority, not the normal AI message proxy.
+
+5. **HEALTH refresh is atomic.**
+   - HEALTH obtains a complete candidate agent registry from Verilic.
+   - Validate all required agents and all required Provider + Model + credential values before activation.
+   - Only after full validation replace the existing in-memory registry atomically.
+   - If HEALTH fails or returns an incomplete registry, preserve the currently working registry unchanged.
+   - HEALTH output may show agent/provider/model/routing and `Credential=Loaded/Missing`; it must never reveal the credential itself.
+
+## Agent/provider/model neutrality — NON-NEGOTIABLE
+
+1. **Logical agents are provider-neutral identities, never aliases for vendors or models.**
+   - `Jarvis`, `Atlas`, `Forge`, `Compass`, `Echo`, `Sprint`, `Scout`, and `Sage` express responsibilities/capabilities only.
+   - No agent behavior, task contract, tool registry entry, orchestration rule, dataset rule, presentation rule, or business flow may depend on Google/Gemini, OpenAI, Anthropic/Claude, or any concrete model family.
+
+2. **The Jarvis AI request/response contract must remain provider-neutral.**
+   - Core code may express neutral semantics such as system instructions, messages, tools, tool choice, images/documents, token limits, temperature and structured tool results.
+   - Core code must not reshape those semantics merely because one provider accepts a smaller/different wire schema.
+   - A provider limitation must be handled at the provider adapter boundary, not by weakening or forking the core orchestration contract.
+
+3. **Provider-specific translation belongs only in the direct provider adapter.**
+   - `Access/Verilic/JarvisDirectAiTransport.cs` translates the neutral Jarvis request into each provider's native wire format and normalizes each native response back to the neutral Jarvis response contract.
+   - Tool/function schemas and tool-choice semantics must be translated independently for Google, OpenAI, Anthropic, and future providers while preserving the same logical intent.
+   - Provider-specific unsupported schema keywords may be normalized/dropped only in that provider adapter. The source neutral tool schema remains unchanged.
+   - Do not add model-specific branches in orchestration/business code to make one model pass a test.
+
+4. **Never solve provider compatibility by changing the selected provider/model.**
+   - Do not silently switch model/provider when a request shape fails.
+   - Fix the adapter mapping or fail with a diagnostic.
+   - Provider/model selection remains exclusively the BOOT/HEALTH-provisioned configuration from Verilic.
+
+## Jarvis supervisory authority — NON-NEGOTIABLE
+
+1. **The runtime task/tool registry is authoritative about capability; an agent's prose is not.**
+   - Jarvis assigns a registered task to a logical owner agent and attaches the scoped tools/capabilities required for that task.
+   - A model response such as “I do not have the tools/access/capability” MUST NOT be exposed to the user when the authoritative runtime request proves that the tools were attached.
+   - In that case Jarvis rejects the response as an invalid execution result and performs one controlled corrective retry with the same logical agent and its same session-provisioned provider/model/credential.
+   - A real tool invocation error is authoritative and must be surfaced/handled normally; supervisory recovery must never hide actual permission, backend, validation, or tool failures.
+
+2. **Task-local tool arguments belong to the registered owner agent when the task contract says they are owner-resolvable.**
+   - Do not invent fake cross-object dependencies merely because an LLM decomposition did not pre-fill native tool arguments such as title, description, date/time, recipient, subject, or similar execution-local fields.
+   - Jarvis keeps business/dependency contracts authoritative; the owner agent may materialize explicitly registered task-local inputs from the atomic intent fragment, current session context, and only its scoped registered tools.
+   - Cross-object data dependencies (for example `ReportData.summary -> SendEmail.body`) remain deterministic Jarvis bindings and may not be inferred agent-to-agent.
+
+3. **A valid decomposed graph must remain Jarvis-owned.**
+   - Agents never call other agents and never advance the graph themselves.
+   - Jarvis validates each result before storing it, materializes registered dependencies, and decides the next dispatch.
+   - Legacy conversational fallback must not become the authority for whether a registered task/capability exists.
+
+## Business entity semantics — NON-NEGOTIABLE
+
+1. **Business entity identities, roles and Soft1 discriminators are authoritative runtime metadata, not model knowledge.**
+   - Models may interpret the user's natural-language reference to an entity, but they MUST NOT invent Soft1 `SODTYPE`, `SOSOURCE`, Designer object names, primary-key semantics, role mappings, or equivalent business discriminators.
+   - `Core/JarvisBusinessEntityCatalog.cs` is the shared authoritative catalog for confirmed business-entity semantics used by orchestration and deterministic resolvers. Existing specialist resolvers may consume this catalog but must not keep divergent private copies of the same mapping.
+   - Only mappings confirmed in the repository/business rules may be registered. Unknown values remain unknown; fail closed instead of guessing.
+
+2. **Entity resolution precedes use of an entity as authoritative business scope.**
+   - A fuzzy name/code search may be used to discover candidates, but a fuzzy candidate set is not itself a verified entity identity.
+   - When a task requires one specific business entity, Jarvis must resolve or validate the entity role/identity before accepting the downstream business result as belonging to that entity.
+   - If multiple distinct entities remain plausible and the task cannot deterministically disambiguate them from explicit user facts, ask the operator for clarification rather than silently merging them or choosing one.
+
+3. **Agents receive entity semantics from the authoritative catalog.**
+   - Planner/executor prompts may include a compact serialized entity catalog or resolved entity evidence.
+   - They must follow that evidence exactly and may not replace it with pretrained assumptions about Soft1 or another ERP.
+   - Deterministic validation must reject proposed calls/SQL that use unregistered entity discriminators.
+
+## User-facing result references — NON-NEGOTIABLE
+
+1. **Addressable successful results must expose their authoritative clickable reference.**
+   - When a successful task creates, resolves, exports or retrieves an addressable Soft1 object, document, item, trader, file, Outlook object, courier artifact or other external object, the final Jarvis response must include a clickable link/reference whenever the executor returned enough authoritative navigation metadata.
+   - A bare numeric ID is not the preferred final presentation when a verified navigation reference is available.
+
+2. **Links are derived only from authoritative outputs and registered UI schemes.**
+   - `Core/JarvisResultLinkPolicy.cs` is the shared presentation policy for converting verified task outputs into links already understood by the Jarvis UI (`doc:`, `trader:`, `item:`, local file paths, or returned HTTP/HTTPS URLs).
+   - Never invent a URL, object name, SOSOURCE, file path, or navigation target from prose or from an ID alone when the corresponding mapping is not registered.
+   - If the executor did not return sufficient authoritative navigation data, show the verified ID/reference without fabricating a link.
+
+3. **Link presentation never changes execution truth.**
+   - The result-link layer is presentation-only. It must not execute tools, resolve missing entities, mutate graph state, or convert an unsuccessful tool result into success.
+   - Links must be added only after the owning task result has passed Jarvis validation.
+
+## Provider/model rules — NON-NEGOTIABLE
+
+1. **Never hardcode a concrete AI provider or model in desktop/client business or orchestration code.**
+   - No literal fallback model.
+   - No per-agent model constants.
+   - No hidden Claude/Gemini/OpenAI model fallback in orchestration, legacy chat, Document Reader, tests, or error recovery.
+   - Client business code chooses a logical agent only.
+   - Provider and model come from the boot/HEALTH session registry.
+
+2. **Do not re-fetch agent configuration per prompt.**
+   - No per-prompt routing endpoint.
+   - No per-iteration Health/provisioning call.
+   - No per-tool-call credential lookup from Verilic.
+   - No silent background refresh.
+
+3. **Fail closed — never invent an AI target.**
+   - If BOOT provisioning is missing/incomplete, block AI execution.
+   - If a required session target loses its credential, require successful HEALTH or restart.
+   - Never switch provider/model automatically because one is unavailable.
+
+## Enforcement points
+
+- Existing licensing/activation classes under `Access/Verilic/` — remain authoritative for licence/installation validation and must not be removed as part of AI provisioning changes.
+- `UI/JarvisShell.ProviderHealth.cs` — BOOT provisioning and the only explicit runtime refresh (`HEALTH`); also clears session credentials on shell shutdown.
+- `Core/JarvisAgentHealthProbe.cs` — signed BOOT/HEALTH provisioning request. This must never be invoked by normal prompt execution.
+- `Core/JarvisAgentRuntimeSnapshot.cs` — in-memory session execution registry; every executable agent requires Provider + Model + API credential; supports atomic HEALTH replacement and secret clearing.
+- `Access/Verilic/JarvisDirectAiTransport.cs` — normal direct provider transport after provisioning. It must never contact Verilic; all provider-specific request/response/schema/tool-choice translation stays here.
+- `Access/Verilic/VerilicAiMessagesClient.cs` — legacy class name retained only as the local session dispatcher/compatibility boundary; it must not send runtime messages to Verilic. It also enforces provider-neutral supervisory rejection of false capability-denial prose when the request itself proves that registered tools were attached.
+- `Core/JarvisAgentClient.cs` and orchestration clients — select logical agents/tasks only; they must not own provider/model/API-key configuration.
+- `Core/JarvisBusinessEntityCatalog.cs` — authoritative confirmed business-entity roles/discriminators/identity metadata shared by deterministic resolvers and agent execution context.
+- `Core/JarvisResultLinkPolicy.cs` — presentation-only conversion of verified addressable outputs into registered Jarvis UI links.
+
+## Security rules for AI credentials
+
+- Never print or serialize an API key in a log.
+- Never include an API key in `AgentProxyResponse`, usage telemetry, UI Health tables, exception messages, or orchestration state.
+- Do not return a secret-bearing target from display/list APIs; UI snapshots must be secret-free clones.
+- Keep the lifetime of any managed string created from a credential as short as practical (for the HTTP header only).
+- Wipe mutable secret buffers on replacement/shutdown where technically possible on .NET Framework.
+
+## Automated guard
+
+Run this before considering any AI-routing/provisioning change complete:
+
+```text
+python scripts/verify_ai_routing_policy.py
+```
+
+The same check is wired into `.github/workflows/ai-routing-policy.yml`. It must reject runtime C# changes that reintroduce:
+
+- concrete/hardcoded model assignments,
+- normal-prompt `/api/jarvis-ai/messages` proxying,
+- per-prompt routing/Health/provisioning lookups,
+- or persisted/logged provider credentials.
+
+## Before changing AI code
+
+Search the branch for model/provider literals, `/api/jarvis-ai/messages`, routing/Health calls, and credential persistence/logging. A change is not complete if it introduces any of those outside the BOOT/explicit-HEALTH provisioning boundary.
+
+Also inspect whether a proposed fix belongs in the provider adapter. If the issue is a native provider wire-format difference (tool schema, tool choice, multimodal blocks, response shape, usage fields, reasoning controls), keep the core Jarvis contract unchanged and translate only at the adapter boundary.
+
+This invariant exists because Verilic owns licence/provisioning while an open Jarvis session owns deterministic, inexpensive, direct AI execution using the customer's session-only agent credentials, with logical agents remaining independent of the selected AI vendor/model.

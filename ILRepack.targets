@@ -1,0 +1,71 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Project xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <!--
+    Production packaging only. The normal build output stays untouched so it can
+    still be inspected/debugged. JarvisDeploy contains the single file that is
+    copied to the Soft1 folder.
+
+    Host-owned assemblies (Softone.Lib and WebView2) are deliberately NOT merged.
+    Everything listed below is Jarvis-owned/private and is internalized into
+    S1Jarvis.dll, including our own Newtonsoft.Json copy.
+  -->
+  <Target Name="BuildJarvisSingleDll" AfterTargets="Build"
+          Condition="'$(Configuration)' == 'Release' and '$(IsCrossTargetingBuild)' != 'true'">
+
+    <PropertyGroup>
+      <JarvisDeployDir>$(OutputPath)JarvisDeploy\</JarvisDeployDir>
+      <JarvisMergedFile>$(JarvisDeployDir)$(AssemblyName).dll</JarvisMergedFile>
+    </PropertyGroup>
+
+    <MakeDir Directories="$(JarvisDeployDir)" />
+
+    <ItemGroup>
+      <!-- Primary assembly MUST be first. -->
+      <JarvisMergeInput Include="$(TargetPath)" />
+
+      <!-- Private Jarvis runtime dependencies. Include only when the restored
+           package/runtime actually produced the file for this build. -->
+      <JarvisMergeInput Include="$(TargetDir)Newtonsoft.Json.dll"
+                        Condition="Exists('$(TargetDir)Newtonsoft.Json.dll')" />
+      <JarvisMergeInput Include="$(TargetDir)Microsoft.Identity.Client.dll"
+                        Condition="Exists('$(TargetDir)Microsoft.Identity.Client.dll')" />
+      <JarvisMergeInput Include="$(TargetDir)Microsoft.IdentityModel.Abstractions.dll"
+                        Condition="Exists('$(TargetDir)Microsoft.IdentityModel.Abstractions.dll')" />
+      <JarvisMergeInput Include="$(TargetDir)PdfSharp.dll"
+                        Condition="Exists('$(TargetDir)PdfSharp.dll')" />
+      <JarvisMergeInput Include="$(TargetDir)PdfSharp.Charting.dll"
+                        Condition="Exists('$(TargetDir)PdfSharp.Charting.dll')" />
+      <JarvisMergeInput Include="$(TargetDir)System.Buffers.dll"
+                        Condition="Exists('$(TargetDir)System.Buffers.dll')" />
+      <JarvisMergeInput Include="$(TargetDir)System.Diagnostics.DiagnosticSource.dll"
+                        Condition="Exists('$(TargetDir)System.Diagnostics.DiagnosticSource.dll')" />
+      <JarvisMergeInput Include="$(TargetDir)System.Memory.dll"
+                        Condition="Exists('$(TargetDir)System.Memory.dll')" />
+      <JarvisMergeInput Include="$(TargetDir)System.Numerics.Vectors.dll"
+                        Condition="Exists('$(TargetDir)System.Numerics.Vectors.dll')" />
+      <JarvisMergeInput Include="$(TargetDir)System.Runtime.CompilerServices.Unsafe.dll"
+                        Condition="Exists('$(TargetDir)System.Runtime.CompilerServices.Unsafe.dll')" />
+      <JarvisMergeInput Include="$(TargetDir)System.Threading.Tasks.Extensions.dll"
+                        Condition="Exists('$(TargetDir)System.Threading.Tasks.Extensions.dll')" />
+    </ItemGroup>
+
+    <Message Importance="High"
+             Text="Jarvis single-DLL package: merging @(JarvisMergeInput, ' + ') -> $(JarvisMergedFile)" />
+
+    <ILRepack
+      InputAssemblies="@(JarvisMergeInput)"
+      OutputFile="$(JarvisMergedFile)"
+      TargetKind="Dll"
+      Internalize="true"
+      Parallel="true"
+      CopyAttributes="true"
+      DebugInfo="false" />
+
+    <!-- Fail the Release build if packaging did not create the one deployment DLL. -->
+    <Error Condition="!Exists('$(JarvisMergedFile)')"
+           Text="Jarvis single-DLL packaging failed: $(JarvisMergedFile) was not created." />
+
+    <Message Importance="High"
+             Text="Jarvis deployment package ready: $(JarvisMergedFile). External host requirements: Softone.Lib + Soft1 WebView2 + .NET Framework 4.8." />
+  </Target>
+</Project>
