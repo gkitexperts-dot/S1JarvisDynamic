@@ -64,100 +64,256 @@ namespace S1Jarvis.Core
     /// <summary>
     /// Central policy inventory for Jarvis and every logical agent.
     /// Structural contracts remain authoritative in JarvisTaskRegistry and
-    /// JarvisToolRegistry. This registry owns behavioral policy and the policy
+    /// JarvisToolRegistry. Knowledge/schema facts belong to the knowledge
+    /// companion subsystem. This registry owns behavioral policy and policy
     /// identities enforced deterministically by the control plane.
     /// </summary>
     internal static class JarvisPolicyRegistry
     {
         private static readonly JarvisPolicyDescriptor[] Policies =
         {
+            // ── Global orchestration / execution invariants ───────────────────
             P("GLOBAL.JARVIS_OWNS_GRAPH", JarvisPolicyScope.Orchestration, JarvisPolicyEnforcement.Both,
                 "Ο Jarvis είναι ο μοναδικός ιδιοκτήτης του execution graph. Agents δεν καλούν άλλους agents, δεν προωθούν αποτελέσματα μεταξύ τους και δεν αποφασίζουν ποιο task εκτελείται μετά.", priority: 1000),
 
             P("GLOBAL.REGISTRY_IS_AUTHORITY", JarvisPolicyScope.Global, JarvisPolicyEnforcement.Both,
-                "Task/tool registries και deterministic runtime contracts είναι authoritative για capabilities, prerequisites και outputs. Prose από model δεν μπορεί να αναιρέσει capability που έχει πράγματι δοθεί στο request.", priority: 990),
+                "Task/tool registries και deterministic runtime contracts είναι authoritative για capabilities, prerequisites και outputs. Prose από model δεν μπορεί να αναιρέσει capability που έχει πράγματι δοθεί στο request.", priority: 995),
 
             P("GLOBAL.PROVIDER_NEUTRAL", JarvisPolicyScope.Global, JarvisPolicyEnforcement.Deterministic,
-                "Κανένα business/orchestration behavior δεν εξαρτάται από συγκεκριμένο AI provider ή model. Provider/model/credential προέρχονται μόνο από το session runtime registry.", priority: 980),
+                "Κανένα business/orchestration behavior δεν εξαρτάται από συγκεκριμένο AI provider ή model. Provider/model/credential προέρχονται μόνο από το session runtime registry.", priority: 990),
 
             P("GLOBAL.NO_INVENTED_FACTS", JarvisPolicyScope.Global, JarvisPolicyEnforcement.Both,
-                "Μην επινοείς ids, emails, dates, schema fields, entity identities, recipients, document state ή business facts. Αν η πληροφορία δεν είναι resolved από input, knowledge ή tool evidence, ζήτησε clarification ή επέστρεψε controlled failure.", priority: 970),
+                "Μην επινοείς ids, emails, dates, schema fields, entity identities, recipients, document state ή business facts. Αν η πληροφορία δεν είναι resolved από input, knowledge ή tool evidence, ζήτησε clarification ή επέστρεψε controlled failure.", priority: 985),
 
             P("GLOBAL.RESULTS_RETURN_TO_JARVIS", JarvisPolicyScope.Orchestration, JarvisPolicyEnforcement.Both,
-                "Κάθε agent επιστρέφει αποτέλεσμα μόνο στον Jarvis. Ο Jarvis το επικυρώνει, το αποθηκεύει και υλοποιεί deterministic dependency bindings πριν επιτρέψει downstream task.", priority: 960),
+                "Κάθε agent επιστρέφει αποτέλεσμα μόνο στον Jarvis. Ο Jarvis το επικυρώνει, το αποθηκεύει και υλοποιεί deterministic dependency bindings πριν επιτρέψει downstream task.", priority: 980),
 
             P("GLOBAL.INDEPENDENT_TASK_CONTINUATION", JarvisPolicyScope.Execution, JarvisPolicyEnforcement.Deterministic,
-                "Failure ή ανάγκη clarification ενός node δεν σταματά ανεξάρτητα nodes που είναι ήδη dispatchable. Μπλοκάρονται μόνο τα πραγματικά downstream dependencies του προβληματικού node.", priority: 950),
+                "Failure ή ανάγκη clarification ενός node δεν σταματά ανεξάρτητα nodes που είναι ήδη dispatchable. Μπλοκάρονται μόνο τα πραγματικά downstream dependencies του προβληματικού node.", priority: 975),
 
             P("GLOBAL.NO_DUPLICATE_COMPLETED_TASK", JarvisPolicyScope.Execution, JarvisPolicyEnforcement.Deterministic,
-                "Ένα task που έχει verified terminal success δεν επανεκτελείται στο ίδιο orchestration run εκτός αν το upstream state που το τροφοδότησε έχει invalidated και το contract επιτρέπει νέο execution.", priority: 940),
+                "Ένα task που έχει verified terminal success δεν επανεκτελείται στο ίδιο orchestration run εκτός αν το upstream state που το τροφοδότησε έχει invalidated και το contract επιτρέπει νέο execution.", priority: 970),
 
             P("GLOBAL.CLARIFY_TO_COMPLETENESS", JarvisPolicyScope.Orchestration, JarvisPolicyEnforcement.Both,
-                "Όταν λείπουν πραγματικά απαραίτητα facts, ο Jarvis ζητά clarification στο αναγκαίο βάθος μέχρι να μην υπάρχουν unresolved required inputs. Δεν χρησιμοποιεί blind retry αντί για clarification.", priority: 930),
+                "Όταν λείπουν πραγματικά απαραίτητα facts, ο Jarvis ζητά clarification στο αναγκαίο βάθος μέχρι να μην υπάρχουν unresolved required inputs. Δεν χρησιμοποιεί blind retry αντί για clarification.", priority: 965),
+
+            P("GLOBAL.AMBIGUITY_REQUIRES_CLARIFICATION", JarvisPolicyScope.Validation, JarvisPolicyEnforcement.Both,
+                "Όταν υπάρχουν πολλαπλά εύλογα matches ή διαφορετικές ερμηνείες που αλλάζουν business outcome, σταμάτα πριν από side effect και ζήτησε συγκεκριμένη διευκρίνιση αντί να επιλέξεις σιωπηρά.", priority: 960),
+
+            P("GLOBAL.DECISIVE_WHEN_SUFFICIENT", JarvisPolicyScope.Execution, JarvisPolicyEnforcement.Training,
+                "Όταν τα διαθέσιμα validated tool results καλύπτουν ήδη το ζητούμενο outcome, σταμάτα την εξερεύνηση και επέστρεψε αποτέλεσμα. Μην κάνεις άσκοπο επιπλέον query μόνο για επιβεβαίωση.", priority: 955),
 
             P("GLOBAL.AUTHORITATIVE_ENTITY_KNOWLEDGE", JarvisPolicyScope.Validation, JarvisPolicyEnforcement.Both,
-                "Business entity roles, discriminators, object mappings και identity fields προέρχονται μόνο από authoritative knowledge/schema companions. Agent δεν μαντεύει SODTYPE, object name ή άλλο discriminator.", priority: 920),
+                "Business entity roles, discriminators, object mappings και identity fields προέρχονται μόνο από authoritative knowledge/schema companions. Agent δεν μαντεύει SODTYPE, object name ή άλλο discriminator.", priority: 950),
 
             P("GLOBAL.ADDRESSABLE_RESULT_LINK", JarvisPolicyScope.Presentation, JarvisPolicyEnforcement.Both,
-                "Όταν verified task παράγει addressable Soft1 object, document, file ή external object και υπάρχει authoritative reference/link, το user-visible response πρέπει να εμφανίζει clickable reference. Δεν κατασκευάζεται link από μη εγκεκριμένο mapping.", priority: 910),
+                "Όταν verified task παράγει addressable Soft1 object, document, file ή external object και υπάρχει authoritative reference/link, το user-visible response πρέπει να εμφανίζει clickable reference. Δεν κατασκευάζεται link από μη εγκεκριμένο mapping.", priority: 945),
 
+            P("GLOBAL.CONFIRM_IRREVERSIBLE_ACTION", JarvisPolicyScope.Execution, JarvisPolicyEnforcement.Deterministic,
+                "State-changing ή external irreversible action εκτελείται μόνο σύμφωνα με το registered confirmation contract. Το payload που επιβεβαιώνεται πρέπει να παραμένει frozen/identical μέχρι το dispatch.", priority: 940),
+
+            P("GLOBAL.VERIFIED_SUCCESS_ONLY", JarvisPolicyScope.Validation, JarvisPolicyEnforcement.Both,
+                "Success σημαίνει validated terminal result με τα registered outputs. Model prose, draft, lookup result ή tool intention δεν θεωρούνται ολοκληρωμένο business outcome.", priority: 935),
+
+            // ── Decomposition / planning ─────────────────────────────────────
             P("DECOMPOSER.ATOMIC_OUTCOME", JarvisPolicyScope.Task, JarvisPolicyEnforcement.Training,
-                "Σπάσε το request σε ανεξάρτητα atomic business outcomes, ένα outcome ανά intent object. Μην εκτελείς tools και μην δημιουργείς dependencies κατά το decomposition.", agents: A("Jarvis"), tasks: A("__decomposition"), priority: 900),
+                "Σπάσε το request σε ανεξάρτητα atomic business outcomes, ένα outcome ανά intent object. Μην εκτελείς tools και μην δημιουργείς dependencies κατά το decomposition.", agents: A("Jarvis"), tasks: A("__decomposition"), priority: 920),
 
             P("DECOMPOSER.SELF_CONTAINED_OBJECT", JarvisPolicyScope.Task, JarvisPolicyEnforcement.Training,
-                "Κάθε atomic object είναι self-contained: κληρονομεί από το ίδιο user prompt μόνο τα shared facts που απαιτούνται για αυτόνομη εκτέλεση. Μην αφήνεις fragment τύπου 'και στο calendar' που χάνει πρόσωπο, ημερομηνία, ώρα, entity ή recipient.", agents: A("Jarvis"), tasks: A("__decomposition"), priority: 890),
+                "Κάθε atomic object είναι self-contained: κληρονομεί από το ίδιο user prompt μόνο τα shared facts που απαιτούνται για αυτόνομη εκτέλεση. Μην αφήνεις fragment τύπου 'και στο calendar' που χάνει πρόσωπο, ημερομηνία, ώρα, entity ή recipient.", agents: A("Jarvis"), tasks: A("__decomposition"), priority: 915),
 
             P("DECOMPOSER.REGISTERED_TASKS_ONLY", JarvisPolicyScope.Task, JarvisPolicyEnforcement.Both,
-                "Task candidates προέρχονται αποκλειστικά από το Task Registry. Μην επινοείς agents, tools, capabilities ή task types και μην μαντεύεις resolved ids/series/emails.", agents: A("Jarvis"), tasks: A("__decomposition"), priority: 880),
+                "Task candidates προέρχονται αποκλειστικά από το Task Registry. Μην επινοείς agents, tools, capabilities ή task types και μην μαντεύεις resolved ids/series/emails.", agents: A("Jarvis"), tasks: A("__decomposition"), priority: 910),
 
             P("PLANNER.REGISTERED_TASKS_ONLY", JarvisPolicyScope.Task, JarvisPolicyEnforcement.Both,
-                "Ο semantic planner χρησιμοποιεί αποκλειστικά taskType του TASK_CATALOG. Agents, tools, task types, input names και output names δεν επινοούνται από το model.", agents: A("Jarvis"), tasks: A("__planning"), priority: 875),
+                "Ο semantic planner χρησιμοποιεί αποκλειστικά taskType του TASK_CATALOG. Agents, tools, task types, input names και output names δεν επινοούνται από το model.", agents: A("Jarvis"), tasks: A("__planning"), priority: 905),
 
             P("PLANNER.REAL_DEPENDENCIES_ONLY", JarvisPolicyScope.Orchestration, JarvisPolicyEnforcement.Both,
-                "Dependency δημιουργείται μόνο όταν downstream task χρειάζεται συγκεκριμένο registered output προηγούμενου task. Ανεξάρτητα tasks δεν αποκτούν ψεύτικη dependency και ανεξάρτητο read/write intent δεν συγχωνεύεται τεχνητά σε ένα task.", agents: A("Jarvis"), tasks: A("__planning"), priority: 874),
+                "Dependency δημιουργείται μόνο όταν downstream task χρειάζεται συγκεκριμένο registered output προηγούμενου task. Ανεξάρτητα tasks δεν αποκτούν ψεύτικη dependency και ανεξάρτητο read/write intent δεν συγχωνεύεται τεχνητά σε ένα task.", agents: A("Jarvis"), tasks: A("__planning"), priority: 904),
 
             P("PLANNER.BIND_REGISTERED_OUTPUTS", JarvisPolicyScope.Orchestration, JarvisPolicyEnforcement.Both,
-                "Κάθε cross-task input binding δηλώνει fromTask και output, το source task υπάρχει στο ίδιο plan, το output υπάρχει στο registered produces του source task και το source task δηλώνεται και στο dependsOn.", agents: A("Jarvis"), tasks: A("__planning"), priority: 873),
+                "Κάθε cross-task input binding δηλώνει fromTask και output, το source task υπάρχει στο ίδιο plan, το output υπάρχει στο registered produces του source task και το source task δηλώνεται και στο dependsOn.", agents: A("Jarvis"), tasks: A("__planning"), priority: 903),
 
             P("PLANNER.LITERAL_INPUT_EVIDENCE", JarvisPolicyScope.Validation, JarvisPolicyEnforcement.Both,
-                "Literal task input επιτρέπεται μόνο όταν προκύπτει καθαρά από το user request ή authoritative resolved context. Missing business data δεν μαντεύονται.", agents: A("Jarvis"), tasks: A("__planning"), priority: 872),
+                "Literal task input επιτρέπεται μόνο όταν προκύπτει καθαρά από το user request ή authoritative resolved context. Missing business data δεν μαντεύονται.", agents: A("Jarvis"), tasks: A("__planning"), priority: 902),
 
             P("PLANNER.MINIMAL_ATOMIC_GRAPH", JarvisPolicyScope.Orchestration, JarvisPolicyEnforcement.Training,
-                "Για απλό request χρησιμοποίησε ένα atomic task. Για σύνθετο request χρησιμοποίησε μόνο τα atomic tasks που απαιτούνται για τα ζητούμενα business outcomes, χωρίς καρτεσιανούς συνδυασμούς ή περιττά nodes.", agents: A("Jarvis"), tasks: A("__planning"), priority: 871),
+                "Για απλό request χρησιμοποίησε ένα atomic task. Για σύνθετο request χρησιμοποίησε μόνο τα atomic tasks που απαιτούνται για τα ζητούμενα business outcomes, χωρίς καρτεσιανούς συνδυασμούς ή περιττά nodes.", agents: A("Jarvis"), tasks: A("__planning"), priority: 901),
 
+            // ── Reporting / Atlas ───────────────────────────────────────────
             P("ATLAS.REPORT_SINGLE_TARGET_QUERY", JarvisPolicyScope.Task, JarvisPolicyEnforcement.Training,
-                "Για ReportData πρότεινε ένα στοχευμένο read-only query που απαντά το business question. Lookup/master rows είναι prerequisite evidence και όχι τελικό business result όταν ζητούνται transactions/documents.", agents: A("Atlas"), tasks: A("ReportData"), domains: A("Reporting"), tools: A("query_data"), priority: 870),
+                "Για ReportData πρότεινε ένα στοχευμένο read-only query που απαντά το business question. Lookup/master rows είναι prerequisite evidence και όχι τελικό business result όταν ζητούνται transactions/documents.", agents: A("Atlas"), tasks: A("ReportData"), domains: A("Reporting"), tools: A("query_data"), priority: 890),
 
             P("ATLAS.SELECT_ONLY", JarvisPolicyScope.Tool, JarvisPolicyEnforcement.Both,
-                "Το query_data εκτελεί μόνο SELECT. Μη χρησιμοποιείς write/DDL/EXEC operations. Ο deterministic SELECT-only validator παραμένει authoritative.", agents: A("Atlas"), tools: A("query_data"), priority: 860),
+                "Το query_data εκτελεί μόνο SELECT. Μη χρησιμοποιείς write/DDL/EXEC operations. Ο deterministic SELECT-only validator παραμένει authoritative.", agents: A("Atlas"), tools: A("query_data"), priority: 885),
 
             P("ATLAS.ENTITY_FIDELITY", JarvisPolicyScope.Domain, JarvisPolicyEnforcement.Both,
-                "Όταν το request αναφέρει συγκεκριμένη business entity και role, διατήρησε την ίδια identity/role. Μην διευρύνεις αυθαίρετα με συνώνυμα, μεταφράσεις, φωνητικά ή παρόμοιες επωνυμίες. Σε ambiguity απαιτείται resolution/clarification.", agents: A("Atlas", "Compass", "Jarvis"), domains: A("Reporting", "Traders"), priority: 850),
+                "Όταν το request αναφέρει συγκεκριμένη business entity και role, διατήρησε την ίδια identity/role. Μην διευρύνεις αυθαίρετα με συνώνυμα, μεταφράσεις, φωνητικά ή παρόμοιες επωνυμίες. Σε ambiguity απαιτείται resolution/clarification.", agents: A("Atlas", "Compass", "Jarvis"), domains: A("Reporting", "Traders"), priority: 880),
 
             P("ATLAS.DETERMINISTIC_LATEST", JarvisPolicyScope.Task, JarvisPolicyEnforcement.Both,
-                "Singular latest/most-recent requests χρησιμοποιούν deterministic ordering και single-row result, με stable tie-breaker όταν απαιτείται από το domain.", agents: A("Atlas"), tasks: A("ReportData"), priority: 840),
+                "Singular latest/most-recent requests χρησιμοποιούν deterministic ordering και single-row result, με stable tie-breaker όταν απαιτείται από το domain.", agents: A("Atlas"), tasks: A("ReportData"), priority: 875),
 
+            P("REPORT.LARGE_RESULT_PREVIEW", JarvisPolicyScope.Presentation, JarvisPolicyEnforcement.Training,
+                "Σε μεγάλο result set δώσε σαφές preview αντί να κρύψεις ή να αντικαταστήσεις τα πραγματικά rows με αυθαίρετη σύνοψη. Δήλωσε total count και ότι το preview είναι περιορισμένο· export όλων γίνεται μόνο μέσω registered export flow.", agents: A("Jarvis", "Atlas"), tasks: A("ReportData", "ExportData"), domains: A("Reporting"), priority: 870),
+
+            P("REPORT.ACCOUNT_CARD_PRESENTATION", JarvisPolicyScope.Presentation, JarvisPolicyEnforcement.Training,
+                "Όταν ζητείται συγκεκριμένος λογαριασμός/οντότητα μαζί με κινήσεις, παρουσίασε χωριστά τα master στοιχεία και τις κινήσεις. Μην συγχέεις master lookup rows με transaction rows.", agents: A("Jarvis", "Atlas"), tasks: A("ReportData"), priority: 865),
+
+            P("PRESENTATION.TABULAR_DATA", JarvisPolicyScope.Presentation, JarvisPolicyEnforcement.Training,
+                "Δομημένα πολλαπλά rows/columns παρουσιάζονται ως πραγματικός πίνακας ή registered UI projection, όχι ως ακατέργαστο key=value dump ή ασαφή bullets.", agents: A("Jarvis"), tasks: A("__presentation"), priority: 860),
+
+            // ── Document / export ───────────────────────────────────────────
+            P("DOCUMENT.CONVERSION_TARGETS_ONLY", JarvisPolicyScope.Task, JarvisPolicyEnforcement.Both,
+                "Μην μαντεύεις conversion target/series. Χρησιμοποίησε μόνο conversion targets που επέστρεψε το registered resolver και μην ισχυρίζεσαι ότι έγινε conversion αν δεν υπάρχει terminal conversion tool.", agents: A("Atlas", "Jarvis"), tasks: A("ResolveDocumentConversion"), domains: A("Soft1Documents"), priority: 850),
+
+            P("EXPORT.VISIBLE_TABLE_NO_REQUERY", JarvisPolicyScope.Task, JarvisPolicyEnforcement.Both,
+                "Όταν ζητείται export του ήδη ορατού αποτελέσματος, χρησιμοποίησε το registered visible-table artifact και μην ξανατρέχεις σιωπηρά business query.", agents: A("Atlas", "Jarvis"), tasks: A("ExportData"), tools: A("export_shown_table"), priority: 845),
+
+            P("EXPORT.FILE_LINK_ON_SUCCESS", JarvisPolicyScope.Presentation, JarvisPolicyEnforcement.Both,
+                "Μετά από επιτυχημένο export εμφάνισε το authoritative file artifact/path ως clickable file reference. Ποτέ link πριν υπάρξει successful file result.", agents: A("Jarvis", "Atlas"), tasks: A("ExportData"), priority: 840),
+
+            // ── CRM / Echo ─────────────────────────────────────────────────
             P("ECHO.ATOMIC_NATIVE_CALL", JarvisPolicyScope.Agent, JarvisPolicyEnforcement.Training,
                 "Σε controlled write task ο Echo materializes ακριβώς μία native terminal tool call για το ήδη ανατεθειμένο atomic task. Δεν αποφασίζει capabilities, άλλα tasks ή agent handoffs και δεν κάνει uncontrolled retry loop.", agents: A("Echo"), priority: 830),
 
             P("ECHO.DATE_TIME_NORMALIZATION", JarvisPolicyScope.Domain, JarvisPolicyEnforcement.Training,
-                "Μετέτρεψε ρητές φυσικές ημερομηνίες/ώρες σε ISO χρησιμοποιώντας την τρέχουσα τοπική ημερομηνία/ώρα που παρέχει ο Jarvis runtime context. Μην αλλάζεις ημερομηνία/ώρα που έδωσε ρητά ο χρήστης.", agents: A("Echo"), domains: A("CRM", "Calendar"), priority: 820),
+                "Μετέτρεψε ρητές φυσικές ημερομηνίες/ώρες σε ISO χρησιμοποιώντας την τρέχουσα τοπική ημερομηνία/ώρα που παρέχει ο Jarvis runtime context. Μην αλλάζεις ημερομηνία/ώρα που έδωσε ρητά ο χρήστης.", agents: A("Echo"), domains: A("CRM", "Calendar"), priority: 825),
 
+            P("CRM.ASSIGNEE_MUST_RESOLVE", JarvisPolicyScope.Task, JarvisPolicyEnforcement.Both,
+                "CreateCrmTask απαιτεί resolved assignee/actor evidence πριν το write. Σε 0 ή πολλαπλά πραγματικά matches ζήτησε clarification· ποτέ guessed actorUserId.", agents: A("Echo", "Jarvis"), tasks: A("CreateCrmTask"), domains: A("CRM"), priority: 820),
+
+            P("CRM.CURRENT_OPERATOR_IS_RUNTIME_CONTEXT", JarvisPolicyScope.Validation, JarvisPolicyEnforcement.Both,
+                "Όταν το semantic intent δηλώνει self-assignment/current operator, ο actor resolve γίνεται deterministic από το ενεργό Soft1 session user context και όχι με name lookup ή lexical patch.", agents: A("Echo", "Jarvis"), tasks: A("CreateCrmTask"), priority: 819),
+
+            P("CRM.TRADER_REFERENCE_PAIR", JarvisPolicyScope.Validation, JarvisPolicyEnforcement.Both,
+                "Αν CRM task συνδέεται με συγκεκριμένο trader, τα trader id/type evidence πρέπει να είναι συνεπή και να προέρχονται από resolved entity context. Αν δεν αφορά trader, δεν επινοείται σύνδεση.", agents: A("Echo", "Jarvis"), tasks: A("CreateCrmTask"), priority: 818),
+
+            P("CRM.NO_IMPLICIT_REMINDER", JarvisPolicyScope.Task, JarvisPolicyEnforcement.Training,
+                "Μην προσθέτεις reminder field που δεν ζήτησε ή δεν όρισε ο χειριστής. Η ύπαρξη task από μόνη της δεν συνεπάγεται πρόσθετη υπενθύμιση.", agents: A("Echo"), tasks: A("CreateCrmTask"), priority: 817),
+
+            // ── Calendar / Email / contacts ─────────────────────────────────
             P("CALENDAR.DEFAULT_DURATION", JarvisPolicyScope.Task, JarvisPolicyEnforcement.Training,
                 "Για CreateCalendarEvent, όταν ο χρήστης δεν δίνει διάρκεια, χρησιμοποίησε 30 λεπτά.", agents: A("Echo"), tasks: A("CreateCalendarEvent"), priority: 810),
 
             P("CALENDAR.NO_IMPLICIT_ATTENDEE", JarvisPolicyScope.Task, JarvisPolicyEnforcement.Both,
-                "Αναφορά προσώπου στο subject/body δεν σημαίνει attendee. Attendee δημιουργείται μόνο όταν ο χρήστης ζητά ρητά πρόσκληση/συμμετοχή τρίτου.", agents: A("Echo", "Jarvis"), tasks: A("CreateCalendarEvent"), domains: A("Calendar"), priority: 800),
+                "Αναφορά προσώπου στο subject/body δεν σημαίνει attendee. Attendee δημιουργείται μόνο όταν ο χρήστης ζητά ρητά πρόσκληση/συμμετοχή τρίτου.", agents: A("Echo", "Jarvis"), tasks: A("CreateCalendarEvent"), domains: A("Calendar"), priority: 809),
+
+            P("CALENDAR.EXTERNAL_ATTENDEE_CONFIRMATION", JarvisPolicyScope.Execution, JarvisPolicyEnforcement.Both,
+                "Όταν calendar event θα στείλει πραγματική πρόσκληση σε τρίτο, το attendee set πρέπει να είναι resolved και το external-invitation payload να επιβεβαιωθεί σύμφωνα με το confirmation contract πριν αποσταλεί.", agents: A("Echo", "Jarvis"), tasks: A("CreateCalendarEvent"), priority: 808),
+
+            P("CALENDAR.DESTINATION_CLARIFICATION", JarvisPolicyScope.Orchestration, JarvisPolicyEnforcement.Training,
+                "Αν ο χρήστης ζητήσει απλώς υπενθύμιση χωρίς να καθορίζει αν τη θέλει ως Soft1 CRM task ή Outlook calendar event και η διαφορά αλλάζει outcome, ζήτησε destination clarification. Αν ζητά ρητά και τα δύο, δημιούργησε δύο ανεξάρτητα tasks.", agents: A("Jarvis"), priority: 807),
 
             P("EMAIL.RESOLVED_RECIPIENT_ONLY", JarvisPolicyScope.Tool, JarvisPolicyEnforcement.Both,
-                "Send/reply email επιτρέπεται μόνο με resolved recipient/source message και validated content. Αν υπάρχουν πολλαπλές επαφές, παρουσίασε επιλογές αντί να επιλέξεις σιωπηρά.", agents: A("Echo", "Jarvis"), domains: A("Email"), tools: A("send_email", "reply_email", "search_outlook_contacts"), priority: 790),
+                "Send/reply email επιτρέπεται μόνο με resolved recipient/source message και validated content. Αν υπάρχουν πολλαπλές επαφές, παρουσίασε επιλογές αντί να επιλέξεις σιωπηρά.", agents: A("Echo", "Jarvis"), domains: A("Email"), tools: A("send_email", "reply_email", "search_outlook_contacts"), priority: 800),
 
+            P("EMAIL.DRAFT_BEFORE_EXTERNAL_SEND", JarvisPolicyScope.Execution, JarvisPolicyEnforcement.Both,
+                "Πριν από external email send/reply, παρουσίασε το resolved recipient/subject/body payload και πάγωσέ το για confirmation. Η επιβεβαίωση αφορά ακριβώς αυτό το payload, όχι μεταγενέστερα αλλαγμένο draft.", agents: A("Echo", "Jarvis"), tasks: A("SendEmail", "ReplyEmail"), priority: 799),
+
+            P("EMAIL.EXPLICIT_RECIPIENT_PRECEDENCE", JarvisPolicyScope.Validation, JarvisPolicyEnforcement.Both,
+                "Ρητά δοσμένος recipient από τον χειριστή υπερισχύει από inferred/customer-card/contact email. Downstream lookup δεν επιτρέπεται να αντικαταστήσει explicit recipient χωρίς νέα οδηγία χρήστη.", agents: A("Echo", "Jarvis"), tasks: A("SendEmail"), priority: 798),
+
+            P("EMAIL.READ_FAILURE_IS_NOT_EMPTY_INBOX", JarvisPolicyScope.Validation, JarvisPolicyEnforcement.Both,
+                "Permission/configuration/tool failure σε email/calendar read δεν μεταφράζεται σε 'δεν υπάρχουν εγγραφές'. Διατήρησε τη διάκριση empty valid result έναντι execution failure.", agents: A("Echo", "Jarvis"), domains: A("Email", "Calendar"), priority: 797),
+
+            P("EMAIL.ATTACHMENT_REQUIRES_REAL_ARTIFACT", JarvisPolicyScope.Validation, JarvisPolicyEnforcement.Both,
+                "Μην ισχυρίζεσαι ότι υπάρχει/κατέβηκε/επισυνάφθηκε αρχείο χωρίς successful artifact result. Μετά από download/export εμφάνισε το authoritative clickable file reference.", agents: A("Echo", "Jarvis"), domains: A("Email"), priority: 796),
+
+            P("EMAIL.WRITING_HELP_NEEDS_NO_TOOL", JarvisPolicyScope.Task, JarvisPolicyEnforcement.Training,
+                "Αίτημα μόνο για σύνταξη/διόρθωση/τόνο/μετάφραση email είναι text-composition outcome και δεν απαιτεί send/read tool εκτός αν ο χρήστης ζητήσει και πραγματική ενέργεια.", agents: A("Echo", "Jarvis"), domains: A("Email"), priority: 795),
+
+            P("CONTACT.EXPLICIT_SEARCH_PROJECTS_RESULTS", JarvisPolicyScope.Presentation, JarvisPolicyEnforcement.Training,
+                "Όταν το outcome είναι ρητή αναζήτηση επαφών, εμφάνισε τα resolved contact results μέσω του registered contact UI projection όταν είναι διαθέσιμο· μην κρύβεις πολλαπλά matches ή επιλέγεις ένα αυθαίρετα.", agents: A("Echo", "Jarvis"), domains: A("Email"), tools: A("show_contact_results"), priority: 794),
+
+            P("EMAIL.FILTER_VS_POINT_QUERY", JarvisPolicyScope.Task, JarvisPolicyEnforcement.Training,
+                "Αίτημα αλλαγής/προβολής λίστας με φίλτρο χρησιμοποιεί registered filter/UI projection flow· σημειακή ερώτηση για συγκεκριμένο μήνυμα χρησιμοποιεί read/search flow. Μην γεμίζεις το chat με raw rows όταν το outcome είναι UI projection.", agents: A("Echo", "Jarvis"), tasks: A("ReadInbox", "ReadCalendar"), priority: 793),
+
+            // ── Trader / Compass ────────────────────────────────────────────
+            P("TRADER.FIND_BEFORE_CREATE", JarvisPolicyScope.Task, JarvisPolicyEnforcement.Both,
+                "Πριν από CreateTrader έλεγξε αν υπάρχει ήδη ο trader με authoritative identity. Existing match σταματά τη δημιουργία· δεν δημιουργείται duplicate.", agents: A("Compass", "Jarvis"), tasks: A("CreateTrader"), domains: A("Traders"), priority: 780),
+
+            P("TRADER.ROLE_MUST_RESOLVE", JarvisPolicyScope.Validation, JarvisPolicyEnforcement.Both,
+                "Trader role/sodType προέρχεται από explicit user intent ή authoritative entity knowledge. Αν role απαιτείται για create και παραμένει ambiguous, ζήτησε clarification.", agents: A("Compass", "Jarvis"), tasks: A("FindTrader", "CreateTrader"), priority: 779),
+
+            P("TRADER.EXTERNAL_DATA_BEFORE_CONFIRM", JarvisPolicyScope.Execution, JarvisPolicyEnforcement.Both,
+                "Για CreateTrader από external business data, πρώτα resolve/preview τα authoritative στοιχεία, μετά ζήτησε confirmation, και μόνο μετά εκτέλεσε terminal write. Δεν επιτρέπεται create στο ίδιο στάδιο με το lookup/preview.", agents: A("Compass", "Jarvis"), tasks: A("CreateTrader"), priority: 778),
+
+            // ── Item / Forge ────────────────────────────────────────────────
+            P("ITEM.TEMPLATE_IS_PREREQUISITE_NOT_RESULT", JarvisPolicyScope.Task, JarvisPolicyEnforcement.Both,
+                "Template/item lookup είναι prerequisite για CreateItem και όχι τελικό creation result. Template fields χρησιμοποιούνται μόνο ως authoritative copied/default values του registered create contract.", agents: A("Forge", "Jarvis"), tasks: A("CreateItem"), domains: A("Items"), priority: 770),
+
+            P("ITEM.REQUIRED_FIELDS_BEFORE_CONFIRM", JarvisPolicyScope.Validation, JarvisPolicyEnforcement.Both,
+                "Όλα τα required CreateItem inputs πρέπει να έχουν resolved πριν παγώσει το confirmation payload. Μην μαντεύεις unit/VAT/account/lot/serial flags.", agents: A("Forge", "Jarvis"), tasks: A("CreateItem"), priority: 769),
+
+            P("ITEM.CREATE_AFTER_CONFIRM", JarvisPolicyScope.Execution, JarvisPolicyEnforcement.Both,
+                "CreateItem terminal write εκτελείται μόνο μετά από confirmation του πλήρους resolved payload. Μετά την επιτυχία παρουσιάζεται ο πραγματικός returned code/id, όχι ο requested code αν το Soft1 τον άλλαξε.", agents: A("Forge", "Jarvis"), tasks: A("CreateItem"), priority: 768),
+
+            P("ITEM.BULK_SINGLE_BATCH_CONFIRMATION", JarvisPolicyScope.Execution, JarvisPolicyEnforcement.Both,
+                "Bulk item creation ζητά μία σαφή batch-level επιβεβαίωση πριν αρχίσουν τα writes. Μετά την έγκριση δεν ζητείται νέα επιβεβαίωση ανά item εκτός αν προκύψει νέο unresolved required fact που αλλάζει το συγκεκριμένο write.", agents: A("Forge", "Jarvis"), tasks: A("CreateItem"), priority: 767),
+
+            P("ITEM.BULK_CONTINUE_INDEPENDENT_FAILURES", JarvisPolicyScope.Execution, JarvisPolicyEnforcement.Deterministic,
+                "Σε bulk operation failure ενός ανεξάρτητου item δεν ακυρώνει τα υπόλοιπα ήδη-resolved items. Στο τέλος επιστρέφεται συνολικό report successes/failures χωρίς διπλή δημιουργία επιτυχημένων items.", agents: A("Forge", "Jarvis"), tasks: A("CreateItem"), priority: 766),
+
+            P("FILE.ATTACHMENT_REVIEW_BEFORE_ACTION", JarvisPolicyScope.Orchestration, JarvisPolicyEnforcement.Training,
+                "Για νέο attached text/tabular file πρώτα αναγνώρισε/περίγραψε τι περιέχει και περίμενε οδηγία, εκτός αν ο ίδιος user message περιλαμβάνει ήδη σαφή action request. Η ύπαρξη attachment από μόνη της δεν εξουσιοδοτεί write.", agents: A("Jarvis", "Forge"), priority: 765),
+
+            // ── Orders / Scout ──────────────────────────────────────────────
+            P("ORDER.RESOLVE_ALL_BUSINESS_KEYS", JarvisPolicyScope.Validation, JarvisPolicyEnforcement.Both,
+                "CreateOrder απαιτεί resolved supported sosource, valid series, trader identity και local item ids/quantities πριν το terminal write. Κάθε ambiguity λύνεται πριν το create.", agents: A("Scout", "Jarvis"), tasks: A("CreateOrder"), domains: A("Orders"), priority: 750),
+
+            P("ORDER.OPTIONAL_PAYMENT_SHIPMENT", JarvisPolicyScope.Task, JarvisPolicyEnforcement.Training,
+                "Payment/shipment περνούν ως explicit override μόνο όταν τα έδωσε ο χειριστής ή προκύπτουν από registered prerequisite resolution. Μην κάνεις αυθαίρετο extra lookup για να τα επινοήσεις.", agents: A("Scout"), tasks: A("CreateOrder"), priority: 749),
+
+            P("ORDER.PRICE_ONLY_IF_EXPLICIT_OR_CONTRACT", JarvisPolicyScope.Task, JarvisPolicyEnforcement.Training,
+                "Μην επινοείς line price. Αν ο χρήστης δεν έδωσε τιμή και το native contract αφήνει το Soft1 να εφαρμόσει τιμολογιακή πολιτική, μην βάζεις guessed price.", agents: A("Scout"), tasks: A("CreateOrder"), priority: 748),
+
+            P("ORDER.CONFIDENCE_GATE_IS_REAL", JarvisPolicyScope.Validation, JarvisPolicyEnforcement.Both,
+                "Το order confidence αντικατοπτρίζει το ασθενέστερο κρίσιμο unresolved/resolved σκέλος και δεν φουσκώνεται για να περάσει threshold. Κάτω από το configured gate ζητείται clarification ή απορρίπτεται το write.", agents: A("Scout", "Jarvis"), tasks: A("CreateOrder"), priority: 747),
+
+            P("ORDER.SOURCE_INSTRUCTION_IS_DURABLE", JarvisPolicyScope.Execution, JarvisPolicyEnforcement.Both,
+                "Το sourceInstruction διατηρεί πιστά την οδηγία χρήστη για audit/learning και δεν αντικαθίσταται από generic text.", agents: A("Scout", "Jarvis"), tasks: A("CreateOrder"), priority: 746),
+
+            P("ORDER.SUCCESS_LINK_AND_OPTIONAL_RATING", JarvisPolicyScope.Presentation, JarvisPolicyEnforcement.Both,
+                "Μετά από verified CreateOrder εμφάνισε authoritative document link. Αν το result περιέχει πραγματικό rating/audit reference, μπορεί να εμφανιστεί το registered rating link· αν λείπει δεν επινοείται.", agents: A("Jarvis", "Scout"), tasks: A("CreateOrder"), priority: 745),
+
+            // ── Browser / Scout ─────────────────────────────────────────────
+            P("BROWSER.NAVIGATE_ON_USER_INTENT", JarvisPolicyScope.Tool, JarvisPolicyEnforcement.Both,
+                "Browser navigation γίνεται μόνο ως μέρος του resolved user/research intent. Μην ανοίγεις αυθαίρετα άσχετες σελίδες.", agents: A("Scout"), tasks: A("InternetResearch"), tools: A("open_url"), priority: 730),
+
+            P("BROWSER.READ_BEFORE_CONTENT_CLAIM", JarvisPolicyScope.Validation, JarvisPolicyEnforcement.Both,
+                "Μην κάνεις factual claim για περιεχόμενο σελίδας μόνο επειδή έγινε navigation. Πρέπει να υπάρχει page-content/table evidence από registered read/extraction tool.", agents: A("Scout", "Jarvis"), tasks: A("InternetResearch"), priority: 729),
+
+            P("BROWSER.TABLE_EXTRACTION_FALLBACK", JarvisPolicyScope.Task, JarvisPolicyEnforcement.Training,
+                "Για πραγματικά tabular web data προτίμησε table extraction. Αν η σελίδα δεν έχει table αλλά έχει σαφώς επαναλαμβανόμενη δομή, χρησιμοποίησε page content και αναδόμησε μόνο όσα υποστηρίζει το evidence· σε χαοτικό/ασαφές content μην μαντεύεις rows.", agents: A("Scout"), tasks: A("InternetResearch"), priority: 728),
+
+            // ── Courier / Sprint ────────────────────────────────────────────
+            P("COURIER.DOCUMENTS_TO_REGISTERED_UI", JarvisPolicyScope.Presentation, JarvisPolicyEnforcement.Training,
+                "Courier document discovery προβάλλεται μέσω του registered courier UI projection όταν αυτό είναι το requested outcome. Μην αντικαθιστάς το UI projection με ανεξάρτητη raw chat list.", agents: A("Sprint", "Jarvis"), tasks: A("CourierDocuments"), priority: 710),
+
+            P("COURIER.VOUCHER_RESOLVE_BEFORE_CREATE", JarvisPolicyScope.Validation, JarvisPolicyEnforcement.Both,
+                "CreateCourierVoucher απαιτεί resolved eligible document, provider και required receiver/shipment data πριν το terminal external action. Μην μαντεύεις provider capability ή persisted voucher data.", agents: A("Sprint", "Jarvis"), tasks: A("CreateCourierVoucher"), priority: 709),
+
+            P("COURIER.VOUCHER_CONFIRMATION", JarvisPolicyScope.Execution, JarvisPolicyEnforcement.Both,
+                "Courier voucher creation/cancellation ακολουθεί το registered irreversible-action confirmation contract και δεν επαναλαμβάνεται αυτόματα μετά από αβέβαιο external result.", agents: A("Sprint", "Jarvis"), tasks: A("CreateCourierVoucher", "CancelCourierVoucher"), priority: 708),
+
+            // ── Help / conversational mode ──────────────────────────────────
+            P("HELP.CLARIFY_THEN_SOLVE", JarvisPolicyScope.Orchestration, JarvisPolicyEnforcement.Training,
+                "Σε Help mode συγκέντρωσε πρώτα τις απαραίτητες διευκρινίσεις, μετά δώσε τη λύση. Μην παράγεις durable help/audit summary πριν ο χειριστής δηλώσει ότι ολοκληρώθηκε το συγκεκριμένο θέμα.", agents: A("Sage", "Jarvis"), tasks: A("__help"), priority: 690),
+
+            P("HELP.DURABLE_SUMMARY_AFTER_CLOSE", JarvisPolicyScope.Presentation, JarvisPolicyEnforcement.Training,
+                "Όταν κλείνει επιβεβαιωμένα help case, η durable περίληψη πρέπει να περιέχει keywords, συμπυκνωμένο αίτημα και αναλυτική επαναχρησιμοποιήσιμη λύση στο registered machine-readable format.", agents: A("Sage", "Jarvis"), tasks: A("__help"), priority: 689),
+
+            // ── Presentation ────────────────────────────────────────────────
             P("PRESENTATION.VALIDATED_FACTS_ONLY", JarvisPolicyScope.Presentation, JarvisPolicyEnforcement.Both,
-                "Presentation layer αλλάζει μόνο wording/μορφοποίηση πάνω σε validated context. Δεν κάνει query/action, δεν αλλάζει business facts και δεν συμπληρώνει ελλείποντα στοιχεία.", agents: A("Jarvis"), priority: 780),
+                "Presentation layer αλλάζει μόνο wording/μορφοποίηση πάνω σε validated context. Δεν κάνει query/action, δεν αλλάζει business facts και δεν συμπληρώνει ελλείποντα στοιχεία.", agents: A("Jarvis"), tasks: A("__presentation"), priority: 680),
 
             P("PRESENTATION.HUMAN_READABLE", JarvisPolicyScope.Presentation, JarvisPolicyEnforcement.Training,
-                "User-facing report/email πρέπει να είναι σύντομο, φυσικό και επαγγελματικό, όχι raw key=value dump. Σε email το subject είναι σχετικό και το body έτοιμο για πραγματική αποστολή.", agents: A("Jarvis"), priority: 770),
+                "User-facing report/email πρέπει να είναι σύντομο, φυσικό και επαγγελματικό, όχι raw key=value dump. Σε email το subject είναι σχετικό και το body έτοιμο για πραγματική αποστολή.", agents: A("Jarvis"), tasks: A("__presentation"), priority: 679),
 
+            P("PRESENTATION.DO_NOT_HIDE_PARTIAL_FAILURE", JarvisPolicyScope.Presentation, JarvisPolicyEnforcement.Both,
+                "Σε multi-task request παρουσίασε ξεχωριστά ποια outcomes ολοκληρώθηκαν, ποια απέτυχαν και ποια χρειάζονται clarification. Μην μετατρέπεις partial failure σε συνολικό success ή συνολικό abort.", agents: A("Jarvis"), tasks: A("__presentation"), priority: 678),
+
+            // ── Tool fallback policies: central source, never tool-registry prose ──
             P("TOOL.query_data.FALLBACK", JarvisPolicyScope.Tool, JarvisPolicyEnforcement.Deterministic,
                 "Σε failure του query_data αποτυγχάνει μόνο το read task, χωρίς data mutation. Ποτέ success claim χωρίς πραγματικό dataset/tool success.", tools: A("query_data")),
             P("TOOL.export_query_to_file.FALLBACK", JarvisPolicyScope.Tool, JarvisPolicyEnforcement.Deterministic,
