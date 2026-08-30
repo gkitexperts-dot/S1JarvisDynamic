@@ -18,6 +18,7 @@ namespace S1Jarvis.Core
         public string Agent { get; set; }
         public bool Ready { get; set; }
         public string ReasonCode { get; set; }
+        public string AgentAccountRef { get; set; }
         public string Provider { get; set; }
         public string Model { get; set; }
         public string ApiKey { get; set; }
@@ -99,6 +100,7 @@ namespace S1Jarvis.Core
             public string Agent { get; set; }
             public bool Ready { get; set; }
             public string ReasonCode { get; set; }
+            public string AgentAccountRef { get; set; }
             public string Provider { get; set; }
             public string Model { get; set; }
             public string ApiKey { get; set; }
@@ -131,9 +133,9 @@ namespace S1Jarvis.Core
             return ProbeAsync(xSupport, expectedAgentAccountRef, null);
         }
 
-        // Compatibility overload. expectedModel is optional and used only as
-        // a consistency assertion by old callers. Boot/HEALTH provisioning
-        // never pre-resolves a model.
+        // expectedAgentAccountRef / expectedModel are retained only for source
+        // compatibility with old callers. BOOT/HEALTH no longer pre-resolves
+        // any AI target; the signed health response is authoritative.
         public async Task<JarvisAgentHealthResult> ProbeAsync(
             XSupport xSupport,
             string expectedAgentAccountRef,
@@ -141,8 +143,6 @@ namespace S1Jarvis.Core
         {
             if (xSupport == null)
                 return JarvisAgentHealthResult.Failure("provider_probe_identity_missing");
-            if (string.IsNullOrWhiteSpace(expectedAgentAccountRef))
-                return JarvisAgentHealthResult.Failure("agent_account_missing");
 
             string selectedModel = string.IsNullOrWhiteSpace(expectedModel)
                 ? null
@@ -329,6 +329,9 @@ namespace S1Jarvis.Core
                     ReasonCode = string.IsNullOrWhiteSpace(target.ReasonCode)
                         ? "provider_unavailable"
                         : target.ReasonCode.Trim(),
+                    AgentAccountRef = string.IsNullOrWhiteSpace(target.AgentAccountRef)
+                        ? null
+                        : target.AgentAccountRef.Trim(),
                     Provider = string.IsNullOrWhiteSpace(target.Provider)
                         ? null
                         : target.Provider.Trim(),
