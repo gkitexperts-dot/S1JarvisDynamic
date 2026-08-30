@@ -74,6 +74,14 @@ namespace S1Jarvis.Core
 
         public static void Log(string message)
         {
+            try
+            {
+                // The UI observer is intentionally fed even when file logging is disabled.
+                // It is presentation-only and never changes orchestration state.
+                JarvisOrchestrationActivityBus.ObserveLogMessage(message);
+            }
+            catch { }
+
             if (!Enabled) return;
 
             try
