@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Text;
 using Newtonsoft.Json.Linq;
 
 namespace S1Jarvis.Core
@@ -77,8 +78,6 @@ namespace S1Jarvis.Core
 
             var policies = new Dictionary<string, JarvisPolicyDescriptor>(StringComparer.OrdinalIgnoreCase);
 
-            // Always include global/agent policies that are valid for the request
-            // tool surface, even when the exact legacy task cannot be inferred.
             foreach (JarvisPolicyDescriptor policy in JarvisPolicyRegistry.Resolve(
                 agentName, null, ResolveDomains(requestTools), requestTools, null))
             {
@@ -101,7 +100,7 @@ namespace S1Jarvis.Core
                 }
             }
 
-            return JarvisPolicyRegistry.FormatTrainingContext(policies.Values);
+            return FormatTrainingContext(policies.Values);
         }
 
         /// <summary>
@@ -202,6 +201,22 @@ namespace S1Jarvis.Core
                     domains.Add(tool.Domain.Trim());
             }
             return domains.ToArray();
+        }
+
+        private static string FormatTrainingContext(IEnumerable<JarvisPolicyDescriptor> policies)
+        {
+            JarvisPolicyDescriptor[] applicable = (policies ?? Enumerable.Empty<JarvisPolicyDescriptor>())
+                .Where(x => x != null)
+                .OrderByDescending(x => x.Priority)
+                .ThenBy(x => x.PolicyId, StringComparer.OrdinalIgnoreCase)
+                .ToArray();
+            if (applicable.Length == 0) return string.Empty;
+
+            var sb = new StringBuilder();
+            sb.AppendLine("[JARVIS_POLICY_CONTEXT]");
+            foreach (JarvisPolicyDescriptor policy in applicable)
+                sb.Append("- ").Append(policy.PolicyId).Append(": ").AppendLine(policy.Rule);
+            return sb.ToString().TrimEnd();
         }
     }
 }
