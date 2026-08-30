@@ -31,26 +31,19 @@ namespace S1Jarvis.Core
 
         internal static JarvisToolDescriptor FindTerminalStateChangingTool(JarvisTaskDescriptor task)
         {
-            if (task == null) return null;
-            JarvisToolDescriptor[] changing = (task.Tools ?? new string[0])
-                .Select(JarvisToolRegistry.Find)
-                .Where(x => x != null && x.Operation != JarvisToolOperation.Read)
-                .ToArray();
+            JarvisToolDescriptor[] changing = GetStateChangingTools(task);
             return changing.Length == 1 ? changing[0] : null;
         }
 
         private static void ValidateTerminalToolContract(JarvisTaskDescriptor task, List<string> issues)
         {
-            JarvisToolDescriptor[] changing = (task.Tools ?? new string[0])
-                .Select(JarvisToolRegistry.Find)
-                .Where(x => x != null && x.Operation != JarvisToolOperation.Read)
-                .ToArray();
-
             bool stateChangingTask = task.Operation == JarvisTaskOperation.Write ||
                                      task.Operation == JarvisTaskOperation.ExternalAction;
 
             if (!stateChangingTask)
                 return;
+
+            JarvisToolDescriptor[] changing = GetStateChangingTools(task);
 
             if (changing.Length != 1)
             {
@@ -73,6 +66,18 @@ namespace S1Jarvis.Core
                     issues.Add("Task output contract does not include terminal tool output: " +
                         task.TaskType + " -> " + changing[0].Name + "." + produced);
             }
+        }
+
+        // Single authoritative source for "which tools on this task actually change
+        // state" — used both to find the terminal tool and to validate its contract,
+        // so the two never drift out of sync with each other.
+        private static JarvisToolDescriptor[] GetStateChangingTools(JarvisTaskDescriptor task)
+        {
+            if (task == null) return new JarvisToolDescriptor[0];
+            return (task.Tools ?? new string[0])
+                .Select(JarvisToolRegistry.Find)
+                .Where(x => x != null && x.Operation != JarvisToolOperation.Read)
+                .ToArray();
         }
 
         private static void ValidateNames(JarvisTaskDescriptor task, List<string> issues)
@@ -143,7 +148,7 @@ namespace S1Jarvis.Core
 
         private static string[] Normalize(IEnumerable<string> values)
         {
-            return (values ?? Enumerable.Empty<string>())
+            return (values ?? new string[0])
                 .Where(x => !string.IsNullOrWhiteSpace(x))
                 .Select(x => x.Trim())
                 .ToArray();
