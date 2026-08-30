@@ -9,6 +9,7 @@ namespace S1Jarvis.Core
     /// Restricted Echo executor for one already-confirmed SendEmail task.
     /// It receives only the frozen payload approved by the operator. It never
     /// performs recipient lookup, data lookup, body recomposition or replanning.
+    /// Native prerequisites are validated from JarvisToolRegistry.
     /// </summary>
     internal static class JarvisControlledEchoExecutor
     {
@@ -32,15 +33,13 @@ namespace S1Jarvis.Core
                 if (frozenPayload == null)
                     throw new InvalidOperationException("Echo SendEmail requires a frozen confirmation payload.");
 
-                string to = frozenPayload["to"] == null ? null : frozenPayload["to"].ToString();
-                string subject = frozenPayload["subject"] == null ? null : frozenPayload["subject"].ToString();
-                string body = frozenPayload["body"] == null ? null : frozenPayload["body"].ToString();
-                if (string.IsNullOrWhiteSpace(to))
-                    throw new InvalidOperationException("Frozen SendEmail payload is missing 'to'.");
-                if (string.IsNullOrWhiteSpace(subject))
-                    throw new InvalidOperationException("Frozen SendEmail payload is missing 'subject'.");
-                if (string.IsNullOrWhiteSpace(body))
-                    throw new InvalidOperationException("Frozen SendEmail payload is missing 'body'.");
+                string[] contractIssues = JarvisToolContractValidator.ValidateProposedInput(
+                    "send_email",
+                    frozenPayload);
+                if (contractIssues.Length > 0)
+                    throw new InvalidOperationException(
+                        "Frozen SendEmail payload violates the authoritative tool contract: " +
+                        string.Join(" | ", contractIssues));
 
                 // Execute the mature, already deployed email transport directly.
                 // No AI/model call is allowed between operator confirmation and
