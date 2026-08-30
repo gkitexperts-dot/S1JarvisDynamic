@@ -150,9 +150,6 @@ namespace S1Jarvis.Core
                     localIssues.Add("Execution object has no authoritative task node: " + entry.ObjectId);
                 else
                 {
-                    // Internal execution context. Controlled executors consume these
-                    // values; names beginning with __ are never forwarded as native
-                    // tool arguments.
                     inputs["__intent_fragment"] = node.IntentFragment ?? string.Empty;
                     inputs["__policy_context"] = JarvisAgentContextBuilder.BuildTrainingPolicyContext(entry.OwnerAgent, entry.TaskType);
                     inputs["__deterministic_policy_ids"] = JarvisAgentContextBuilder.BuildDeterministicPolicyIds(entry.OwnerAgent, entry.TaskType);
@@ -171,9 +168,6 @@ namespace S1Jarvis.Core
                         else if (prerequisite.Kind == JarvisPrerequisiteResolutionKind.LookupPlanned ||
                                  prerequisite.Kind == JarvisPrerequisiteResolutionKind.OwnerAgentPending)
                         {
-                            // Validated execution work belonging to the registered
-                            // owner agent. The controlled executor receives the
-                            // atomic fragment and only the registered task/tool scope.
                         }
                         else if (prerequisite.Kind == JarvisPrerequisiteResolutionKind.NeedsUserInput)
                             localIssues.Add("User input remains unresolved for " + entry.ObjectId + "." + prerequisite.InputName + ".");
@@ -214,7 +208,11 @@ namespace S1Jarvis.Core
 
             JObject inputs; string[] inputIssues;
             if (!TryGetDispatchInputsCore(entry, entry.ObjectId, out inputs, out inputIssues)) { step.State = JarvisExecutionStepState.Blocked; step.ValidationIssues.AddRange(inputIssues); return step; }
-            foreach (JProperty property in inputs.Properties()) step.MaterializedInputs[property.Name] = property.Value.DeepClone();
+            foreach (JProperty property in inputs.Properties())
+            {
+                if (string.Equals(property.Name, "__policy_context", StringComparison.OrdinalIgnoreCase)) continue;
+                step.MaterializedInputs[property.Name] = property.Value.DeepClone();
+            }
 
             if (entry.RequiresConfirmation && !_confirmed.Contains(entry.ObjectId)) { step.State = JarvisExecutionStepState.WaitingForConfirmation; return step; }
 
