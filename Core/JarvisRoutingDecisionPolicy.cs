@@ -32,44 +32,12 @@ namespace S1Jarvis.Core
     }
 
     /// <summary>
-    /// Central policy for semantic routing confidence and Pass-1/Pass-2 merge.
-    ///
-    /// Design rules:
-    /// 1. Strong, unambiguous default routing wins without a DB lookup.
-    /// 2. Medium/ambiguous default routing opens Pass 2.
-    /// 3. Dynamic knowledge can reinforce default routing.
-    /// 4. Dynamic knowledge is not an unrestricted override. A conflicting
-    ///    dynamic candidate must be very strong and clearly ahead, otherwise
-    ///    the result escalates to user clarification.
-    /// 5. Company-specific approved knowledge is preferred over global rows.
-    /// 6. Historical success/failure adjusts dynamic confidence conservatively.
-    ///
-    /// These constants are intentionally centralized so later tuning can be
-    /// performed without changing repository/planner code.
+    /// Deterministic routing decision engine. It implements, but does not own,
+    /// routing policy. Thresholds and weights live in JarvisPolicySettings;
+    /// behavioral policy identity/text lives in JarvisPolicyRegistry.
     /// </summary>
     internal static class JarvisRoutingDecisionPolicy
     {
-        // Pass 1: accept only when confidence is high and the top candidate is
-        // clearly separated from the runner-up.
-        internal const double DefaultAcceptThreshold = 0.82;
-        internal const double DefaultMinimumForDynamicPass = 0.45;
-        internal const double AmbiguityMargin = 0.12;
-
-        // Pass 2: a dynamic candidate must itself be strong enough to resolve.
-        internal const double DynamicAcceptThreshold = 0.78;
-
-        // A dynamic candidate that DISAGREES with the default winner is held to
-        // a stricter standard because table knowledge is an aid, not authority
-        // over the hardcoded task contract/catalog.
-        internal const double ConflictingDynamicThreshold = 0.88;
-        internal const double ConflictingDynamicLead = 0.18;
-
-        // Dynamic score contributions. Confidence remains the dominant signal.
-        private const double CompanySpecificBonus = 0.06;
-        private const double MaxPriorityBonus = 0.05;
-        private const double MaxHistoryBonus = 0.06;
-        private const double MaxHistoryPenalty = 0.10;
-
         internal static JarvisRoutingDecision EvaluateDefault(
             IEnumerable<JarvisRoutingCandidateScore> candidates)
         {
@@ -87,7 +55,7 @@ namespace S1Jarvis.Core
             }
 
             bool ambiguous = IsAmbiguous(winner, runnerUp);
-            if (winner.Score >= DefaultAcceptThreshold && !ambiguous)
+            if (winner.Score >= JarvisPolicySettings.Routing.DefaultAcceptThreshold && !ambiguous)
             {
                 return new JarvisRoutingDecision
                 {
@@ -105,7 +73,7 @@ namespace S1Jarvis.Core
                 Winner = winner,
                 RunnerUp = runnerUp,
                 IsAmbiguous = ambiguous,
-                Reason = winner.Score < DefaultMinimumForDynamicPass
+                Reason = winner.Score < JarvisPolicySettings.Routing.DefaultMinimumForDynamicPass
                     ? "Pass 1 confidence is low; consult approved dynamic knowledge."
                     : ambiguous
                         ? "Pass 1 candidates are too close; consult approved dynamic knowledge."
@@ -148,7 +116,7 @@ namespace S1Jarvis.Core
 
             if (defaultWinner == null)
             {
-                if (dynamicWinner.Score >= DynamicAcceptThreshold && !dynamicAmbiguous)
+                if (dynamicWinner.Score >= JarvisPolicySettings.Routing.DynamicAcceptThreshold && !dynamicAmbiguous)
                 {
                     return ResolvedDynamic(dynamicWinner, dynamicRunnerUp,
                         "No Pass-1 winner; Pass 2 produced a strong, unambiguous candidate.");
@@ -171,7 +139,7 @@ namespace S1Jarvis.Core
                     Reason = "Default and dynamic routing agree."
                 };
 
-                if (reinforced >= DefaultAcceptThreshold)
+                if (reinforced >= JarvisPolicySettings.Routing.DefaultAcceptThreshold)
                 {
                     return new JarvisRoutingDecision
                     {
@@ -187,11 +155,9 @@ namespace S1Jarvis.Core
                     "Pass 1 and Pass 2 agree, but combined confidence is still insufficient.");
             }
 
-            // Conflict: dynamic knowledge must be exceptionally strong AND far
-            // enough ahead of the default result. Otherwise ask the user.
             double lead = dynamicWinner.Score - defaultWinner.Score;
-            if (dynamicWinner.Score >= ConflictingDynamicThreshold &&
-                lead >= ConflictingDynamicLead &&
+            if (dynamicWinner.Score >= JarvisPolicySettings.Routing.ConflictingDynamicThreshold &&
+                lead >= JarvisPolicySettings.Routing.ConflictingDynamicLead &&
                 !dynamicAmbiguous)
             {
                 return ResolvedDynamic(dynamicWinner, defaultWinner,
@@ -212,12 +178,12 @@ namespace S1Jarvis.Core
             double score = Clamp01(knowledge.Confidence);
 
             if (knowledge.Company != 0 && knowledge.Company == currentCompany)
-                score += CompanySpecificBonus;
+                score += JarvisPolicySettings.Routing.CompanySpecificBonus;
 
-            // Priority is intentionally capped. Even very large values cannot
-            // turn weak semantic knowledge into a strong match by themselves.
             if (knowledge.Priority > 0)
-                score += Math.Min(MaxPriorityBonus, knowledge.Priority * 0.005);
+                score += Math.Min(
+                    JarvisPolicySettings.Routing.MaxPriorityBonus,
+                    knowledge.Priority * JarvisPolicySettings.Routing.PriorityStepWeight);
 
             int success = Math.Max(0, knowledge.SuccessCount);
             int fail = Math.Max(0, knowledge.FailCount);
@@ -225,12 +191,12 @@ namespace S1Jarvis.Core
             if (total > 0)
             {
                 double successRate = (double)success / total;
-                double evidence = Math.Min(1.0, total / 20.0);
+                double evidence = Math.Min(1.0, total / JarvisPolicySettings.Routing.HistoryEvidenceFullSample);
 
                 if (successRate >= 0.5)
-                    score += MaxHistoryBonus * ((successRate - 0.5) / 0.5) * evidence;
+                    score += JarvisPolicySettings.Routing.MaxHistoryBonus * ((successRate - 0.5) / 0.5) * evidence;
                 else
-                    score -= MaxHistoryPenalty * ((0.5 - successRate) / 0.5) * evidence;
+                    score -= JarvisPolicySettings.Routing.MaxHistoryPenalty * ((0.5 - successRate) / 0.5) * evidence;
             }
 
             return new JarvisRoutingCandidateScore
@@ -249,7 +215,6 @@ namespace S1Jarvis.Core
             if (knowledge == null || !knowledge.IsActive || string.IsNullOrWhiteSpace(knowledge.TaskType))
                 return false;
 
-            // Dynamic knowledge may route only to a registered business task.
             return JarvisTaskRegistry.Find(knowledge.TaskType) != null;
         }
 
@@ -279,14 +244,12 @@ namespace S1Jarvis.Core
             if (winner == null || runnerUp == null)
                 return false;
 
-            return (winner.Score - runnerUp.Score) < AmbiguityMargin;
+            return (winner.Score - runnerUp.Score) < JarvisPolicySettings.Routing.AmbiguityMargin;
         }
 
         private static double Reinforce(double defaultScore, double dynamicScore)
         {
-            // Conservative evidence combination: dynamic evidence can strengthen
-            // the default answer but cannot add its full score linearly.
-            return Clamp01(defaultScore + ((1.0 - defaultScore) * dynamicScore * 0.50));
+            return Clamp01(defaultScore + ((1.0 - defaultScore) * dynamicScore * JarvisPolicySettings.Routing.ReinforcementWeight));
         }
 
         private static JarvisRoutingDecision ResolvedDynamic(
