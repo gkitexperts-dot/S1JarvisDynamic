@@ -6,6 +6,7 @@ on:
       - feature/jarvis-orchestration
     paths:
       - scripts/final_architecture_consolidation.py
+      - .final-architecture-consolidation-trigger
 
 permissions:
   contents: write
