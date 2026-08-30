@@ -171,7 +171,16 @@ namespace S1Jarvis.Core
                 "Jarvis", "Atlas", "Forge", "Compass",
                 "Echo", "Sprint", "Scout", "Sage"
             };
-            string missing = required.FirstOrDefault(x => !next.ContainsKey(x));
+            string missing = null;
+            foreach (string requiredAgent in required)
+            {
+                if (!next.ContainsKey(requiredAgent))
+                {
+                    missing = requiredAgent;
+                    break;
+                }
+            }
+
             if (!string.IsNullOrWhiteSpace(missing))
             {
                 issue = "startup provisioning is missing required agent: " + missing;
