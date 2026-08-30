@@ -163,12 +163,15 @@ namespace S1Jarvis.Core
             // Continuation/legacy processing may return a verified creation status
             // as prose rather than JarvisTaskExecutionResult. The final gateway is
             // still responsible for the presentation invariant: a created CRM task
-            // with an explicit returned id must be addressable.
+            // with an explicit returned id must be addressable. Accept common label
+            // layouts (ID, ID Εργασίας CRM, CRM Task ID, SOACTION ID, Κωδικός
+            // Εργασίας) and tolerate surrounding markdown emphasis. This is a
+            // presentation invariant, not prompt-specific routing.
             if (ContainsSuccessfulCrmCreation(value))
             {
                 MatchCollection ids = Regex.Matches(
                     value,
-                    @"(?:ID|Κωδικός\s+Εργασίας)\s*[:#]?\s*\[?(?<id>\d{5,})\]?",
+                    @"(?:(?:ID|Κωδικός)\s*(?:(?:Εργασίας|Task|CRM|SOACTION)\s*){0,3}|(?:CRM\s+Task|SOACTION)\s*ID)\s*[:#]?\s*[*_]*\s*\[?(?<id>\d{5,})\]?",
                     RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
                 foreach (Match match in ids)
                 {
