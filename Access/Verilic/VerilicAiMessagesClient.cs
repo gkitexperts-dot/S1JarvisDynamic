@@ -1,9 +1,6 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
-using System.Net;
-using System.Net.Http;
-using System.Net.Http.Headers;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
@@ -15,23 +12,15 @@ using S1Jarvis.Core;
 namespace S1Jarvis.Access.Verilic
 {
     /// <summary>
-    /// Sends Jarvis provider requests through the signed Verilic messages
-    /// endpoint. Provider credentials and authoritative AgentAccountRef remain
-    /// server-side. Effective agent models are loaded once by the startup Health
-    /// check into JarvisAgentRuntimeSnapshot and are reused for the entire open
-    /// Jarvis session; this client never performs per-prompt model discovery.
+    /// Compatibility name for the Jarvis runtime AI dispatcher.
     ///
-    /// The preferred overload accepts the logical Jarvis agent explicitly.
-    /// The compatibility overload used by the mature Jarvis tool loop resolves
-    /// the same logical role from structural request capabilities on the first
-    /// iteration and keeps that role in AsyncLocal state for later iterations
-    /// (including the final no-tools iteration). It never lets descriptive
-    /// Browser/Item/Trader/Email text steal another agent's route.
+    /// Verilic is NOT in the normal prompt path anymore. Boot/HEALTH populate
+    /// JarvisAgentRuntimeSnapshot with Agent + Provider + Model + API key.
+    /// Every normal AI call resolves the logical agent locally and dispatches
+    /// directly to that provider through JarvisDirectAiTransport.
     /// </summary>
     internal sealed class VerilicAiMessagesClient
     {
-        private static readonly HttpClient Http = new HttpClient();
-        private static readonly TimeSpan Timeout = TimeSpan.FromSeconds(90);
         private static readonly HashSet<string> AllowedAgents = new HashSet<string>(
             new[] { "Jarvis", "Atlas", "Forge", "Compass", "Echo", "Sprint", "Scout", "Sage" },
             StringComparer.OrdinalIgnoreCase);
@@ -54,52 +43,6 @@ namespace S1Jarvis.Access.Verilic
             LastRuntimeProvider = null;
             LastRuntimeModel = null;
             LastRuntimeRouting = null;
-        }
-
-        private static void CaptureRuntimeTarget(MessagesResponse result)
-        {
-            if (result == null || !result.Success)
-                return;
-
-            LastRuntimeAgent = result.Agent;
-            LastRuntimeProvider = result.Provider;
-            LastRuntimeModel = result.Model;
-            LastRuntimeRouting = result.Routing;
-        }
-
-        private sealed class MessagesRequest
-        {
-            public string ProductId { get; set; }
-            public string InstallationId { get; set; }
-            public string ProductVersion { get; set; }
-            public string[] RequestedFeatures { get; set; }
-            public string Soft1Serial { get; set; }
-            public string CompanyCode { get; set; }
-            public string BranchCode { get; set; }
-            public string Soft1UserId { get; set; }
-            public string AgentName { get; set; }
-            public string ProviderRequestJson { get; set; }
-        }
-
-        private sealed class MessagesResponse
-        {
-            public bool Success { get; set; }
-            public string ReasonCode { get; set; }
-            public string ResponseText { get; set; }
-            public bool CreditsExhausted { get; set; }
-            public int UsageInputTokens { get; set; }
-            public int UsageOutputTokens { get; set; }
-            public string RawResponseJson { get; set; }
-            public string Agent { get; set; }
-            public string Provider { get; set; }
-            public string Model { get; set; }
-            public string Routing { get; set; }
-        }
-
-        static VerilicAiMessagesClient()
-        {
-            ServicePointManager.SecurityProtocol =
-                SecurityProtocolType.Tls12 | SecurityProtocolType.Tls13;
         }
 
         public Task<AgentProxyResponse> SendAsync(
@@ -128,225 +71,98 @@ namespace S1Jarvis.Access.Verilic
             if (!AllowedAgents.Contains(agentName))
                 return Failure("routing_agent_invalid");
 
-            // NON-NEGOTIABLE routing invariant: the model comes only from the
-            // immutable startup Health snapshot. Any model value a caller may
-            // have placed in its JSON is overwritten here. No per-prompt route,
-            // schema or model lookup is permitted at this boundary.
+            JarvisAgentRuntimeTarget target;
+            if (!JarvisAgentRuntimeSnapshot.TryGet(agentName, out target) ||
+                target == null || !target.HasApiKey)
+            {
+                try { target?.Dispose(); } catch { }
+                DebugLog.Log("[AI-SESSION-REGISTRY] request blocked; agent=" + agentName +
+                    " reason=session_target_missing");
+                return Failure("startup_agent_snapshot_missing");
+            }
+
             try
             {
+                // Caller-provided model values are never authoritative. The model
+                // is overwritten from the boot/HEALTH session registry.
                 providerRequestJson = JarvisAgentRuntimeSnapshot.ApplyModelToProviderRequest(
+                    agentName,
+                    providerRequestJson);
+
+                providerRequestJson = ApplyCurrentCompanyContext(
+                    xSupport,
+                    providerRequestJson);
+
+                providerRequestJson = VerilicProviderRequestOptimizer.TryOptimize(
+                    agentName,
+                    providerRequestJson);
+
+                providerRequestJson = ApplyProductIdentityPolicy(
                     agentName,
                     providerRequestJson);
             }
             catch (Exception ex)
             {
-                DebugLog.Log("[AI-STARTUP-SNAPSHOT] request blocked; agent=" +
+                target.Dispose();
+                DebugLog.Log("[AI-SESSION-REGISTRY] request preparation blocked; agent=" +
                     agentName + " reason=" + ex.Message);
-                return Failure("startup_agent_snapshot_missing");
+                return Failure("provider_request_invalid");
             }
 
-            // Normalize company awareness at the final desktop -> Verilic boundary.
-            // XSupport.ConnectionInfo.CompanyId is authoritative for the active
-            // Soft1 company. The display name is resolved from COMPANY and the
-            // request is made company-neutral before any provider sees it.
-            providerRequestJson = ApplyCurrentCompanyContext(
-                xSupport,
-                providerRequestJson);
-
-            // Conservative fast path for clearly read-only Atlas/reporting turns.
-            // Dedicated agents and action requests remain byte-for-byte unchanged
-            // apart from the common company-context normalization above.
-            providerRequestJson = VerilicProviderRequestOptimizer.TryOptimize(
-                agentName,
-                providerRequestJson);
-
-            // Product identity is a boundary invariant, independent of whichever
-            // internal execution role was selected. Apply it AFTER optimization so
-            // compact role prompts can never redefine Atlas/Forge/etc. as the visible
-            // assistant identity.
-            providerRequestJson = ApplyProductIdentityPolicy(
-                agentName,
-                providerRequestJson);
-
-            // Local-only correlation id for Soft1 usage telemetry. It contains
-            // no prompt/response content and is not sent to the provider.
             string usageRequestId = Guid.NewGuid().ToString("N");
-
+            AgentProxyResponse result;
             try
             {
-                VerilicRuntimeConfiguration configuration =
-                    VerilicRuntimeConfiguration.Load();
-                if (configuration.Mode != VerilicRuntimeMode.Verilic ||
-                    configuration.LicensingOrigin == null)
-                    return Failure("messages_configuration_invalid");
-
-                string productId = configuration.ResolveProductId(
-                    JarvisProducts.Jarvis);
-
-                var stateStore = new VerilicInstallationStateStore(
-                    configuration.StateDirectory,
-                    configuration.ProtectionScope);
-                VerilicInstallationState state = stateStore.Load(
-                    JarvisProducts.Jarvis);
-
-                if (state == null || !state.ActivationCompleted ||
-                    string.IsNullOrWhiteSpace(state.InstallationId) ||
-                    state.InstallationId.StartsWith("pending_", StringComparison.Ordinal) ||
-                    !string.Equals(state.VerilicProductId, productId, StringComparison.Ordinal) ||
-                    !string.Equals(state.KeyAlgorithm, "ES256", StringComparison.Ordinal) ||
-                    state.PrivateKeyMaterial == null || state.PrivateKeyMaterial.Length == 0)
-                    return Failure("messages_installation_invalid");
-
-                var info = xSupport.ConnectionInfo;
-                if (info == null)
-                    return Failure("messages_identity_missing");
-
-                var body = new MessagesRequest
-                {
-                    ProductId = productId,
-                    InstallationId = state.InstallationId,
-                    ProductVersion = configuration.ProductVersion,
-                    RequestedFeatures = new string[0],
-                    Soft1Serial = info.SerialNum == null ? null : info.SerialNum.ToString(),
-                    CompanyCode = info.CompanyId.ToString(),
-                    BranchCode = info.BranchId.ToString(),
-                    Soft1UserId = info.UserId.ToString(),
-                    AgentName = agentName,
-                    ProviderRequestJson = providerRequestJson
-                };
-
-                string json = JsonConvert.SerializeObject(body);
-                byte[] bodyBytes = Encoding.UTF8.GetBytes(json);
-
-                var origin = new Uri(
-                    configuration.LicensingOrigin.GetLeftPart(UriPartial.Authority) + "/");
-                var messagesUri = new Uri(origin, "api/jarvis-ai/messages");
-
-                var proofState = new VerilicInstallationState
-                {
-                    ProductCode = productId,
-                    InstallationId = state.InstallationId,
-                    KeyAlgorithm = state.KeyAlgorithm,
-                    PrivateKeyMaterial = state.PrivateKeyMaterial
-                };
-
-                using (var authorizer = new VerilicEs256RequestAuthorizer(proofState))
-                using (var request = new HttpRequestMessage(HttpMethod.Post, messagesUri))
-                using (var timeout = new CancellationTokenSource(Timeout))
-                using (var linked = CancellationTokenSource.CreateLinkedTokenSource(
-                    cancellationToken,
-                    timeout.Token))
-                {
-                    var content = new ByteArrayContent(bodyBytes);
-                    content.Headers.ContentType = new MediaTypeHeaderValue("application/json")
-                    {
-                        CharSet = "utf-8"
-                    };
-                    request.Content = content;
-                    authorizer.Authorize(request, bodyBytes);
-
-                    using (HttpResponseMessage response = await Http.SendAsync(
-                        request,
-                        linked.Token))
-                    {
-                        string responseJson = await response.Content.ReadAsStringAsync();
-                        if (!response.IsSuccessStatusCode)
-                            return Failure(
-                                "messages_http_" + ((int)response.StatusCode).ToString());
-
-                        MessagesResponse result;
-                        try
-                        {
-                            result = JsonConvert.DeserializeObject<MessagesResponse>(
-                                responseJson);
-                        }
-                        catch (JsonException)
-                        {
-                            return Failure("messages_response_invalid");
-                        }
-
-                        if (result == null)
-                            return Failure("messages_response_invalid");
-
-                        CaptureRuntimeTarget(result);
-
-                        if (!result.Success)
-                            LogProviderFailure(result, agentName);
-
-                        // One raw event per parsed Verilic/provider response.
-                        // This is deliberately best-effort: the logger catches
-                        // all SQL errors and never blocks the AI response.
-                        JarvisAiUsageLogger.TryWrite(
-                            xSupport,
-                            usageRequestId,
-                            string.IsNullOrWhiteSpace(result.Agent) ? agentName : result.Agent,
-                            result.Provider,
-                            result.Model,
-                            result.UsageInputTokens,
-                            result.UsageOutputTokens,
-                            result.Success,
-                            result.Success ? null : GetBaseReasonCode(result.ReasonCode));
-
-                        if (result.Success)
-                        {
-                            string runtimeIssue;
-                            string runtimeAgent = string.IsNullOrWhiteSpace(result.Agent)
-                                ? agentName
-                                : result.Agent;
-                            if (!JarvisAgentRuntimeSnapshot.MatchesRuntime(
-                                runtimeAgent,
-                                result.Provider,
-                                result.Model,
-                                out runtimeIssue))
-                            {
-                                DebugLog.Log("[AI-STARTUP-SNAPSHOT] runtime drift blocked; agent=" +
-                                    runtimeAgent + " reason=" + (runtimeIssue ?? "unknown"));
-                                return new AgentProxyResponse
-                                {
-                                    Success = false,
-                                    CreditsExhausted = false,
-                                    ErrorMessage = BuildSafeErrorMessage("startup_agent_snapshot_changed"),
-                                    RawResponseJson = string.Empty,
-                                    UsageInputTokens = result.UsageInputTokens,
-                                    UsageOutputTokens = result.UsageOutputTokens,
-                                    RuntimeAgent = result.Agent,
-                                    RuntimeProvider = result.Provider,
-                                    RuntimeModel = result.Model,
-                                    RuntimeRouting = result.Routing
-                                };
-                            }
-                        }
-
-                        return new AgentProxyResponse
-                        {
-                            Success = result.Success,
-                            CreditsExhausted = result.CreditsExhausted,
-                            ErrorMessage = result.Success
-                                ? null
-                                : BuildSafeErrorMessage(GetBaseReasonCode(result.ReasonCode)),
-                            ResponseText = result.ResponseText,
-                            RawResponseJson = result.RawResponseJson ?? string.Empty,
-                            UsageInputTokens = result.UsageInputTokens,
-                            UsageOutputTokens = result.UsageOutputTokens,
-                            RuntimeAgent = result.Agent,
-                            RuntimeProvider = result.Provider,
-                            RuntimeModel = result.Model,
-                            RuntimeRouting = result.Routing
-                        };
-                    }
-                }
+                result = await JarvisDirectAiTransport.SendAsync(
+                    agentName,
+                    target,
+                    providerRequestJson,
+                    cancellationToken).ConfigureAwait(false);
             }
             catch (OperationCanceledException)
             {
-                if (cancellationToken.IsCancellationRequested)
-                    throw;
-
-                return Failure("provider_timeout");
+                throw;
             }
-            catch
+            catch (Exception ex)
             {
-                return Failure("messages_transport_failed");
+                try { target.Dispose(); } catch { }
+                DebugLog.Log("[AI-DIRECT] unhandled dispatcher failure agent=" +
+                    agentName + " error=" + ex.Message);
+                result = Failure("provider_upstream_error");
             }
+
+            if (result == null)
+                result = Failure("provider_upstream_error");
+
+            if (result.Success)
+            {
+                LastRuntimeAgent = string.IsNullOrWhiteSpace(result.RuntimeAgent)
+                    ? agentName
+                    : result.RuntimeAgent;
+                LastRuntimeProvider = result.RuntimeProvider;
+                LastRuntimeModel = result.RuntimeModel;
+                LastRuntimeRouting = result.RuntimeRouting;
+            }
+
+            JarvisAiUsageLogger.TryWrite(
+                xSupport,
+                usageRequestId,
+                string.IsNullOrWhiteSpace(result.RuntimeAgent) ? agentName : result.RuntimeAgent,
+                result.RuntimeProvider,
+                result.RuntimeModel,
+                result.UsageInputTokens,
+                result.UsageOutputTokens,
+                result.Success,
+                result.Success ? null : "direct_provider_failed");
+
+            DebugLog.Log("[AI-DIRECT] agent=" + agentName +
+                " provider=" + (result.RuntimeProvider ?? "-") +
+                " model=" + (result.RuntimeModel ?? "-") +
+                " success=" + result.Success.ToString() +
+                " usage=" + result.UsageInputTokens.ToString() + "/" +
+                result.UsageOutputTokens.ToString());
+
+            return result;
         }
 
         private static string ApplyCurrentCompanyContext(
@@ -427,9 +243,6 @@ namespace S1Jarvis.Access.Verilic
                     request["system"] = blocks;
                 }
 
-                // Remove any compact prompt phrasing that explicitly promotes the
-                // internal role to visible identity. Role remains available through
-                // AgentName for routing/telemetry, not as assistant persona.
                 foreach (JObject block in blocks.OfType<JObject>())
                 {
                     JToken textToken = block["text"];
@@ -481,8 +294,6 @@ namespace S1Jarvis.Access.Verilic
 
             try
             {
-                // Runs synchronously before the first await in SendAsync, so the
-                // Soft1 SDK call stays on the caller/integration thread.
                 XTable table = xSupport.GetSQLDataSet(
                     "SELECT TOP 1 NAME FROM COMPANY WHERE COMPANY=" + companyId.ToString());
                 if (table == null || table.Count == 0)
@@ -573,9 +384,6 @@ namespace S1Jarvis.Access.Verilic
                 "Είσαι ο Jarvis, ο ψηφιακός βοηθός μέσα στο Soft1 της Jetoil (εταιρία διανομής καυσίμων/πετρελαιοειδών).",
                 "Είσαι ο Jarvis, ο ψηφιακός βοηθός μέσα στο Soft1 της ενεργής εταιρείας.");
 
-            // Remove the legacy company-specific fuel-loading schema from the
-            // common prompt. Such custom schema belongs to company-specific
-            // knowledge, not to the product-wide Jarvis contract.
             text = RemoveLineContaining(text, "Φορτώσεις καυσίμων:");
 
             string contextPrefix =
@@ -585,13 +393,9 @@ namespace S1Jarvis.Access.Verilic
                 ", CompanyName=" + companyName + ", Branch=";
 
             if (text.IndexOf(contextPrefix, StringComparison.Ordinal) >= 0)
-            {
                 text = text.Replace(contextPrefix, contextWithCompany);
-            }
             else
-            {
                 text = contextWithCompany + "UNKNOWN\n" + text;
-            }
 
             return text;
         }
@@ -667,7 +471,6 @@ namespace S1Jarvis.Access.Verilic
                 tools.Contains("get_courier_voucher_data") ||
                 tools.Contains("create_courier_voucher"))
                 return "Sprint";
-
             if (tools.Contains("get_item_template") || tools.Contains("create_item"))
                 return "Forge";
             if (tools.Contains("find_trader_by_afm") ||
@@ -758,181 +561,35 @@ namespace S1Jarvis.Access.Verilic
             return builder.ToString();
         }
 
-        private static void LogProviderFailure(MessagesResponse result, string fallbackAgent)
-        {
-            if (result == null || result.Success)
-                return;
-
-            string reason = GetBaseReasonCode(result.ReasonCode);
-            string diagnostic = GetProviderDiagnostic(result.ReasonCode);
-            string code;
-            string param;
-            string message;
-            ParseProviderDiagnostic(diagnostic, out code, out param, out message);
-
-            var log = new StringBuilder();
-            log.Append("[AI-PROVIDER-ERROR]");
-            log.Append(" agent=").Append(SafeLogValue(
-                string.IsNullOrWhiteSpace(result.Agent) ? fallbackAgent : result.Agent, 64));
-            log.Append(" provider=").Append(SafeLogValue(result.Provider, 64));
-            log.Append(" model=").Append(SafeLogValue(result.Model, 128));
-            log.Append(" reason=").Append(SafeLogValue(reason, 128));
-
-            if (!string.IsNullOrWhiteSpace(code))
-                log.Append(" code=").Append(SafeLogValue(code, 128));
-            if (!string.IsNullOrWhiteSpace(param))
-                log.Append(" param=").Append(SafeLogValue(param, 128));
-            if (!string.IsNullOrWhiteSpace(message))
-                log.Append(" message=").Append(SafeLogValue(message, 512));
-
-            DebugLog.Log(log.ToString());
-        }
-
-        private static string GetProviderDiagnostic(string reasonCode)
-        {
-            if (string.IsNullOrWhiteSpace(reasonCode))
-                return string.Empty;
-
-            int separator = reasonCode.IndexOf('|');
-            return separator < 0 || separator + 1 >= reasonCode.Length
-                ? string.Empty
-                : reasonCode.Substring(separator + 1).Trim();
-        }
-
-        private static void ParseProviderDiagnostic(
-            string diagnostic,
-            out string code,
-            out string param,
-            out string message)
-        {
-            code = string.Empty;
-            param = string.Empty;
-            message = string.Empty;
-
-            if (string.IsNullOrWhiteSpace(diagnostic))
-                return;
-
-            string remaining = diagnostic.Trim();
-            int dot = remaining.IndexOf('·');
-            if (dot >= 0)
-            {
-                code = remaining.Substring(0, dot).Trim();
-                remaining = dot + 1 < remaining.Length
-                    ? remaining.Substring(dot + 1).Trim()
-                    : string.Empty;
-            }
-
-            const string paramPrefix = "param=";
-            if (remaining.StartsWith(paramPrefix, StringComparison.OrdinalIgnoreCase))
-            {
-                int colon = remaining.IndexOf(':');
-                if (colon >= 0)
-                {
-                    param = remaining.Substring(paramPrefix.Length, colon - paramPrefix.Length).Trim();
-                    message = colon + 1 < remaining.Length
-                        ? remaining.Substring(colon + 1).Trim()
-                        : string.Empty;
-                }
-                else
-                {
-                    param = remaining.Substring(paramPrefix.Length).Trim();
-                }
-            }
-            else
-            {
-                message = remaining;
-            }
-
-            if (string.IsNullOrWhiteSpace(code) && string.IsNullOrWhiteSpace(message))
-                message = diagnostic.Trim();
-        }
-
-        private static string SafeLogValue(string value, int maxLength)
-        {
-            if (string.IsNullOrWhiteSpace(value))
-                return "-";
-
-            string safe = value
-                .Replace('\r', ' ')
-                .Replace('\n', ' ')
-                .Replace('\t', ' ')
-                .Trim();
-
-            if (safe.Length > maxLength)
-                safe = safe.Substring(0, maxLength);
-
-            return safe;
-        }
-
-        private static string GetBaseReasonCode(string reasonCode)
-        {
-            if (string.IsNullOrWhiteSpace(reasonCode))
-                return "provider_unavailable";
-
-            string trimmed = reasonCode.Trim();
-            int separator = trimmed.IndexOf('|');
-            return separator < 0
-                ? trimmed
-                : trimmed.Substring(0, separator).Trim();
-        }
-
         private static AgentProxyResponse Failure(string reasonCode)
         {
+            string message;
+            switch (reasonCode)
+            {
+                case "routing_agent_invalid":
+                    message = "Ο λογικός AI agent δεν είναι έγκυρος.";
+                    break;
+                case "startup_agent_snapshot_missing":
+                    message = "Το AI session registry δεν είναι διαθέσιμο. Εκτέλεσε HEALTH ή άνοιξε ξανά τον Jarvis.";
+                    break;
+                case "provider_request_invalid":
+                    message = "Το αίτημα προς τον AI provider δεν είναι έγκυρο.";
+                    break;
+                case "messages_identity_missing":
+                    message = "Δεν είναι διαθέσιμο το ενεργό Soft1 session.";
+                    break;
+                default:
+                    message = "Η κλήση προς τον AI provider απέτυχε (" + reasonCode + ").";
+                    break;
+            }
+
             return new AgentProxyResponse
             {
                 Success = false,
-                CreditsExhausted = string.Equals(
-                    reasonCode,
-                    "provider_credits_exhausted",
-                    StringComparison.Ordinal),
-                ErrorMessage = BuildSafeErrorMessage(GetBaseReasonCode(reasonCode)),
+                CreditsExhausted = false,
+                ErrorMessage = message,
                 RawResponseJson = string.Empty
             };
-        }
-
-        private static string BuildSafeErrorMessage(string reasonCode)
-        {
-            string reason = GetBaseReasonCode(reasonCode);
-
-            switch (reason)
-            {
-                case "provider_auth_failed":
-                    return "Ο AI provider απέρριψε τα διαπιστευτήρια.";
-                case "provider_model_or_request_invalid":
-                    return "Το επιλεγμένο AI model ή το αίτημα δεν είναι έγκυρο.";
-                case "provider_credits_exhausted":
-                    return "Το AI account αυτής της άδειας έχει εξαντλήσει τα credits του.";
-                case "provider_rate_limited":
-                    return "Ο AI provider έχει προσωρινό όριο κλήσεων. Δοκίμασε ξανά σε λίγο.";
-                case "provider_timeout":
-                    return "Ο AI provider δεν απάντησε εγκαίρως.";
-                case "provider_chat_adapter_unavailable":
-                    return "Ο provider δεν υποστηρίζεται ακόμη από το Jarvis chat.";
-                case "provider_credential_unavailable":
-                    return "Τα διαπιστευτήρια του AI provider δεν είναι διαθέσιμα.";
-                case "provider_model_missing":
-                    return "Δεν έχει οριστεί AI model για αυτή τη ρύθμιση.";
-                case "agent_account_unavailable":
-                    return "Το AI agent account δεν είναι διαθέσιμο.";
-                case "provider_customer_mismatch":
-                    return "Το AI agent account δεν ανήκει στον πελάτη της ενεργής άδειας.";
-                case "routing_agent_invalid":
-                    return "Ο λογικός AI agent δεν είναι έγκυρος για αυτή τη δρομολόγηση.";
-                case "startup_agent_snapshot_missing":
-                    return "Το AI routing snapshot της εκκίνησης δεν είναι διαθέσιμο. Κλείσε και άνοιξε ξανά τον Jarvis.";
-                case "startup_agent_snapshot_changed":
-                    return "Το AI routing άλλαξε μετά την εκκίνηση. Κλείσε και άνοιξε ξανά τον Jarvis για να φορτωθεί το νέο schema.";
-                case "provider_upstream_error":
-                    return "Ο AI provider επέστρεψε προσωρινό σφάλμα.";
-                default:
-                    if (reason.StartsWith("routing_", StringComparison.Ordinal) ||
-                        reason.StartsWith("licence_", StringComparison.Ordinal) ||
-                        reason.StartsWith("proof_", StringComparison.Ordinal) ||
-                        reason.StartsWith("messages_", StringComparison.Ordinal))
-                        return "Η ασφαλής δρομολόγηση AI δεν είναι διαθέσιμη (" + reason + ").";
-
-                    return "Η κλήση προς τον AI provider απέτυχε (" + reason + ").";
-            }
         }
     }
 }
