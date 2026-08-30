@@ -130,7 +130,35 @@ namespace S1Jarvis.Core
         {
             JToken supplied;
             if (intentObject.InputHints.TryGetValue(inputName, out supplied) && HasValue(supplied))
+            {
+                if (string.Equals(descriptor.TaskType, "CreateCrmTask", StringComparison.OrdinalIgnoreCase) &&
+                    string.Equals(inputName, "assignee", StringComparison.OrdinalIgnoreCase) &&
+                    !string.Equals(supplied.ToString().Trim(), "__CURRENT_OPERATOR__", StringComparison.Ordinal))
+                {
+                    return new JarvisPrerequisiteResolutionItem
+                    {
+                        InputName = inputName,
+                        Required = true,
+                        Kind = JarvisPrerequisiteResolutionKind.NeedsUserInput,
+                        Value = supplied.DeepClone(),
+                        Reason = "CRM.DEFAULT_ASSIGNEE_CURRENT_OPERATOR forbids silent self fallback: an explicit different assignee requires authoritative identity resolution before the write."
+                    };
+                }
                 return new JarvisPrerequisiteResolutionItem { InputName = inputName, Required = true, Kind = JarvisPrerequisiteResolutionKind.ResolvedFromIntent, Value = supplied.DeepClone(), Reason = "Value is explicitly present in this intent object." };
+            }
+
+            if (string.Equals(descriptor.TaskType, "CreateCrmTask", StringComparison.OrdinalIgnoreCase) &&
+                string.Equals(inputName, "assignee", StringComparison.OrdinalIgnoreCase) &&
+                HasExplicitDifferentAssigneeReference(intentObject.IntentFragment))
+            {
+                return new JarvisPrerequisiteResolutionItem
+                {
+                    InputName = inputName,
+                    Required = true,
+                    Kind = JarvisPrerequisiteResolutionKind.NeedsUserInput,
+                    Reason = "CRM.DEFAULT_ASSIGNEE_CURRENT_OPERATOR forbids silent self fallback: the intent explicitly names a different assignee and must go through identity resolution/clarification."
+                };
+            }
 
             JarvisPrerequisiteResolutionItem deterministic = ResolveDeterministicIntentValue(intentObject, descriptor, inputName);
             if (deterministic != null) return deterministic;
@@ -210,11 +238,7 @@ namespace S1Jarvis.Core
                 return ResolvedRoutingValue(inputName, new JValue(score), "Confidence comes from the validated routing decision, not from user input.");
             }
             if (string.Equals(descriptor.TaskType, "CreateCrmTask", StringComparison.OrdinalIgnoreCase) && string.Equals(inputName, "assignee", StringComparison.OrdinalIgnoreCase))
-            {
-                if (HasExplicitDifferentAssigneeReference(intentObject.IntentFragment))
-                    return null;
                 return ResolvedRoutingValue(inputName, new JValue("__CURRENT_OPERATOR__"), "CRM.DEFAULT_ASSIGNEE_CURRENT_OPERATOR: no explicit different assignee was supplied, so the authenticated session operator is authoritative.");
-            }
             if (string.Equals(descriptor.TaskType, "SendEmail", StringComparison.OrdinalIgnoreCase) && string.Equals(inputName, "subject", StringComparison.OrdinalIgnoreCase))
                 return ResolvedRoutingValue(inputName, new JValue("S1 Jarvis"), "No explicit subject was supplied; the email task uses the neutral Jarvis subject rather than requiring redundant user input.");
             if (IsIntentTextContract(descriptor.TaskType, inputName))
@@ -243,11 +267,8 @@ namespace S1Jarvis.Core
                 text.Contains("στον εαυτό μου") || text.Contains("στον εαυτο μου") ||
                 text.Contains("to me") || text.Contains("myself");
 
-            bool alsoNamesAnotherParty =
-                text.Contains(" και ") || text.Contains(" στον ") || text.Contains(" στην ") ||
-                text.Contains(" στον/") || text.Contains(" στην/");
-
-            return !explicitSelf || alsoNamesAnotherParty;
+            if (explicitSelf && !text.Contains(" και ")) return false;
+            return true;
         }
 
         private static bool IsIntentTextContract(string taskType, string inputName)
