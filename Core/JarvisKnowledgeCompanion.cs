@@ -9,8 +9,9 @@ namespace S1Jarvis.Core
     /// <summary>
     /// Authoritative fact-only companion knowledge shared by every Jarvis agent.
     /// Behavioral rules belong to JarvisPolicyRegistry; execution contracts belong
-    /// to task/tool registries and validators. This class contains only known
-    /// business/schema facts and returns the smallest useful slice for a request.
+    /// to task/tool registries and validators. This class contains only confirmed
+    /// business/schema facts recovered from the mature runtime and returns the
+    /// smallest useful slice for a request.
     /// </summary>
     internal static class JarvisKnowledgeCompanion
     {
@@ -18,8 +19,7 @@ namespace S1Jarvis.Core
 
         internal static string BuildForTask(string taskType)
         {
-            JObject knowledge = BuildTaskKnowledge(taskType);
-            return Marker + "\n" + knowledge.ToString(Formatting.None);
+            return Marker + "\n" + BuildTaskKnowledge(taskType).ToString(Formatting.None);
         }
 
         internal static string BuildForRequest(string agentName, string providerRequestJson)
@@ -29,12 +29,10 @@ namespace S1Jarvis.Core
             catch { request = new JObject(); }
 
             string taskType = (string)request["metadata"]?["jarvis_task"];
-            var toolNames = ReadToolNames(request["tools"] as JArray);
-
+            HashSet<string> toolNames = ReadToolNames(request["tools"] as JArray);
             JObject knowledge = !string.IsNullOrWhiteSpace(taskType)
                 ? BuildTaskKnowledge(taskType)
                 : BuildToolKnowledge(toolNames, agentName);
-
             return Marker + "\n" + knowledge.ToString(Formatting.None);
         }
 
@@ -48,8 +46,7 @@ namespace S1Jarvis.Core
                     .Any(x => string.Equals(x, "query_data", StringComparison.OrdinalIgnoreCase));
                 if (!needsSoft1Knowledge) continue;
 
-                JObject slice = BuildTaskKnowledge(task.TaskType);
-                JObject schema = slice["schema"] as JObject;
+                JObject schema = BuildTaskKnowledge(task.TaskType)["schema"] as JObject;
                 if (schema == null || !schema.Properties().Any())
                     issues.Add("Task with query_data has no companion schema slice: " + task.TaskType);
             }
@@ -69,13 +66,18 @@ namespace S1Jarvis.Core
                 return result;
             }
 
-            if (string.Equals(task, "CreateCalendarEvent", StringComparison.OrdinalIgnoreCase) ||
-                string.Equals(task, "SendEmail", StringComparison.OrdinalIgnoreCase) ||
-                string.Equals(task, "ReplyEmail", StringComparison.OrdinalIgnoreCase))
+            if (string.Equals(task, "CreateCalendarEvent", StringComparison.OrdinalIgnoreCase))
             {
-                // These domains do not need Soft1 schema by default. Entity facts are
-                // still useful when a registered query/contact prerequisite is present.
                 AddEntityKnowledge(result);
+                return result;
+            }
+
+            if (string.Equals(task, "SendEmail", StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(task, "ReplyEmail", StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(task, "ReadInbox", StringComparison.OrdinalIgnoreCase))
+            {
+                AddEntityKnowledge(result);
+                AddSchema(result, "PRSN", PersonSchema());
                 return result;
             }
 
@@ -87,13 +89,9 @@ namespace S1Jarvis.Core
                 string.Equals(task, "FindTrader", StringComparison.OrdinalIgnoreCase) ||
                 string.Equals(task, "CreateOrder", StringComparison.OrdinalIgnoreCase) ||
                 string.Equals(task, "ResolveDocumentConversion", StringComparison.OrdinalIgnoreCase))
-            {
                 AddFullSoft1Knowledge(result);
-            }
             else
-            {
                 AddEntityKnowledge(result);
-            }
 
             return result;
         }
@@ -101,13 +99,16 @@ namespace S1Jarvis.Core
         private static JObject BuildToolKnowledge(HashSet<string> tools, string agentName)
         {
             var result = NewEnvelope(string.Empty);
-            if (tools.Contains("query_data") ||
-                string.Equals(agentName, "Atlas", StringComparison.OrdinalIgnoreCase))
+            if (tools.Contains("query_data") || string.Equals(agentName, "Atlas", StringComparison.OrdinalIgnoreCase))
                 AddFullSoft1Knowledge(result);
             else if (string.Equals(agentName, "Compass", StringComparison.OrdinalIgnoreCase) ||
                      string.Equals(agentName, "Echo", StringComparison.OrdinalIgnoreCase) ||
                      string.Equals(agentName, "Scout", StringComparison.OrdinalIgnoreCase))
+            {
                 AddEntityKnowledge(result);
+                if (string.Equals(agentName, "Echo", StringComparison.OrdinalIgnoreCase))
+                    AddSchema(result, "PRSN", PersonSchema());
+            }
             return result;
         }
 
@@ -131,6 +132,7 @@ namespace S1Jarvis.Core
             AddSchema(result, "CCCLOADING", LoadingSchema());
             AddSchema(result, "CCCLOADCOMPS", LoadingLinesSchema());
             AddSchema(result, "USERS", UsersSchema());
+            AddSchema(result, "PRSN", PersonSchema());
             result["documentSources"] = BuildDocumentSources();
         }
 
@@ -155,7 +157,7 @@ namespace S1Jarvis.Core
             return new JObject
             {
                 ["identity"] = "TRDR",
-                ["fields"] = new JArray("TRDR", "CODE", "NAME", "AFM", "SODTYPE"),
+                ["fields"] = new JArray(new object[] { "TRDR", "CODE", "NAME", "AFM", "SODTYPE", "COMPANY" }),
                 ["roleDiscriminator"] = "SODTYPE"
             };
         }
@@ -165,8 +167,9 @@ namespace S1Jarvis.Core
             return new JObject
             {
                 ["identity"] = "FINDOC",
-                ["fields"] = new JArray("FINDOC", "TRDR", "TRNDATE", "FINCODE", "SUMAMNT", "SERIES", "SOSOURCE", "COMPANY"),
+                ["fields"] = new JArray(new object[] { "FINDOC", "TRDR", "TRNDATE", "FINCODE", "SUMAMNT", "SERIES", "SOSOURCE", "COMPANY", "INSUSER", "INSDATE" }),
                 ["seriesJoin"] = "SERIES.COMPANY=FINDOC.COMPANY AND SERIES.SERIES=FINDOC.SERIES AND SERIES.SOSOURCE=FINDOC.SOSOURCE",
+                ["traderJoin"] = "TRDR.COMPANY=FINDOC.COMPANY AND TRDR.TRDR=FINDOC.TRDR",
                 ["knownNonTable"] = "FINTRD"
             };
         }
@@ -175,7 +178,8 @@ namespace S1Jarvis.Core
         {
             return new JObject
             {
-                ["joinKeys"] = new JArray("COMPANY", "SERIES", "SOSOURCE"),
+                ["joinKeys"] = new JArray(new object[] { "COMPANY", "SERIES", "SOSOURCE" }),
+                ["knownFields"] = new JArray(new object[] { "COMPANY", "SERIES", "SOSOURCE", "NAME" }),
                 ["purpose"] = "document type/series metadata for FINDOC"
             };
         }
@@ -184,7 +188,7 @@ namespace S1Jarvis.Core
         {
             return new JObject
             {
-                ["fields"] = new JArray("TRDR", "FISCPRD", "LDEBIT", "LCREDIT"),
+                ["fields"] = new JArray(new object[] { "TRDR", "FISCPRD", "LDEBIT", "LCREDIT" }),
                 ["purpose"] = "progressive trader balances by fiscal year/period"
             };
         }
@@ -194,7 +198,7 @@ namespace S1Jarvis.Core
             return new JObject
             {
                 ["executionDateField"] = "Insdate",
-                ["knownInvalidExecutionDateFields"] = new JArray("StartTime", "Executiondate")
+                ["knownInvalidExecutionDateFields"] = new JArray(new object[] { "StartTime", "Executiondate" })
             };
         }
 
@@ -212,7 +216,16 @@ namespace S1Jarvis.Core
             return new JObject
             {
                 ["identity"] = "USERS",
-                ["fields"] = new JArray("USERS", "NAME")
+                ["fields"] = new JArray(new object[] { "USERS", "NAME" })
+            };
+        }
+
+        private static JObject PersonSchema()
+        {
+            return new JObject
+            {
+                ["identity"] = "PRSN",
+                ["knownFields"] = new JArray(new object[] { "NAME", "NAME2", "EMAIL", "EMAIL1" })
             };
         }
 
