@@ -53,6 +53,46 @@ namespace S1Jarvis.Core
                    "; these predicates are mandatory for every FINDOC document query.";
         }
 
+        /// <summary>
+        /// Re-applies tenant isolation to an already planned/reused SELECT. This is
+        /// intentionally independent of the natural-language request, so an export
+        /// or continuation cannot bypass company scope by reusing upstream SQL.
+        /// Non-FINDOC SQL is returned unchanged.
+        /// </summary>
+        internal static string EnforceIfFindocQuery(XSupport xSupport, string sql)
+        {
+            if (string.IsNullOrWhiteSpace(sql)) return sql;
+
+            string findocAlias;
+            if (!TryReadFromAlias(sql, "FINDOC", out findocAlias))
+                return sql;
+
+            Scope scope = Resolve(xSupport);
+            string fprmsAlias;
+            string seriesAlias;
+            bool hasFprms = TryReadJoinAlias(sql, "FPRMS", out fprmsAlias);
+            bool hasSeries = TryReadJoinAlias(sql, "SERIES", out seriesAlias);
+
+            string scoped = Apply(
+                sql,
+                scope,
+                findocAlias,
+                hasFprms ? fprmsAlias : null,
+                hasSeries ? seriesAlias : null);
+
+            string[] issues = Validate(
+                scoped,
+                scope,
+                findocAlias,
+                hasFprms ? fprmsAlias : null,
+                hasSeries ? seriesAlias : null);
+            if (issues.Length > 0)
+                throw new InvalidOperationException(
+                    "Current-company document SQL validation failed: " + string.Join(" | ", issues));
+
+            return scoped;
+        }
+
         internal static string Apply(
             string sql,
             Scope scope,
@@ -111,6 +151,30 @@ namespace S1Jarvis.Core
             if (scope.FprmsHasCompany) Require(sql, fprmsAlias, scope.CompanyId, "FPRMS", issues);
             if (scope.SeriesHasCompany) Require(sql, seriesAlias, scope.CompanyId, "SERIES", issues);
             return issues.Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+        }
+
+        private static bool TryReadFromAlias(string sql, string tableName, out string alias)
+        {
+            alias = string.Empty;
+            Match match = Regex.Match(
+                sql ?? string.Empty,
+                @"\bFROM\s+" + Regex.Escape(tableName ?? string.Empty) + @"(?:\s+AS)?(?:\s+(?<alias>[A-Z_][A-Z0-9_]*))?\b",
+                RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+            if (!match.Success) return false;
+            alias = match.Groups["alias"].Success ? match.Groups["alias"].Value : tableName;
+            return !string.IsNullOrWhiteSpace(alias);
+        }
+
+        private static bool TryReadJoinAlias(string sql, string tableName, out string alias)
+        {
+            alias = string.Empty;
+            Match match = Regex.Match(
+                sql ?? string.Empty,
+                @"\b(?:INNER\s+)?JOIN\s+" + Regex.Escape(tableName ?? string.Empty) + @"(?:\s+AS)?(?:\s+(?<alias>[A-Z_][A-Z0-9_]*))?\b",
+                RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+            if (!match.Success) return false;
+            alias = match.Groups["alias"].Success ? match.Groups["alias"].Value : tableName;
+            return !string.IsNullOrWhiteSpace(alias);
         }
 
         private static void Require(string sql, string alias, int companyId, string table, List<string> issues)
