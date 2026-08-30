@@ -136,7 +136,7 @@ namespace S1Jarvis.UI
                 if (!_orchestrationPendingConfirmation.HasPending &&
                     _orchestrationDatasetSession.HasDataset)
                 {
-                    JarvisDatasetRefinementOutcome refined = await _orchestrationDatasetSession.TryRefineAsync(_xSupport, userText);
+                    JarvisDatasetRefinementOutcome refined = await _orchestrationDatasetSession.TryRefineAsync(_xSupport, _orchestrationActiveContext.RunId, userText);
                     if (refined != null && refined.Handled)
                     {
                         if (!string.IsNullOrWhiteSpace(refined.UserMessage))

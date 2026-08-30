@@ -233,7 +233,7 @@ namespace S1Jarvis.Core
                     new JObject
                     {
                         ["role"] = "user",
-                        ["content"] = JarvisIntentOrchestration.BuildDecomposerUserPayload(userPrompt)
+                        ["content"] = JarvisIntentOrchestration.BuildDecomposerUserPayload(userPrompt, JarvisRuntimeContext.Capture(xSupport))
                     }
                 }
             };

@@ -95,11 +95,12 @@ namespace S1Jarvis.Core
                 policyContext;
         }
 
-        internal static string BuildDecomposerUserPayload(string userPrompt)
+        internal static string BuildDecomposerUserPayload(string userPrompt, JarvisRuntimeContext runtimeContext = null)
         {
             return new JObject
             {
                 ["userPrompt"] = userPrompt ?? string.Empty,
+                ["runtimeContext"] = runtimeContext == null ? new JObject() : runtimeContext.ToJson(),
                 ["catalog"] = JObject.Parse(JarvisSemanticPlanning.BuildTaskCatalogJson())["TASK_CATALOG"]
             }.ToString(Formatting.None);
         }

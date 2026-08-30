@@ -83,6 +83,19 @@ namespace S1Jarvis.Core
                 if (item == null || item.Kind == JarvisPrerequisiteResolutionKind.Invalid)
                     node.ValidationIssues.Add("Invalid prerequisite contract for " + descriptor.TaskType + "." + requiredInput);
             }
+            foreach (string optionalInput in descriptor.OptionalInputs ?? new string[0])
+            {
+                JToken supplied;
+                if (!intentObject.InputHints.TryGetValue(optionalInput, out supplied) || !HasValue(supplied)) continue;
+                node.Prerequisites.Add(new JarvisPrerequisiteResolutionItem
+                {
+                    InputName = optionalInput,
+                    Required = false,
+                    Kind = JarvisPrerequisiteResolutionKind.ResolvedFromIntent,
+                    Value = supplied.DeepClone(),
+                    Reason = "Optional structured semantic input is explicitly present in this intent object."
+                });
+            }
             return node;
         }
 

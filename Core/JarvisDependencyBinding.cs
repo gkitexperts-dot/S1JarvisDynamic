@@ -133,6 +133,9 @@ namespace S1Jarvis.Core
             R("ReportData", "summary", "SendEmail", "body",
                 "Report summary is the authoritative content source for the requested email body."),
 
+            R("ReportData", "dataset", "ExportData", "source_result",
+                "Validated report dataset and its query provenance feed the requested export."),
+
             R("ExportData", "file_artifact", "SendEmail", "artifact_reference",
                 "Export artifact feeds a requested email attachment."),
 

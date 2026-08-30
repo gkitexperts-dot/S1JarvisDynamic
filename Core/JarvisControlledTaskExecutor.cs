@@ -25,8 +25,10 @@ namespace S1Jarvis.Core
                 if (dispatchInputs == null || dispatchInputs["business_question"] == null) throw new InvalidOperationException("ReportData dispatch is missing business_question.");
                 string question = dispatchInputs["business_question"].ToString();
                 string policyContext = ReadRequiredInternalContext(dispatchInputs, "__policy_context");
+                string operatorScope = dispatchInputs["operator_scope"] == null ? string.Empty : dispatchInputs["operator_scope"].ToString();
+                int currentUserId = dispatchInputs["__current_user_id"] == null ? 0 : (int)dispatchInputs["__current_user_id"];
                 DebugLog.Log("[ORCH-SQL] plan_begin object=" + (objectId ?? string.Empty) + " question=" + OneLine(question));
-                string sql = await PlanAndValidateSqlAsync(xSupport, question, policyContext, cancellationToken).ConfigureAwait(false);
+                string sql = await PlanAndValidateSqlAsync(xSupport, question, policyContext, operatorScope, currentUserId, cancellationToken).ConfigureAwait(false);
                 DebugLog.Log("[ORCH-SQL] execute object=" + (objectId ?? string.Empty) + " sql=" + OneLine(sql));
                 string queryResult = JarvisTools.ExecuteQueryData(xSupport, sql);
                 DebugLog.Log("[ORCH-SQL] result object=" + (objectId ?? string.Empty) + " " + DescribeQueryResult(queryResult));
@@ -39,10 +41,14 @@ namespace S1Jarvis.Core
                     throw new InvalidOperationException("Jarvis rejected Atlas result: " + string.Join(" | ", resultIssues));
                 }
                 string normalizedQueryResult = NormalizeQueryResultForQuestion(question, queryResult);
+                JObject normalizedDataset = JObject.Parse(normalizedQueryResult);
+                normalizedDataset["querySql"] = sql;
+                normalizedQueryResult = normalizedDataset.ToString(Formatting.None);
                 string summary = BuildDeterministicSummary(question, normalizedQueryResult);
                 if (string.IsNullOrWhiteSpace(summary)) throw new InvalidOperationException("Atlas ReportData could not normalize the query result into a summary.");
                 result.Outputs["dataset"] = new JValue(normalizedQueryResult);
                 result.Outputs["summary"] = new JValue(summary);
+                result.Outputs["query_sql"] = new JValue(sql);
                 result.Success = true;
                 DebugLog.Log("[ORCH-SQL] result_accepted object=" + (objectId ?? string.Empty) + " " + DescribeQueryResult(normalizedQueryResult));
                 return result;
@@ -55,13 +61,13 @@ namespace S1Jarvis.Core
             }
         }
 
-        private static async Task<string> PlanAndValidateSqlAsync(XSupport xSupport, string question, string policyContext, CancellationToken cancellationToken)
+        private static async Task<string> PlanAndValidateSqlAsync(XSupport xSupport, string question, string policyContext, string operatorScope, int currentUserId, CancellationToken cancellationToken)
         {
             string previousSql = null;
             string previousDiagnostic = null;
             for (int attempt = 1; attempt <= MaxPlanningAttempts; attempt++)
             {
-                JObject request = BuildQueryRequest(question, policyContext, previousSql, previousDiagnostic, attempt);
+                JObject request = BuildQueryRequest(question, policyContext, operatorScope, currentUserId, previousSql, previousDiagnostic, attempt);
                 S1Jarvis.Core.AgentProxyResponse response = await new S1Jarvis.Access.Verilic.VerilicAiMessagesClient().SendAsync(xSupport, "Atlas", request.ToString(Formatting.None), cancellationToken).ConfigureAwait(false);
                 EnsureSuccess(response, "Atlas ReportData query planning failed.");
                 JObject queryUse = FindToolUse(response.RawResponseJson, "query_data");
@@ -70,7 +76,7 @@ namespace S1Jarvis.Core
                 string sql = queryInput == null ? null : (string)queryInput["sql"];
                 if (string.IsNullOrWhiteSpace(sql)) throw new InvalidOperationException("Atlas ReportData returned query_data without SQL.");
                 DebugLog.Log("[ORCH-SQL] candidate attempt=" + attempt + " sql=" + OneLine(sql));
-                string[] issues = ValidateSqlForQuestion(question, sql);
+                string[] issues = ValidateSqlForQuestion(question, sql, operatorScope, currentUserId);
                 if (issues.Length == 0)
                 {
                     DebugLog.Log("[ORCH-SQL] accepted attempt=" + attempt + " sql=" + OneLine(sql));
@@ -83,9 +89,11 @@ namespace S1Jarvis.Core
             throw new InvalidOperationException("Jarvis semantic SQL validation failed after retry. Last SQL=" + (previousSql ?? "<none>") + " Diagnostic=" + (previousDiagnostic ?? "<none>"));
         }
 
-        private static JObject BuildQueryRequest(string question, string policyContext, string previousSql, string previousDiagnostic, int attempt)
+        private static JObject BuildQueryRequest(string question, string policyContext, string operatorScope, int currentUserId, string previousSql, string previousDiagnostic, int attempt)
         {
             string userContent = "business_question: " + (question ?? string.Empty);
+            if (!string.IsNullOrWhiteSpace(operatorScope)) userContent += "\noperator_scope: " + operatorScope;
+            if (currentUserId > 0) userContent += "\ncurrentUserId: " + currentUserId;
             if (attempt > 1)
             {
                 userContent += "\n\n[JARVIS_VALIDATION_RETRY]" +
@@ -139,7 +147,7 @@ namespace S1Jarvis.Core
             return content.OfType<JObject>().FirstOrDefault(x => string.Equals((string)x["type"], "tool_use", StringComparison.OrdinalIgnoreCase) && string.Equals((string)x["name"], toolName, StringComparison.OrdinalIgnoreCase));
         }
 
-        private static string[] ValidateSqlForQuestion(string question, string sql)
+        private static string[] ValidateSqlForQuestion(string question, string sql, string operatorScope, int currentUserId)
         {
             var issues = new List<string>();
             string normalized = NormalizeSql(sql);
@@ -155,11 +163,22 @@ namespace S1Jarvis.Core
                 if (!normalized.Contains("FINCODE")) issues.Add("Document intent must project FINCODE.");
                 if (!normalized.Contains("TRNDATE")) issues.Add("Document intent must project TRNDATE.");
             }
+            bool currentOperatorScope = string.Equals(operatorScope, "current_operator", StringComparison.OrdinalIgnoreCase);
+            if (currentOperatorScope)
+            {
+                if (currentUserId <= 0) issues.Add("current_operator scope requires authenticated currentUserId.");
+                else if (!Regex.IsMatch(normalized, @"\bINSUSER\s*=\s*" + currentUserId + @"\b", RegexOptions.CultureInvariant))
+                    issues.Add("current_operator report must filter FINDOC.INSUSER to authenticated currentUserId.");
+            }
             if (IsLatestDocumentQuestion(question))
             {
                 if (!normalized.Contains("TOP 1")) issues.Add("Latest-document intent requires TOP 1.");
                 if (!normalized.Contains(" ORDER BY ")) issues.Add("Latest-document intent requires ORDER BY.");
-                if (!ContainsOrderedColumn(normalized, "TRNDATE", "DESC")) issues.Add("Latest-document intent requires TRNDATE DESC.");
+                if (currentOperatorScope)
+                {
+                    if (!ContainsOrderedColumn(normalized, "INSDATE", "DESC")) issues.Add("Latest current-operator document requires INSDATE DESC.");
+                }
+                else if (!ContainsOrderedColumn(normalized, "TRNDATE", "DESC")) issues.Add("Latest business document requires TRNDATE DESC.");
                 if (!ContainsOrderedColumn(normalized, "FINDOC", "DESC")) issues.Add("Latest-document intent requires FINDOC DESC as deterministic tie-breaker.");
             }
             string seriesJoin = ExtractJoinClause(normalized, "SERIES");

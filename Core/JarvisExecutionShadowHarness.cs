@@ -19,7 +19,7 @@ namespace S1Jarvis.Core
     internal static class JarvisExecutionShadowHarness
     {
         private static readonly HashSet<string> PromotedControlledTasks = new HashSet<string>(
-            new[] { "ReportData", "SendEmail", "CreateCrmTask", "CreateCalendarEvent" },
+            new[] { "ReportData", "ExportData", "SendEmail", "CreateCrmTask", "CreateCalendarEvent" },
             StringComparer.OrdinalIgnoreCase);
 
         internal static async Task RunAndLogSafeAsync(XSupport xSupport, string userPrompt,
@@ -43,14 +43,17 @@ namespace S1Jarvis.Core
                     planning.IntentObjects.ActiveContextDisposition == JarvisActiveContextDisposition.Replace;
                 if (!IsSupportedControlledPlan(planning))
                 {
-                    if (activeContext != null && activeContext.HasOpenRun && replaceActiveRun)
-                        activeContext.Clear();
+                    if (activeContext != null && activeContext.HasOpenRun && replaceActiveRun) activeContext.Clear();
+                    if (datasetSession != null && replaceActiveRun) datasetSession.Clear();
                     return outcome;
                 }
 
                 outcome.Handled = true;
                 if (activeContext != null && (!activeContext.HasOpenRun || replaceActiveRun))
+                {
+                    if (replaceActiveRun && datasetSession != null) datasetSession.Clear();
                     activeContext.Begin(userPrompt);
+                }
                 bool hasEmail = HasTask(planning, "SendEmail");
                 if (hasEmail && pendingSession == null)
                 {
@@ -94,6 +97,18 @@ namespace S1Jarvis.Core
                         return outcome;
                     }
 
+                    string ambiguityMessage = JarvisReportIdentityGuard.GetAmbiguityMessage(xSupport, reportInputs);
+                    if (!string.IsNullOrWhiteSpace(ambiguityMessage))
+                    {
+                        outcome.UserMessage = ambiguityMessage;
+                        return outcome;
+                    }
+
+                    JarvisRuntimeContext runtimeContext = JarvisRuntimeContext.Capture(xSupport);
+                    string existingPolicyContext = reportInputs["__policy_context"] == null ? string.Empty : reportInputs["__policy_context"].ToString();
+                    reportInputs["__policy_context"] = existingPolicyContext + "\n" + runtimeContext.BuildEnvelope();
+                    reportInputs["__current_user_id"] = runtimeContext.CurrentUserId;
+
                     string[] beginIssues;
                     if (!coordinator.TryBeginDispatch(reportStep.ObjectId, out beginIssues))
                     {
@@ -104,6 +119,17 @@ namespace S1Jarvis.Core
 
                     LogSnapshot("running", coordinator.Inspect(), coordinator.GetDispatchableObjectIds(), reportStep.ObjectId, null, null);
                     JarvisTaskExecutionResult reportResult = await JarvisControlledTaskExecutor.ExecuteReportDataAsync(xSupport, reportStep.ObjectId, reportInputs);
+                    if (reportResult.Success)
+                    {
+                        string documentScope = reportInputs["document_scope"] == null ? string.Empty : reportInputs["document_scope"].ToString();
+                        string reportDatasetForValidation = reportResult.Outputs["dataset"] == null ? string.Empty : reportResult.Outputs["dataset"].ToString();
+                        string[] scopeIssues = JarvisDocumentScopeValidator.Validate(documentScope, reportDatasetForValidation);
+                        if (scopeIssues.Length > 0)
+                        {
+                            reportResult.Success = false;
+                            foreach (string scopeIssue in scopeIssues) reportResult.Issues.Add(scopeIssue);
+                        }
+                    }
                     if (!reportResult.Success)
                     {
                         string[] failedAcceptIssues;
@@ -115,7 +141,7 @@ namespace S1Jarvis.Core
 
                     businessQuestion = reportInputs["business_question"] == null ? userPrompt : reportInputs["business_question"].ToString();
                     datasetJson = reportResult.Outputs["dataset"] == null ? string.Empty : reportResult.Outputs["dataset"].ToString();
-                    if (datasetSession != null) datasetSession.TryCapture(businessQuestion, datasetJson);
+                    if (datasetSession != null) datasetSession.TryCapture(activeContext == null ? null : activeContext.RunId, businessQuestion, datasetJson);
 
                     if (hasEmail)
                     {
@@ -144,6 +170,39 @@ namespace S1Jarvis.Core
 
                 var completedSideEffects = new List<string>();
                 var deferredIssues = new List<string>();
+
+                JarvisExecutionStepSnapshot exportStep = FindStep(coordinator.Inspect(), "ExportData", "Atlas");
+                if (exportStep != null)
+                {
+                    JObject exportInputs;
+                    string[] exportInputIssues;
+                    if (!coordinator.TryGetDispatchInputs(exportStep.ObjectId, out exportInputs, out exportInputIssues))
+                    {
+                        deferredIssues.Add(BuildFailureMessage("Η εξαγωγή χρειάζεται επιπλέον πληροφορίες.", exportInputIssues));
+                    }
+                    else
+                    {
+                        string[] exportBeginIssues;
+                        if (!coordinator.TryBeginDispatch(exportStep.ObjectId, out exportBeginIssues))
+                        {
+                            deferredIssues.Add(BuildFailureMessage("Η εξαγωγή δεν είναι ακόμη dispatchable.", exportBeginIssues));
+                        }
+                        else
+                        {
+                            JarvisTaskExecutionResult exportResult = JarvisControlledExportTaskExecutor.Execute(xSupport, exportStep.ObjectId, exportInputs);
+                            string[] exportAcceptIssues;
+                            if (!coordinator.TryAcceptResult(exportResult, out exportAcceptIssues))
+                                deferredIssues.Add(BuildFailureMessage("Ο Jarvis απέρριψε το αποτέλεσμα της εξαγωγής.", exportAcceptIssues));
+                            else if (exportResult.Success)
+                            {
+                                completedSideEffects.Add(BuildExportStatus(exportResult));
+                                if (activeContext != null) activeContext.CaptureVerifiedResult(exportResult);
+                            }
+                            else
+                                deferredIssues.Add(BuildFailureMessage("Η εξαγωγή αρχείου απέτυχε.", exportResult.Issues.ToArray()));
+                        }
+                    }
+                }
 
                 JarvisExecutionStepSnapshot crmStep = FindStep(coordinator.Inspect(), "CreateCrmTask", "Echo");
                 if (crmStep != null)
@@ -494,6 +553,13 @@ namespace S1Jarvis.Core
         private static string BuildCalendarStatus(JarvisTaskExecutionResult result)
         {
             string status = "✓ Το προσωπικό Outlook calendar event δημιουργήθηκε.";
+            string[] links = JarvisResultLinkPolicy.BuildMarkdownLinks(result);
+            return links.Length == 0 ? status : status + " " + string.Join(" ", links);
+        }
+
+        private static string BuildExportStatus(JarvisTaskExecutionResult result)
+        {
+            string status = "✓ Το αρχείο εξαγωγής δημιουργήθηκε.";
             string[] links = JarvisResultLinkPolicy.BuildMarkdownLinks(result);
             return links.Length == 0 ? status : status + " " + string.Join(" ", links);
         }

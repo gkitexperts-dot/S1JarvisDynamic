@@ -18,6 +18,7 @@ namespace S1Jarvis.Core
             ValidateKnowledgeCompanion(issues);
             ValidateLastMileContextInjection(issues);
             ValidateActiveContextLifecycle(issues);
+            ValidateExportContract(issues);
             return issues.Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
         }
 
@@ -81,6 +82,20 @@ namespace S1Jarvis.Core
             context.Complete();
             if (context.HasOpenRun)
                 issues.Add("Active context regression: Complete must close the run.");
+        }
+
+        private static void ValidateExportContract(List<string> issues)
+        {
+            JarvisTaskDescriptor report = JarvisTaskRegistry.Find("ReportData");
+            JarvisTaskDescriptor export = JarvisTaskRegistry.Find("ExportData");
+            if (report == null || !(report.Produces ?? new string[0]).Contains("query_sql", StringComparer.OrdinalIgnoreCase))
+                issues.Add("Export regression: ReportData must expose query_sql provenance.");
+            if (export == null) issues.Add("Export regression: ExportData task is missing.");
+            bool binding = JarvisDependencyBinder.AllRules.Any(x =>
+                string.Equals(x.SourceTaskType, "ReportData", StringComparison.OrdinalIgnoreCase) &&
+                string.Equals(x.TargetTaskType, "ExportData", StringComparison.OrdinalIgnoreCase) &&
+                string.Equals(x.TargetInput, "source_result", StringComparison.OrdinalIgnoreCase));
+            if (!binding) issues.Add("Export regression: ReportData dataset is not bound to ExportData source_result.");
         }
 
         private static int Count(string text, string token)

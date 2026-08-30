@@ -31,6 +31,7 @@ namespace S1Jarvis.Core
 
         private readonly object _sync = new object();
         private string _businessQuestion;
+        private string _runId;
         private JObject _dataset;
 
         internal bool HasDataset
@@ -40,6 +41,11 @@ namespace S1Jarvis.Core
 
         internal bool TryCapture(string businessQuestion, string datasetJson)
         {
+            return TryCapture(null, businessQuestion, datasetJson);
+        }
+
+        internal bool TryCapture(string runId, string businessQuestion, string datasetJson)
+        {
             if (string.IsNullOrWhiteSpace(datasetJson)) return false;
             try
             {
@@ -47,6 +53,7 @@ namespace S1Jarvis.Core
                 if (!(parsed["rows"] is JArray)) return false;
                 lock (_sync)
                 {
+                    _runId = runId ?? string.Empty;
                     _businessQuestion = businessQuestion ?? string.Empty;
                     _dataset = (JObject)parsed.DeepClone();
                 }
@@ -63,6 +70,7 @@ namespace S1Jarvis.Core
             lock (_sync)
             {
                 _businessQuestion = null;
+                _runId = null;
                 _dataset = null;
             }
         }
@@ -71,23 +79,29 @@ namespace S1Jarvis.Core
 
         internal async Task<JarvisDatasetRefinementOutcome> TryRefineAsync(
             XSupport xSupport,
+            string activeRunId,
             string userText,
             CancellationToken cancellationToken = default(CancellationToken))
         {
             var outcome = new JarvisDatasetRefinementOutcome { Handled = false };
             JObject source;
             string originalQuestion;
+            string datasetRunId;
             lock (_sync)
             {
                 source = _dataset == null ? null : (JObject)_dataset.DeepClone();
                 originalQuestion = _businessQuestion ?? string.Empty;
+                datasetRunId = _runId ?? string.Empty;
             }
+            if (!string.IsNullOrWhiteSpace(datasetRunId) && !string.Equals(datasetRunId, activeRunId ?? string.Empty, StringComparison.OrdinalIgnoreCase))
+                return outcome;
             if (source == null || !(source["rows"] is JArray))
                 return outcome;
 
             JObject plan = await BuildRefinementPlanAsync(
                 xSupport, originalQuestion, source, userText, cancellationToken).ConfigureAwait(false);
-            if (plan == null || (bool?)plan["canRefine"] != true)
+            if (plan == null || (bool?)plan["canRefine"] != true ||
+                !string.Equals((string)plan["relation"], "refine", StringComparison.OrdinalIgnoreCase))
                 return outcome;
 
             string issue;
@@ -141,7 +155,7 @@ namespace S1Jarvis.Core
                     new JObject
                     {
                         ["type"] = "text",
-                        ["text"] = "Jarvis local dataset refinement protocol. Return JSON only: {\"canRefine\":true|false,\"filters\":[{\"column\":\"...\",\"op\":\"eq|neq|contains|not_contains|gt|gte|lt|lte\",\"value\":\"...\"}],\"sort\":[{\"column\":\"...\",\"direction\":\"asc|desc\"}],\"limit\":null}.\n\n" + policyContext
+                        ["text"] = "Jarvis local dataset refinement protocol. Return JSON only: {\"relation\":\"refine|new_intent\",\"canRefine\":true|false,\"filters\":[{\"column\":\"...\",\"op\":\"eq|neq|contains|not_contains|gt|gte|lt|lte\",\"value\":\"...\"}],\"sort\":[{\"column\":\"...\",\"direction\":\"asc|desc\"}],\"limit\":null}. relation=refine only when the new message modifies the existing dataset question; independent business questions are new_intent. canRefine=true only if every required fact/column already exists in catalog.\n\n" + policyContext
                     }
                 },
                 ["messages"] = new JArray
