@@ -73,7 +73,7 @@ namespace S1Jarvis.Core
                 return false;
             }
 
-            JObject frozen = payload == null ? new JObject() : (JObject)payload.DeepClone();
+            JObject frozen = ToExternalActionPayload(payload);
             string hash = ComputePayloadHash(frozen);
             lock (_sync)
             {
@@ -125,7 +125,8 @@ namespace S1Jarvis.Core
             if (!current.TryGetDispatchInputs(currentObjectId, out rematerialized, out materializationIssues))
                 localIssues.AddRange(materializationIssues ?? new string[0]);
 
-            string currentHash = rematerialized == null ? string.Empty : ComputePayloadHash(rematerialized);
+            JObject currentExternalPayload = ToExternalActionPayload(rematerialized);
+            string currentHash = ComputePayloadHash(currentExternalPayload);
             if (!string.Equals(currentHash, frozenHash, StringComparison.Ordinal))
                 localIssues.Add("Confirmation payload changed after it was frozen; confirmation rejected.");
 
@@ -172,6 +173,18 @@ namespace S1Jarvis.Core
                    value.Contains("ναι στείλ") || value.Contains("ναι, στείλ") ||
                    value.Contains("στειλτο") || value.Contains("στείλτο") ||
                    value.Contains("προχώρα") || value.Contains("προχωρα");
+        }
+
+        private static JObject ToExternalActionPayload(JObject payload)
+        {
+            JObject result = payload == null ? new JObject() : (JObject)payload.DeepClone();
+            string[] internalNames = result.Properties()
+                .Where(x => x.Name.StartsWith("__", StringComparison.Ordinal))
+                .Select(x => x.Name)
+                .ToArray();
+            foreach (string name in internalNames)
+                result.Remove(name);
+            return result;
         }
 
         private static string ComputePayloadHash(JObject payload)
