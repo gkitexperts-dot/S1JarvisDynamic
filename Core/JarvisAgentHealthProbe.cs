@@ -150,8 +150,11 @@ namespace S1Jarvis.Core
 
             try
             {
+                // Provider health is authenticated by the existing ES256 installation
+                // identity. It must not be blocked by the separate NativeS1 product-
+                // recognition credential required only by /api/licensing/v1/verify.
                 VerilicRuntimeConfiguration configuration =
-                    VerilicRuntimeConfiguration.Load();
+                    VerilicRuntimeConfiguration.LoadWithoutRecognition();
                 if (configuration.Mode != VerilicRuntimeMode.Verilic ||
                     configuration.ProviderHealthUri == null)
                     return JarvisAgentHealthResult.Failure(
@@ -188,10 +191,6 @@ namespace S1Jarvis.Core
                     ProductId = productId,
                     InstallationId = state.InstallationId,
                     ProductVersion = configuration.ProductVersion,
-                    // Session credential provisioning is transport/runtime material,
-                    // not a separately licensed product feature. Keep the normal
-                    // licence verification intact without requesting a synthetic
-                    // entitlement that would incorrectly produce feature_denied.
                     RequestedFeatures = new string[0],
                     Soft1Serial = info.SerialNum == null
                         ? null
@@ -259,10 +258,6 @@ namespace S1Jarvis.Core
                         IReadOnlyList<JarvisAgentHealthTargetResult> targets =
                             ConvertTargets(health.Targets);
 
-                        // Preserve the authoritative server failure before validating
-                        // success-only execution material. Failed provisioning responses
-                        // are allowed to omit Model/Provider/ApiKey; masking their reason
-                        // as provider_model_missing made diagnostics impossible.
                         if (!health.Ready)
                         {
                             return JarvisAgentHealthResult.Failure(
@@ -312,8 +307,10 @@ namespace S1Jarvis.Core
                     "provider_timeout",
                     model: selectedModel);
             }
-            catch
+            catch (Exception ex)
             {
+                DebugLog.Log("[AI-SESSION-REGISTRY] provider health exception: " +
+                    ex.GetType().Name + " - " + ex.Message);
                 return JarvisAgentHealthResult.Failure(
                     "provider_health_failed",
                     model: selectedModel);
