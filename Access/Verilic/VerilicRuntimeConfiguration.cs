@@ -17,6 +17,18 @@ namespace S1Jarvis.Access.Verilic
         private const string RecognitionKeyIdVariable = "S1JARVIS_VERILIC_RECOGNITION_KEY_ID";
         private const string RecognitionSecretVariable = "S1JARVIS_VERILIC_RECOGNITION_SECRET";
 
+        // Canonical RegisteredProduct ids from Verilic Product Management.
+        // Jarvis internal commercial codes remain S1JARVIS / S1JARVISCOURIER /
+        // S1JARVISDOCREADER; only the ids below are sent as productId to
+        // /api/licensing/v1/verify. Environment/local config values can still
+        // override these ids for migration or another Verilic environment.
+        private const string JarvisRegisteredProductId =
+            "prd_6ece7bc271a54fd6ba945be8a8189e0b";
+        private const string JarvisCourierRegisteredProductId =
+            "prd_1ee62b4b7a1e4f5f9283da60a9bc1d29";
+        private const string JarvisDocReaderRegisteredProductId =
+            "prd_dfc9315f4e8242faa679be0aa49b474f";
+
         private readonly Dictionary<string, string> _productIds;
         private readonly Dictionary<string, string> _licenceIds;
 
@@ -47,7 +59,6 @@ namespace S1Jarvis.Access.Verilic
         public string ProductVersion { get; private set; }
         public string RecognitionKeyId { get; private set; }
         public string RecognitionSecret { get; private set; }
-
         public Uri VerificationUri => BuildApiUri("api/licensing/v1/verify");
         public Uri RoutingUri => BuildApiUri("api/jarvis-ai/routing/resolve");
         public Uri ProviderHealthUri => BuildApiUri("api/jarvis-ai/routing/health");
@@ -140,20 +151,19 @@ namespace S1Jarvis.Access.Verilic
                 : stateDirectoryText;
             VerilicInstallationProtectionScope scope = ParseProtectionScope(scopeText);
 
-            // Canonical NativeS1 product ids default to the stable Jarvis product
-            // codes. This removes the need to configure separate product-id
-            // environment variables for normal deployments. The explicit values
-            // are still accepted as overrides for backwards compatibility.
             var productIds = new Dictionary<string, string>(StringComparer.Ordinal)
             {
                 [JarvisProducts.Jarvis] = ProductIdOrDefault(
-                    jarvisProductIdText, JarvisProducts.Jarvis,
+                    jarvisProductIdText,
+                    JarvisRegisteredProductId,
                     "S1JARVIS_VERILIC_PRODUCT_ID"),
                 [JarvisProducts.JarvisCourier] = ProductIdOrDefault(
-                    courierProductIdText, JarvisProducts.JarvisCourier,
+                    courierProductIdText,
+                    JarvisCourierRegisteredProductId,
                     "S1JARVISCOURIER_VERILIC_PRODUCT_ID"),
                 [JarvisProducts.JarvisDocReader] = ProductIdOrDefault(
-                    docReaderProductIdText, JarvisProducts.JarvisDocReader,
+                    docReaderProductIdText,
+                    JarvisDocReaderRegisteredProductId,
                     "S1JARVISDOCREADER_VERILIC_PRODUCT_ID")
             };
 
