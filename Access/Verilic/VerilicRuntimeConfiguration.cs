@@ -78,8 +78,24 @@ namespace S1Jarvis.Access.Verilic
 
         public static VerilicRuntimeConfiguration Load()
         {
+            return LoadCore(true);
+        }
+
+        // Installation-backed Verilic flows (activation/readiness/provider-health)
+        // do not use the NativeS1 product-recognition credential. Keeping this
+        // separate prevents a missing deployment recognition secret from masking
+        // an otherwise valid ES256 installation state as provider_health_failed.
+        internal static VerilicRuntimeConfiguration LoadWithoutRecognition()
+        {
+            return LoadCore(false);
+        }
+
+        private static VerilicRuntimeConfiguration LoadCore(bool requireRecognition)
+        {
             VerilicLocalConfiguration local = VerilicLocalConfigurationStore.Load();
-            return local != null ? LoadLocal(local) : LoadProcessEnvironment();
+            return local != null
+                ? LoadLocal(local, requireRecognition)
+                : LoadRuntimeEnvironment(requireRecognition);
         }
 
         internal static void ValidateLocalConfiguration(VerilicLocalConfiguration local)
@@ -94,34 +110,63 @@ namespace S1Jarvis.Access.Verilic
                 null, null, "local Verilic configuration", false);
         }
 
-        private static VerilicRuntimeConfiguration LoadLocal(VerilicLocalConfiguration local)
+        private static VerilicRuntimeConfiguration LoadLocal(
+            VerilicLocalConfiguration local,
+            bool requireRecognition)
         {
             return Create(local.Mode, local.Origin, local.StateDirectory, local.DpapiScope,
                 local.VendorId, local.JarvisProductId, local.JarvisLicenceId,
                 local.CourierProductId, local.CourierLicenceId,
                 local.DocReaderProductId, local.DocReaderLicenceId,
-                Environment.GetEnvironmentVariable(RecognitionKeyIdVariable),
-                Environment.GetEnvironmentVariable(RecognitionSecretVariable),
-                "local Verilic configuration + process secret configuration", true);
+                ReadRuntimeVariable(RecognitionKeyIdVariable),
+                ReadRuntimeVariable(RecognitionSecretVariable),
+                "local Verilic configuration + deployment credential configuration",
+                requireRecognition);
         }
 
-        private static VerilicRuntimeConfiguration LoadProcessEnvironment()
+        private static VerilicRuntimeConfiguration LoadRuntimeEnvironment(bool requireRecognition)
         {
             return Create(
-                Environment.GetEnvironmentVariable(ModeVariable),
-                Environment.GetEnvironmentVariable(OriginVariable),
-                Environment.GetEnvironmentVariable(StateDirectoryVariable),
-                Environment.GetEnvironmentVariable(DpapiScopeVariable),
-                Environment.GetEnvironmentVariable(VendorIdVariable),
-                Environment.GetEnvironmentVariable("S1JARVIS_VERILIC_PRODUCT_ID"),
-                Environment.GetEnvironmentVariable("S1JARVIS_VERILIC_LICENCE_ID"),
-                Environment.GetEnvironmentVariable("S1JARVISCOURIER_VERILIC_PRODUCT_ID"),
-                Environment.GetEnvironmentVariable("S1JARVISCOURIER_VERILIC_LICENCE_ID"),
-                Environment.GetEnvironmentVariable("S1JARVISDOCREADER_VERILIC_PRODUCT_ID"),
-                Environment.GetEnvironmentVariable("S1JARVISDOCREADER_VERILIC_LICENCE_ID"),
-                Environment.GetEnvironmentVariable(RecognitionKeyIdVariable),
-                Environment.GetEnvironmentVariable(RecognitionSecretVariable),
-                "process environment", true);
+                ReadRuntimeVariable(ModeVariable),
+                ReadRuntimeVariable(OriginVariable),
+                ReadRuntimeVariable(StateDirectoryVariable),
+                ReadRuntimeVariable(DpapiScopeVariable),
+                ReadRuntimeVariable(VendorIdVariable),
+                ReadRuntimeVariable("S1JARVIS_VERILIC_PRODUCT_ID"),
+                ReadRuntimeVariable("S1JARVIS_VERILIC_LICENCE_ID"),
+                ReadRuntimeVariable("S1JARVISCOURIER_VERILIC_PRODUCT_ID"),
+                ReadRuntimeVariable("S1JARVISCOURIER_VERILIC_LICENCE_ID"),
+                ReadRuntimeVariable("S1JARVISDOCREADER_VERILIC_PRODUCT_ID"),
+                ReadRuntimeVariable("S1JARVISDOCREADER_VERILIC_LICENCE_ID"),
+                ReadRuntimeVariable(RecognitionKeyIdVariable),
+                ReadRuntimeVariable(RecognitionSecretVariable),
+                "runtime environment",
+                requireRecognition);
+        }
+
+        // Soft1/Xplorer can stay alive while deployment/user variables are updated.
+        // Process-environment reads alone therefore leave the running client with a
+        // stale snapshot. Prefer a process override, but fall back to the current
+        // Windows-user value so a provisioned NativeS1 deployment is usable without
+        // requiring a Windows logoff or an unrelated machine-wide setting.
+        private static string ReadRuntimeVariable(string name)
+        {
+            string value = Environment.GetEnvironmentVariable(name);
+            if (!string.IsNullOrWhiteSpace(value))
+                return value;
+
+            try
+            {
+                value = Environment.GetEnvironmentVariable(
+                    name,
+                    EnvironmentVariableTarget.User);
+            }
+            catch
+            {
+                value = null;
+            }
+
+            return value;
         }
 
         private static VerilicRuntimeConfiguration Create(
