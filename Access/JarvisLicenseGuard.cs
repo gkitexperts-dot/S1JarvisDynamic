@@ -23,7 +23,6 @@ namespace S1Jarvis.Access
             new Dictionary<string, (AccessCheckResponse, DateTime)>();
         private static XSupport _currentXSupport;
         private static bool _drVisionBridgeInstalled;
-        private static readonly IJarvisRuntimeAccessProvider _runtimeAccessProvider = CreateRuntimeAccessProvider();
 
         private static IJarvisRuntimeAccessProvider CreateRuntimeAccessProvider()
         {
@@ -51,8 +50,10 @@ namespace S1Jarvis.Access
                     configuration.ResolveProductId);
                 return new SplitVerilicRuntimeAccessProvider(licensing, routing);
             }
-            catch
+            catch (Exception ex)
             {
+                DebugLog.Log("[LICENSING] runtime provider configuration failed: " +
+                    ex.GetType().Name + " - " + ex.Message);
                 return new FailClosedRuntimeAccessProvider("runtime_configuration_invalid");
             }
         }
@@ -64,12 +65,22 @@ namespace S1Jarvis.Access
                 lock (_lock) _currentXSupport = xSupport;
                 EnsureDrVisionBridgeInstalled();
             }
+
+            // Do not pin a failed provider for the lifetime of Xplorer.exe. Verilic
+            // configuration and Windows-user deployment credentials can be provisioned
+            // while Soft1 is already running, so each explicit access check composes a
+            // fresh provider from the current effective configuration.
+            IJarvisRuntimeAccessProvider runtimeAccessProvider = CreateRuntimeAccessProvider();
             try
             {
-                return _runtimeAccessProvider.Check(xSupport, productCode ?? JarvisProducts.Jarvis);
+                return runtimeAccessProvider.Check(
+                    xSupport,
+                    productCode ?? JarvisProducts.Jarvis);
             }
-            catch
+            catch (Exception ex)
             {
+                DebugLog.Log("[LICENSING] runtime access failed: " +
+                    ex.GetType().Name + " - " + ex.Message);
                 string effectiveProduct = productCode ?? JarvisProducts.Jarvis;
                 return JarvisRuntimeAccessResult.Create(
                     JarvisLicenceAccessDecision.Deny(effectiveProduct, "runtime_access_failed"),
@@ -86,7 +97,11 @@ namespace S1Jarvis.Access
                 if (_drVisionBridgeInstalled) return;
                 try
                 {
-                    VerilicRuntimeConfiguration configuration = VerilicRuntimeConfiguration.Load();
+                    // The DR direct-AI bridge is backed by the ES256 installation
+                    // identity/session registry and does not require the separate
+                    // NativeS1 product-recognition credential used by /verify.
+                    VerilicRuntimeConfiguration configuration =
+                        VerilicRuntimeConfiguration.LoadWithoutRecognition();
                     if (configuration.Mode != VerilicRuntimeMode.Verilic) return;
                     FieldInfo httpField = typeof(JarvisAgentClient).GetField(
                         "_http", BindingFlags.Static | BindingFlags.NonPublic);
@@ -96,7 +111,8 @@ namespace S1Jarvis.Access
                 }
                 catch (Exception ex)
                 {
-                    DebugLog.Log("[dr] Verilic vision bridge install failed: " + ex.GetType().Name);
+                    DebugLog.Log("[dr] Verilic vision bridge install failed: " +
+                        ex.GetType().Name + " - " + ex.Message);
                 }
             }
         }
