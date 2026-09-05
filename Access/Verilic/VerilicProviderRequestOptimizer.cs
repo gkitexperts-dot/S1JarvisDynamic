@@ -176,6 +176,19 @@ namespace S1Jarvis.Access.Verilic
                     request["system"] = CompactSystem(
                         BuildConversationalPrompt(agentName, contextLine, durableContext));
                     request["max_tokens"] = ConversationalMaxOutputTokens;
+
+                    // Conversation fast path: this is an intent-level neutral reasoning
+                    // control, not a provider/model branch. Simple greetings/identity
+                    // questions do not need medium reasoning effort. Provider adapters
+                    // translate this neutral control to their native wire format.
+                    JObject outputConfig = request["output_config"] as JObject;
+                    if (outputConfig == null)
+                    {
+                        outputConfig = new JObject();
+                        request["output_config"] = outputConfig;
+                    }
+                    outputConfig["effort"] = "low";
+
                     CompactPlainTextHistory(request, ConversationalHistoryMessages);
                     return Finish(request, agentName, "conversation", originalChars,
                         originalSystemChars, originalToolCount, originalMessageCount, history);
