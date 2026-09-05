@@ -9,20 +9,32 @@ namespace S1Jarvis.Access.Verilic
         Verilic = 1
     }
 
+    internal sealed class VerilicProductRecognitionCredential
+    {
+        public VerilicProductRecognitionCredential(
+            string productId,
+            string keyId,
+            string secret)
+        {
+            ProductId = productId;
+            KeyId = keyId;
+            Secret = secret;
+        }
+
+        public string ProductId { get; private set; }
+        public string KeyId { get; private set; }
+        public string Secret { get; private set; }
+    }
+
     /// <summary>
     /// Configuration for the single supported Verilic NativeS1 startup contract.
-    /// Product-recognition credentials are compiled into the runtime at build time.
-    /// They are product-level credentials shared by every installation of the same
-    /// compiled S1JARVIS build; no PC/user environment provisioning is required.
+    /// Recognition credentials are product-level build material: S1JARVIS,
+    /// JARVISCOURIER and JARVISDOCREADER each have their own Key ID + Secret.
+    /// Customer PCs require no Recognition environment variables or provisioning.
     /// </summary>
     internal sealed class VerilicRuntimeConfiguration
     {
         private const string OriginVariable = "S1JARVIS_VERILIC_ORIGIN";
-        private const string RecognitionKeyIdMetadata =
-            "VerilicRecognitionKeyId";
-        private const string RecognitionSecretMetadata =
-            "VerilicRecognitionSecret";
-
         private const string DefaultOrigin = "https://verilic.gr";
 
         private const string JarvisRegisteredProductId =
@@ -32,43 +44,50 @@ namespace S1Jarvis.Access.Verilic
         private const string JarvisDocReaderRegisteredProductId =
             "prd_dfc9315f4e8242faa679be0aa49b474f";
 
-        private readonly Dictionary<string, string> _productIds;
+        private const string JarvisKeyIdMetadata = "VerilicJarvisRecognitionKeyId";
+        private const string JarvisSecretMetadata = "VerilicJarvisRecognitionSecret";
+        private const string CourierKeyIdMetadata = "VerilicJarvisCourierRecognitionKeyId";
+        private const string CourierSecretMetadata = "VerilicJarvisCourierRecognitionSecret";
+        private const string DocReaderKeyIdMetadata = "VerilicJarvisDocReaderRecognitionKeyId";
+        private const string DocReaderSecretMetadata = "VerilicJarvisDocReaderRecognitionSecret";
+
+        private readonly Dictionary<string, VerilicProductRecognitionCredential> _credentials;
 
         private VerilicRuntimeConfiguration(
             Uri origin,
-            Dictionary<string, string> productIds,
-            string productVersion,
-            string recognitionKeyId,
-            string recognitionSecret)
+            Dictionary<string, VerilicProductRecognitionCredential> credentials,
+            string productVersion)
         {
             LicensingOrigin = origin;
-            _productIds = productIds;
+            _credentials = credentials;
             ProductVersion = productVersion;
-            RecognitionKeyId = recognitionKeyId;
-            RecognitionSecret = recognitionSecret;
         }
 
         public VerilicRuntimeMode Mode => VerilicRuntimeMode.Verilic;
         public Uri LicensingOrigin { get; private set; }
         public string ProductVersion { get; private set; }
-        public string RecognitionKeyId { get; private set; }
-        public string RecognitionSecret { get; private set; }
         public Uri VerificationUri => new Uri(
             new Uri(LicensingOrigin.GetLeftPart(UriPartial.Authority) + "/"),
             "api/licensing/v1/verify");
 
         public string ResolveProductId(string productCode)
         {
-            string value;
+            return ResolveProductCredential(productCode).ProductId;
+        }
+
+        public VerilicProductRecognitionCredential ResolveProductCredential(string productCode)
+        {
+            VerilicProductRecognitionCredential credential;
             if (string.IsNullOrWhiteSpace(productCode) ||
-                !_productIds.TryGetValue(productCode, out value) ||
-                string.IsNullOrWhiteSpace(value))
+                !_credentials.TryGetValue(productCode, out credential) ||
+                credential == null)
             {
                 throw new InvalidOperationException(
-                    "No Verilic ProductId is configured for the Jarvis product.");
+                    "No Verilic NativeS1 recognition credential is configured for product " +
+                    (productCode ?? "<null>") + ".");
             }
 
-            return value;
+            return credential;
         }
 
         public static VerilicRuntimeConfiguration Load()
@@ -79,34 +98,49 @@ namespace S1Jarvis.Access.Verilic
 
             Uri origin = RequireHttpsOrigin(originText);
 
-            // The Recognition credential is deployment/build material, not runtime
-            // machine configuration. The build injects it as assembly metadata into
-            // S1Jarvis.Runtime.dll; every customer receives the same compiled product
-            // credential until the next Verilic Rotate + grace-period rollout.
-            string recognitionKeyId = RequireIdentifier(
-                ReadBuildMetadata(RecognitionKeyIdMetadata),
-                RecognitionKeyIdMetadata);
-            string recognitionSecret = ReadBuildMetadata(RecognitionSecretMetadata);
-            if (string.IsNullOrWhiteSpace(recognitionSecret) ||
-                recognitionSecret.Length > 4096)
+            var credentials = new Dictionary<string, VerilicProductRecognitionCredential>(
+                StringComparer.Ordinal)
             {
-                throw new InvalidOperationException(
-                    "S1JARVIS was built without a valid Verilic Recognition secret.");
-            }
-
-            var productIds = new Dictionary<string, string>(StringComparer.Ordinal)
-            {
-                [JarvisProducts.Jarvis] = JarvisRegisteredProductId,
-                [JarvisProducts.JarvisCourier] = JarvisCourierRegisteredProductId,
-                [JarvisProducts.JarvisDocReader] = JarvisDocReaderRegisteredProductId
+                [JarvisProducts.Jarvis] = BuildCredential(
+                    JarvisRegisteredProductId,
+                    JarvisKeyIdMetadata,
+                    JarvisSecretMetadata),
+                [JarvisProducts.JarvisCourier] = BuildCredential(
+                    JarvisCourierRegisteredProductId,
+                    CourierKeyIdMetadata,
+                    CourierSecretMetadata),
+                [JarvisProducts.JarvisDocReader] = BuildCredential(
+                    JarvisDocReaderRegisteredProductId,
+                    DocReaderKeyIdMetadata,
+                    DocReaderSecretMetadata)
             };
 
             return new VerilicRuntimeConfiguration(
                 origin,
-                productIds,
-                GetProductVersion(),
-                recognitionKeyId,
-                recognitionSecret.Trim());
+                credentials,
+                GetProductVersion());
+        }
+
+        private static VerilicProductRecognitionCredential BuildCredential(
+            string productId,
+            string keyIdMetadata,
+            string secretMetadata)
+        {
+            string keyId = RequireIdentifier(
+                ReadBuildMetadata(keyIdMetadata),
+                keyIdMetadata);
+            string secret = ReadBuildMetadata(secretMetadata);
+            if (string.IsNullOrWhiteSpace(secret) || secret.Length > 4096)
+            {
+                throw new InvalidOperationException(
+                    "S1JARVIS was built without a valid Verilic Recognition secret (" +
+                    secretMetadata + ").");
+            }
+
+            return new VerilicProductRecognitionCredential(
+                productId,
+                keyId,
+                secret.Trim());
         }
 
         private static string ReadBuildMetadata(string key)
