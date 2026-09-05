@@ -17,11 +17,6 @@ namespace S1Jarvis.Access.Verilic
         private const string RecognitionKeyIdVariable = "S1JARVIS_VERILIC_RECOGNITION_KEY_ID";
         private const string RecognitionSecretVariable = "S1JARVIS_VERILIC_RECOGNITION_SECRET";
 
-        // Canonical RegisteredProduct ids from Verilic Product Management.
-        // Jarvis internal commercial codes remain S1JARVIS / S1JARVISCOURIER /
-        // S1JARVISDOCREADER; only the ids below are sent as productId to
-        // /api/licensing/v1/verify. Environment/local config values can still
-        // override these ids for migration or another Verilic environment.
         private const string JarvisRegisteredProductId =
             "prd_6ece7bc271a54fd6ba945be8a8189e0b";
         private const string JarvisCourierRegisteredProductId =
@@ -81,10 +76,6 @@ namespace S1Jarvis.Access.Verilic
             return LoadCore(true);
         }
 
-        // Installation-backed Verilic flows (activation/readiness/provider-health)
-        // do not use the NativeS1 product-recognition credential. Keeping this
-        // separate prevents a missing deployment recognition secret from masking
-        // an otherwise valid ES256 installation state as provider_health_failed.
         internal static VerilicRuntimeConfiguration LoadWithoutRecognition()
         {
             return LoadCore(false);
@@ -144,11 +135,12 @@ namespace S1Jarvis.Access.Verilic
                 requireRecognition);
         }
 
-        // Soft1/Xplorer can stay alive while deployment/user variables are updated.
-        // Process-environment reads alone therefore leave the running client with a
-        // stale snapshot. Prefer a process override, but fall back to the current
-        // Windows-user value so a provisioned NativeS1 deployment is usable without
-        // requiring a Windows logoff or an unrelated machine-wide setting.
+        // Soft1/Xplorer may remain alive while deployment values are updated.
+        // Use process values first, then current-user deployment values, and
+        // finally machine-wide deployment values. This supports workstation
+        // installs where the product-recognition credential is provisioned once
+        // for every Soft1 user without requiring it to be copied into source or
+        // the non-secret local config.json.
         private static string ReadRuntimeVariable(string name)
         {
             string value = Environment.GetEnvironmentVariable(name);
@@ -160,13 +152,22 @@ namespace S1Jarvis.Access.Verilic
                 value = Environment.GetEnvironmentVariable(
                     name,
                     EnvironmentVariableTarget.User);
+                if (!string.IsNullOrWhiteSpace(value))
+                    return value;
             }
-            catch
-            {
-                value = null;
-            }
+            catch { }
 
-            return value;
+            try
+            {
+                value = Environment.GetEnvironmentVariable(
+                    name,
+                    EnvironmentVariableTarget.Machine);
+                if (!string.IsNullOrWhiteSpace(value))
+                    return value;
+            }
+            catch { }
+
+            return null;
         }
 
         private static VerilicRuntimeConfiguration Create(
