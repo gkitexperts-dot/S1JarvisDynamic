@@ -24,11 +24,6 @@ namespace S1Jarvis.SoftoneIntegration
             return InvokeFrameworkElement("CreateShell", new object[] { xSupport });
         }
 
-        internal static FrameworkElement CreateVerilicMaintenanceShell()
-        {
-            return InvokeFrameworkElement("CreateVerilicMaintenanceShell", null);
-        }
-
         private static FrameworkElement InvokeFrameworkElement(string methodName, object[] arguments)
         {
             Type bridge = GetBridgeType();
