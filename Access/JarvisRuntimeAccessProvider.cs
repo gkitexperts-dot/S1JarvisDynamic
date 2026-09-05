@@ -60,8 +60,7 @@ namespace S1Jarvis.Access
 
             return JarvisRuntimeAccessResult.Create(
                 licence,
-                JarvisAgentRoutingDecision.None(
-                    licence.Allowed ? licence.RuntimeReasonCode : licence.ReasonCode));
+                JarvisAgentRoutingDecision.None(licence.RuntimeReasonCode));
         }
     }
 }
