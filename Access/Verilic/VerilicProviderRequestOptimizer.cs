@@ -927,14 +927,22 @@ namespace S1Jarvis.Access.Verilic
             if (string.IsNullOrWhiteSpace(text)) return false;
             string n = NormalizeGreek(text).Trim().TrimEnd('?', '!', '.').Trim();
             if (n.Length == 0 || n.Length > 80) return false;
-            if (ContainsAnyNormalized(n, BusinessSignals) ||
-                ContainsAnyNormalized(n, ReadSignals) ||
-                ContainsAnyNormalized(n, ActionSignals)) return false;
+
+            // Exact conversational intents are authoritative and must be checked
+            // before broad substring signal families. Otherwise "ποιος εισαι"
+            // falsely matches the read signal "ποιο" and is routed as atlas-read,
+            // attaching business tools and turning a trivial identity turn into a
+            // heavyweight provider request.
             foreach (string phrase in ConversationalExact)
             {
                 string p = NormalizeGreek(phrase).Trim().TrimEnd('?', '!', '.').Trim();
                 if (string.Equals(n, p, StringComparison.Ordinal)) return true;
             }
+
+            if (ContainsAnyNormalized(n, BusinessSignals) ||
+                ContainsAnyNormalized(n, ReadSignals) ||
+                ContainsAnyNormalized(n, ActionSignals)) return false;
+
             return n.StartsWith("γεια ", StringComparison.Ordinal) ||
                    n.StartsWith("καλημερα ", StringComparison.Ordinal) ||
                    n.StartsWith("καλησπερα ", StringComparison.Ordinal) ||
