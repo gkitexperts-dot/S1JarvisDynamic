@@ -29,16 +29,15 @@ namespace S1Jarvis.Access
     }
 
     /// <summary>
-    /// NativeS1-only runtime access. Verilic /api/licensing/v1/verify is the sole
-    /// licensing and runtime-readiness authority. No Nexus fallback, installation
-    /// identity, activation state, routing/resolve call or ES256 proof participates
-    /// in the startup decision.
+    /// Verilic contract runtime access. Authentication is contract-scoped and
+    /// workstation-independent: ApiUsername/ApiValue issue a short-lived clientKey,
+    /// then /access/check authorizes the active Soft1 Serial/Company/Branch/User.
     /// </summary>
-    internal sealed class VerilicNativeS1RuntimeAccessProvider : IJarvisRuntimeAccessProvider
+    internal sealed class VerilicContractRuntimeAccessProvider : IJarvisRuntimeAccessProvider
     {
         private readonly IVerilicRuntimeLicenceProvider _licensing;
 
-        public VerilicNativeS1RuntimeAccessProvider(IVerilicRuntimeLicenceProvider licensing)
+        public VerilicContractRuntimeAccessProvider(IVerilicRuntimeLicenceProvider licensing)
         {
             _licensing = licensing ?? throw new ArgumentNullException(nameof(licensing));
         }
@@ -47,16 +46,10 @@ namespace S1Jarvis.Access
         {
             if (xSupport == null)
                 throw new ArgumentNullException(nameof(xSupport));
-            if (string.IsNullOrWhiteSpace(productCode))
-                throw new ArgumentException("Product code is required.", nameof(productCode));
 
             JarvisLicenceAccessDecision licence = _licensing.Check(xSupport, productCode);
             if (licence == null)
-            {
-                licence = JarvisLicenceAccessDecision.Deny(
-                    productCode,
-                    "verification_failed");
-            }
+                licence = JarvisLicenceAccessDecision.Deny(productCode, "verification_failed");
 
             return JarvisRuntimeAccessResult.Create(
                 licence,
