@@ -123,8 +123,8 @@ namespace S1Jarvis.Access.Verilic
                     JObject parsed = JObject.Parse(raw);
                     return Success(agentName, target, raw,
                         FirstText(parsed["content"] as JArray),
-                        ReadInt(parsed["usage"]?["input_tokens"]),
-                        ReadInt(parsed["usage"]?["output_tokens"]));
+                        ReadNestedInt(parsed, "usage", "input_tokens"),
+                        ReadNestedInt(parsed, "usage", "output_tokens"));
                 }
             }
         }
@@ -161,8 +161,8 @@ namespace S1Jarvis.Access.Verilic
                     JObject normalized = NormalizeResponses(parsed);
                     return Success(agentName, target, normalized.ToString(Formatting.None),
                         FirstText(normalized["content"] as JArray),
-                        ReadInt(parsed["usage"]?["input_tokens"]),
-                        ReadInt(parsed["usage"]?["output_tokens"]));
+                        ReadNestedInt(parsed, "usage", "input_tokens"),
+                        ReadNestedInt(parsed, "usage", "output_tokens"));
                 }
             }
         }
@@ -334,7 +334,8 @@ namespace S1Jarvis.Access.Verilic
             }
 
             string stop = hasTool ? "tool_use" : "end_turn";
-            string incomplete = (string)response["incomplete_details"]?["reason"];
+            JObject incompleteDetails = response["incomplete_details"] as JObject;
+            string incomplete = incompleteDetails == null ? string.Empty : (string)incompleteDetails["reason"];
             if (!hasTool && string.Equals(incomplete, "max_output_tokens", StringComparison.OrdinalIgnoreCase))
                 stop = "max_tokens";
 
@@ -344,8 +345,8 @@ namespace S1Jarvis.Access.Verilic
                 ["stop_reason"] = stop,
                 ["usage"] = new JObject
                 {
-                    ["input_tokens"] = ReadInt(response["usage"]?["input_tokens"]),
-                    ["output_tokens"] = ReadInt(response["usage"]?["output_tokens"])
+                    ["input_tokens"] = ReadNestedInt(response, "usage", "input_tokens"),
+                    ["output_tokens"] = ReadNestedInt(response, "usage", "output_tokens")
                 }
             };
         }
@@ -809,6 +810,12 @@ namespace S1Jarvis.Access.Verilic
             if (content == null) return null;
             JObject block = content.OfType<JObject>().FirstOrDefault(x => string.Equals((string)x["type"], "text", StringComparison.OrdinalIgnoreCase));
             return block == null ? null : (string)block["text"];
+        }
+
+        private static int ReadNestedInt(JObject parent, string objectName, string valueName)
+        {
+            JObject nested = parent == null ? null : parent[objectName] as JObject;
+            return nested == null ? 0 : ReadInt(nested[valueName]);
         }
 
         private static int ReadInt(JToken token)
