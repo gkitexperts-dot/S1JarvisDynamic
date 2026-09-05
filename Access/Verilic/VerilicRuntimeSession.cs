@@ -1,7 +1,6 @@
 using System;
 using System.Net;
 using System.Net.Http;
-using System.Net.Http.Headers;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
@@ -34,6 +33,7 @@ namespace S1Jarvis.Access.Verilic
         private static string _clientKey;
         private static DateTime _expiresAtUtc;
         private static string _credentialFingerprint;
+        private static string _agentAccountRef;
 
         static VerilicRuntimeSession()
         {
@@ -41,6 +41,11 @@ namespace S1Jarvis.Access.Verilic
         }
 
         internal static Uri AgentUri => AgentProxyUri;
+
+        internal static string CurrentAgentAccountRef
+        {
+            get { lock (Sync) return _agentAccountRef; }
+        }
 
         internal static async Task<VerilicRuntimeAuthorization> AuthorizeAsync(
             XSupport xSupport,
@@ -64,6 +69,11 @@ namespace S1Jarvis.Access.Verilic
             };
 
             AccessCheckResponse access = await SendAccessCheckAsync(payload, clientKey, cancellationToken).ConfigureAwait(false);
+            if (access != null && access.Allowed && !string.IsNullOrWhiteSpace(access.AgentAccountRef))
+            {
+                lock (Sync) _agentAccountRef = access.AgentAccountRef.Trim();
+            }
+
             return new VerilicRuntimeAuthorization
             {
                 Access = access,
@@ -152,6 +162,7 @@ namespace S1Jarvis.Access.Verilic
                 _clientKey = null;
                 _expiresAtUtc = default(DateTime);
                 _credentialFingerprint = null;
+                _agentAccountRef = null;
             }
         }
 
