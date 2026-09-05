@@ -2,12 +2,6 @@ using Newtonsoft.Json;
 
 namespace S1Jarvis.Access
 {
-    // ══════════════════════════════════════════════════════════════════════
-    // AccessCheckRequest / AccessCheckResponse
-    //
-    // Ταυτόσημο σχήμα με S1Courier.Access / S1DocReader.Soft1.Access - ίδιο
-    // Nexus API εξυπηρετεί όλα τα tools, το ToolName είναι αυτό που αλλάζει.
-    // ══════════════════════════════════════════════════════════════════════
     public class AccessCheckRequest
     {
         [JsonProperty("serial")]
@@ -34,11 +28,15 @@ namespace S1Jarvis.Access
         [JsonProperty("toolName")]
         public string ToolName { get; set; }
 
-        // Opaque δείκτης προς το agent account - ΠΟΤΕ key. Μόνο όταν Allowed.
         [JsonProperty("agentAccountRef")]
         public string AgentAccountRef { get; set; }
 
-        // Non-secret model id selected by the authoritative Jarvis AI config.
+        [JsonProperty("runtimeProvider")]
+        public string RuntimeProvider { get; set; }
+
+        [JsonProperty("runtimeCredential")]
+        public string RuntimeCredential { get; set; }
+
         [JsonProperty("aiModel")]
         public string AiModel { get; set; }
 

@@ -176,6 +176,19 @@ namespace S1Jarvis.Access.Verilic
                     request["system"] = CompactSystem(
                         BuildConversationalPrompt(agentName, contextLine, durableContext));
                     request["max_tokens"] = ConversationalMaxOutputTokens;
+
+                    // Conversation fast path: this is an intent-level neutral reasoning
+                    // control, not a provider/model branch. Simple greetings/identity
+                    // questions do not need medium reasoning effort. Provider adapters
+                    // translate this neutral control to their native wire format.
+                    JObject outputConfig = request["output_config"] as JObject;
+                    if (outputConfig == null)
+                    {
+                        outputConfig = new JObject();
+                        request["output_config"] = outputConfig;
+                    }
+                    outputConfig["effort"] = "low";
+
                     CompactPlainTextHistory(request, ConversationalHistoryMessages);
                     return Finish(request, agentName, "conversation", originalChars,
                         originalSystemChars, originalToolCount, originalMessageCount, history);
@@ -914,14 +927,22 @@ namespace S1Jarvis.Access.Verilic
             if (string.IsNullOrWhiteSpace(text)) return false;
             string n = NormalizeGreek(text).Trim().TrimEnd('?', '!', '.').Trim();
             if (n.Length == 0 || n.Length > 80) return false;
-            if (ContainsAnyNormalized(n, BusinessSignals) ||
-                ContainsAnyNormalized(n, ReadSignals) ||
-                ContainsAnyNormalized(n, ActionSignals)) return false;
+
+            // Exact conversational intents are authoritative and must be checked
+            // before broad substring signal families. Otherwise "ποιος εισαι"
+            // falsely matches the read signal "ποιο" and is routed as atlas-read,
+            // attaching business tools and turning a trivial identity turn into a
+            // heavyweight provider request.
             foreach (string phrase in ConversationalExact)
             {
                 string p = NormalizeGreek(phrase).Trim().TrimEnd('?', '!', '.').Trim();
                 if (string.Equals(n, p, StringComparison.Ordinal)) return true;
             }
+
+            if (ContainsAnyNormalized(n, BusinessSignals) ||
+                ContainsAnyNormalized(n, ReadSignals) ||
+                ContainsAnyNormalized(n, ActionSignals)) return false;
+
             return n.StartsWith("γεια ", StringComparison.Ordinal) ||
                    n.StartsWith("καλημερα ", StringComparison.Ordinal) ||
                    n.StartsWith("καλησπερα ", StringComparison.Ordinal) ||

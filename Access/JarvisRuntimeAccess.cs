@@ -1,4 +1,5 @@
 using System;
+using Newtonsoft.Json.Linq;
 using S1Jarvis.Access.Verilic;
 
 namespace S1Jarvis.Access
@@ -6,123 +7,160 @@ namespace S1Jarvis.Access
     internal sealed class JarvisLicenceAccessDecision
     {
         public bool Allowed { get; private set; }
+        public bool RuntimeReady { get; private set; }
+        public string RuntimeReasonCode { get; private set; }
         public string ToolName { get; private set; }
         public string Message { get; private set; }
         public string ValidUntil { get; private set; }
+        public string AgentAccountRef { get; private set; }
 
-        public static JarvisLicenceAccessDecision FromLegacy(AccessCheckResponse response)
-        {
-            if (response == null)
-                throw new ArgumentNullException(nameof(response));
+        // Retained only so older in-process callers compile while the new
+        // contract-auth/access-check flow is rolled out.
+        public VerilicVerifyLicenceResult Verification { get; private set; }
+        public VerilicVerifyProductResult Product { get; private set; }
 
-            return new JarvisLicenceAccessDecision
-            {
-                Allowed = response.Allowed,
-                ToolName = response.ToolName,
-                Message = response.Message,
-                ValidUntil = response.ValidUntil
-            };
-        }
-
-        public static JarvisLicenceAccessDecision FromVerilic(
+        public static JarvisLicenceAccessDecision FromAccessCheck(
             string productCode,
-            VerilicVerifyLicenceResult result)
+            AccessCheckResponse result)
         {
             if (string.IsNullOrWhiteSpace(productCode))
-                throw new ArgumentException(
-                    "Product code is required.",
-                    nameof(productCode));
+                throw new ArgumentException("Product code is required.", nameof(productCode));
             if (result == null)
-                throw new ArgumentNullException(nameof(result));
+                return Deny(productCode, "verification_response_invalid");
 
             return new JarvisLicenceAccessDecision
             {
                 Allowed = result.Allowed,
-                ToolName = productCode,
-                Message = result.Allowed
-                    ? null
-                    : SafeReason(result.ReasonCode),
-                ValidUntil = result.ValidUntilUtc.HasValue
-                    ? result.ValidUntilUtc.Value.ToUniversalTime().ToString("o")
-                    : null
+                RuntimeReady = result.Allowed,
+                RuntimeReasonCode = result.Allowed ? "runtime_ready" : "access_denied",
+                ToolName = string.IsNullOrWhiteSpace(result.ToolName) ? productCode : result.ToolName,
+                Message = result.Message,
+                ValidUntil = result.ValidUntil,
+                AgentAccountRef = result.AgentAccountRef
             };
         }
 
-        public static JarvisLicenceAccessDecision Deny(
+        // Compatibility parser for the NativeS1 /verify DTO. The boot path owns
+        // provisioning; this parser lets older in-process UI callers reuse that
+        // exact boot response without issuing another network verification.
+        public static JarvisLicenceAccessDecision FromVerilic(
             string productCode,
-            string reasonCode)
+            string requestedProductId,
+            VerilicVerifyLicenceResult result)
+        {
+            if (string.IsNullOrWhiteSpace(productCode))
+                throw new ArgumentException("Product code is required.", nameof(productCode));
+            if (string.IsNullOrWhiteSpace(requestedProductId))
+                throw new ArgumentException("Product id is required.", nameof(requestedProductId));
+            if (result == null)
+                throw new ArgumentNullException(nameof(result));
+
+            VerilicVerifyProductResult product = result.FindRequestedProduct(requestedProductId);
+            bool allowed = result.Allowed &&
+                string.Equals(result.ProductId, requestedProductId, StringComparison.Ordinal) &&
+                product != null && product.Allowed;
+
+            string message = null;
+            if (!allowed)
+                message = SafeReason(result.ReasonCode);
+            else if (!product.RuntimeReady)
+                message = string.IsNullOrWhiteSpace(product.RuntimeMessage)
+                    ? "Το AI runtime δεν είναι διαθέσιμο. Επικοινωνήστε με τον διαχειριστή του Verilic."
+                    : product.RuntimeMessage.Trim();
+
+            DateTime? validUntil = product != null && product.ValidUntilUtc.HasValue
+                ? product.ValidUntilUtc
+                : result.ValidUntilUtc;
+
+            return new JarvisLicenceAccessDecision
+            {
+                Allowed = allowed,
+                RuntimeReady = allowed && product.RuntimeReady,
+                RuntimeReasonCode = product == null ? null : product.RuntimeReasonCode,
+                ToolName = productCode,
+                Message = message,
+                ValidUntil = validUntil.HasValue ? validUntil.Value.ToUniversalTime().ToString("o") : null,
+                AgentAccountRef = ExtractSingleDefaultAgentAccountRef(product),
+                Verification = result,
+                Product = product
+            };
+        }
+
+        public static JarvisLicenceAccessDecision Deny(string productCode, string reasonCode)
         {
             return new JarvisLicenceAccessDecision
             {
                 Allowed = false,
+                RuntimeReady = false,
+                RuntimeReasonCode = reasonCode,
                 ToolName = productCode,
-                Message = SafeReason(reasonCode),
-                ValidUntil = null
+                Message = SafeReason(reasonCode)
             };
+        }
+
+        private static string ExtractSingleDefaultAgentAccountRef(VerilicVerifyProductResult product)
+        {
+            if (product == null || product.AiConfigurations == null)
+                return null;
+
+            string found = null;
+            foreach (JObject configuration in product.AiConfigurations)
+            {
+                JObject target = configuration == null
+                    ? null
+                    : configuration["defaultTarget"] as JObject;
+                string candidate = target == null
+                    ? null
+                    : target["agentAccountRef"] == null
+                        ? null
+                        : target["agentAccountRef"].ToString();
+
+                if (string.IsNullOrWhiteSpace(candidate))
+                    continue;
+
+                candidate = candidate.Trim();
+                if (found != null && !string.Equals(found, candidate, StringComparison.Ordinal))
+                    return null;
+                found = candidate;
+            }
+
+            return found;
         }
 
         private static string SafeReason(string reasonCode)
         {
-            return string.IsNullOrWhiteSpace(reasonCode)
-                ? "Η άδεια χρήσης δεν είναι διαθέσιμη."
-                : "Η άδεια χρήσης δεν είναι διαθέσιμη (" + reasonCode.Trim() + ").";
+            if (string.IsNullOrWhiteSpace(reasonCode))
+                return "Η άδεια χρήσης δεν είναι διαθέσιμη.";
+
+            switch (reasonCode.Trim())
+            {
+                case "verification_request_invalid":
+                    return "Δεν είναι διαθέσιμα τα στοιχεία επαλήθευσης του Jarvis.";
+                case "verification_failed":
+                case "runtime_auth_failed":
+                    return "Ο Jarvis δεν μπόρεσε να πιστοποιηθεί στο Verilic.";
+                case "contract_inactive":
+                    return "Το συμβόλαιο Verilic δεν είναι ενεργό.";
+                case "contract_expired":
+                    return "Το συμβόλαιο Verilic έχει λήξει.";
+                case "runtime_client_key_rejected":
+                    return "Η προσωρινή συνεδρία Verilic έληξε. Απαιτείται νέα πιστοποίηση.";
+                default:
+                    return "Η άδεια χρήσης δεν είναι διαθέσιμη (" + reasonCode.Trim() + ").";
+            }
         }
     }
 
     internal sealed class JarvisAgentRoutingDecision
     {
-        public string AgentAccountRef { get; private set; }
-        public string Model { get; private set; }
         public string ReasonCode { get; private set; }
-
-        public bool Available => !string.IsNullOrWhiteSpace(AgentAccountRef);
+        public bool Available => false;
 
         public static JarvisAgentRoutingDecision None(string reasonCode = null)
         {
             return new JarvisAgentRoutingDecision
             {
-                ReasonCode = string.IsNullOrWhiteSpace(reasonCode)
-                    ? null
-                    : reasonCode.Trim()
-            };
-        }
-
-        public static JarvisAgentRoutingDecision FromLegacy(AccessCheckResponse response)
-        {
-            if (response == null)
-                throw new ArgumentNullException(nameof(response));
-
-            return new JarvisAgentRoutingDecision
-            {
-                AgentAccountRef = response.Allowed
-                    ? response.AgentAccountRef
-                    : null,
-                Model = response.Allowed
-                    ? response.AiModel
-                    : null,
-                ReasonCode = null
-            };
-        }
-
-        public static JarvisAgentRoutingDecision FromVerilic(
-            VerilicAiRoutingResult result)
-        {
-            if (result == null)
-                return None("routing_result_missing");
-
-            if (!result.Success ||
-                string.IsNullOrWhiteSpace(result.AgentAccountRef))
-                return None(result.ReasonCode);
-
-            return new JarvisAgentRoutingDecision
-            {
-                AgentAccountRef = result.AgentAccountRef.Trim(),
-                Model = string.IsNullOrWhiteSpace(result.Model)
-                    ? null
-                    : result.Model.Trim(),
-                ReasonCode = string.IsNullOrWhiteSpace(result.ReasonCode)
-                    ? null
-                    : result.ReasonCode.Trim()
+                ReasonCode = string.IsNullOrWhiteSpace(reasonCode) ? null : reasonCode.Trim()
             };
         }
     }
@@ -131,18 +169,6 @@ namespace S1Jarvis.Access
     {
         public JarvisLicenceAccessDecision Licence { get; private set; }
         public JarvisAgentRoutingDecision AgentRouting { get; private set; }
-
-        public static JarvisRuntimeAccessResult FromLegacy(AccessCheckResponse response)
-        {
-            if (response == null)
-                throw new ArgumentNullException(nameof(response));
-
-            return new JarvisRuntimeAccessResult
-            {
-                Licence = JarvisLicenceAccessDecision.FromLegacy(response),
-                AgentRouting = JarvisAgentRoutingDecision.FromLegacy(response)
-            };
-        }
 
         public static JarvisRuntimeAccessResult Create(
             JarvisLicenceAccessDecision licence,
@@ -161,46 +187,19 @@ namespace S1Jarvis.Access
         public AccessCheckResponse ToLegacyCompatibilityResponse()
         {
             if (Licence == null)
-                return AccessCheckResponse.Deny(
-                    JarvisProducts.Jarvis,
-                    "Η άδεια χρήσης δεν είναι διαθέσιμη.");
+                return AccessCheckResponse.Deny(JarvisProducts.Jarvis, "Η άδεια χρήσης δεν είναι διαθέσιμη.");
 
-            bool baseJarvisRequiresRouting =
-                string.Equals(
-                    Licence.ToolName,
-                    JarvisProducts.Jarvis,
-                    StringComparison.Ordinal);
-            bool routingAvailable =
-                AgentRouting != null && AgentRouting.Available;
-            bool operationallyAllowed =
-                Licence.Allowed &&
-                (!baseJarvisRequiresRouting || routingAvailable);
-
-            string routingMessage = null;
-            if (Licence.Allowed &&
-                baseJarvisRequiresRouting &&
-                !routingAvailable)
-            {
-                routingMessage = "Η άδεια είναι ενεργή, αλλά η δρομολόγηση AI δεν είναι διαθέσιμη.";
-                if (AgentRouting != null &&
-                    !string.IsNullOrWhiteSpace(AgentRouting.ReasonCode))
-                {
-                    routingMessage += " (" + AgentRouting.ReasonCode.Trim() + ")";
-                }
-            }
+            bool baseJarvis = string.Equals(Licence.ToolName, JarvisProducts.Jarvis, StringComparison.Ordinal);
+            bool operationallyAllowed = Licence.Allowed && (!baseJarvis || Licence.RuntimeReady);
 
             return new AccessCheckResponse
             {
                 Allowed = operationallyAllowed,
                 ToolName = Licence.ToolName,
-                Message = routingMessage ?? Licence.Message,
+                Message = Licence.Message,
                 ValidUntil = Licence.ValidUntil,
-                AgentAccountRef = operationallyAllowed && routingAvailable
-                    ? AgentRouting.AgentAccountRef
-                    : null,
-                AiModel = operationallyAllowed && routingAvailable
-                    ? AgentRouting.Model
-                    : null
+                AgentAccountRef = Licence.AgentAccountRef,
+                AiModel = null
             };
         }
     }

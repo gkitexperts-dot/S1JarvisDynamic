@@ -1,6 +1,7 @@
 ﻿<?xml version="1.0" encoding="utf-8"?>
 <Project ToolsVersion="15.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
   <Import Project="$(MSBuildExtensionsPath)\$(MSBuildToolsVersion)\Microsoft.Common.props" Condition="Exists('$(MSBuildExtensionsPath)\$(MSBuildToolsVersion)\Microsoft.Common.props')" />
+  <Import Project="VerilicRecognition.local.props" Condition="Exists('VerilicRecognition.local.props')" />
   <PropertyGroup>
     <Configuration Condition=" '$(Configuration)' == '' ">Debug</Configuration>
     <Platform Condition=" '$(Platform)' == '' ">AnyCPU</Platform>
@@ -56,9 +57,6 @@
     <Compile Include="SoftoneIntegration\JarvisHostFormBootstrap.cs">
       <SubType>Form</SubType>
     </Compile>
-    <Compile Include="SoftoneIntegration\VerilicMaintenanceHostFormBootstrap.cs">
-      <SubType>Form</SubType>
-    </Compile>
   </ItemGroup>
   <ItemGroup>
     <None Include="app.config" />
@@ -105,8 +103,11 @@
     </EmbeddedResource>
   </ItemGroup>
   <Target Name="BuildJarvisRuntime" BeforeTargets="PrepareResources">
-    <MSBuild Projects="$(MSBuildProjectDirectory)\S1Jarvis.Runtime\S1Jarvis.Runtime.csproj" Targets="Restore" Properties="Configuration=$(Configuration);Platform=AnyCPU" BuildInParallel="false" />
-    <MSBuild Projects="$(MSBuildProjectDirectory)\S1Jarvis.Runtime\S1Jarvis.Runtime.csproj" Targets="Build" Properties="Configuration=$(Configuration);Platform=AnyCPU" BuildInParallel="false" />
+    <PropertyGroup>
+      <VerilicRecognitionBuildProperties>Configuration=$(Configuration);Platform=AnyCPU</VerilicRecognitionBuildProperties>
+    </PropertyGroup>
+    <MSBuild Projects="$(MSBuildProjectDirectory)\S1Jarvis.Runtime\S1Jarvis.Runtime.csproj" Targets="Restore" Properties="$(VerilicRecognitionBuildProperties)" BuildInParallel="false" />
+    <MSBuild Projects="$(MSBuildProjectDirectory)\S1Jarvis.Runtime\S1Jarvis.Runtime.csproj" Targets="Build" Properties="$(VerilicRecognitionBuildProperties)" BuildInParallel="false" />
     <Error Condition="!Exists('$(JarvisRuntimeOutput)S1Jarvis.Runtime.dll')" Text="S1Jarvis.Runtime.dll was not built; embedded runtime package cannot be created." />
     <Error Condition="!Exists('$(JarvisRuntimeOutput)Microsoft.Web.WebView2.Core.dll')" Text="Microsoft.Web.WebView2.Core.dll was not produced by S1Jarvis.Runtime." />
     <Error Condition="!Exists('$(JarvisRuntimeOutput)Microsoft.Web.WebView2.Wpf.dll')" Text="Microsoft.Web.WebView2.Wpf.dll was not produced by S1Jarvis.Runtime." />

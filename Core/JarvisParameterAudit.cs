@@ -4,12 +4,6 @@ using Softone;
 
 namespace S1Jarvis.Core
 {
-    /// <summary>
-    /// Non-throwing cccParams health audit. Missing/invalid configuration must
-    /// never be able to terminate the Soft1 host process. Required parameters
-    /// are reported to the debug log; feature code may still decide to disable
-    /// only the affected function when the operator actually invokes it.
-    /// </summary>
     internal static class JarvisParameterAudit
     {
         internal sealed class Result
@@ -19,9 +13,6 @@ namespace S1Jarvis.Core
             public List<int> InvalidRequired { get; } = new List<int>();
         }
 
-        // Globally required only when the corresponding feature is invoked.
-        // Email credentials are feature-scoped and therefore are audited but
-        // are not considered a Jarvis boot blocker.
         private static readonly int[] RequiredNumeric = { 500008, 500012, 500017 };
         private static readonly int[] FeatureScopedRequiredString = { 500019, 500020, 500021 };
 
@@ -36,11 +27,6 @@ namespace S1Jarvis.Core
                     return result;
                 }
 
-                // Architecture diagnostics are deliberately non-blocking and
-                // run once on the same startup path as the parameter audit.
-                // They do not change routing/tool exposure; they only prove
-                // that runtime definitions and orchestration metadata stay
-                // synchronized as the product evolves.
                 JarvisToolInventoryReconciler.RunAndLog();
                 RunTaskRegistryAudit();
 
@@ -69,8 +55,6 @@ namespace S1Jarvis.Core
             }
             catch (Exception ex)
             {
-                // This class is deliberately fail-safe: configuration inspection
-                // must never propagate into Soft1 startup.
                 try { DebugLog.Log("[PARAM-AUDIT] unexpected audit failure: " + ex); } catch { }
             }
 
@@ -84,20 +68,14 @@ namespace S1Jarvis.Core
                 string[] issues = JarvisTaskRegistryAudit.Validate();
                 if (issues == null || issues.Length == 0)
                 {
-                    DebugLog.Log(
-                        "[TASK-REGISTRY] reconciliation OK tasks=" +
-                        JarvisTaskRegistry.AllTasks.Count);
+                    DebugLog.Log("[TASK-REGISTRY] reconciliation OK tasks=" + JarvisTaskRegistry.AllTasks.Count);
                     return;
                 }
 
-                DebugLog.Log(
-                    "[TASK-REGISTRY] reconciliation issues=" + issues.Length +
-                    " :: " + string.Join(" | ", issues));
+                DebugLog.Log("[TASK-REGISTRY] reconciliation issues=" + issues.Length + " :: " + string.Join(" | ", issues));
             }
             catch (Exception ex)
             {
-                // Orchestration metadata is not yet runtime-authoritative, so an
-                // audit failure must never prevent Jarvis/Soft1 startup.
                 DebugLog.Log("[TASK-REGISTRY] audit failed: " + ex.GetType().Name + " - " + ex.Message);
             }
         }
@@ -145,7 +123,9 @@ namespace S1Jarvis.Core
                 {
                     if (globallyRequired) result.MissingRequired.Add(code);
                     DebugLog.Log("[PARAM-AUDIT] missing string param " + code +
-                                 " (feature-scoped; Jarvis boot continues)");
+                                 (globallyRequired
+                                     ? " (required by feature)"
+                                     : " (feature-scoped; Jarvis boot continues)"));
                 }
             }
             catch (Exception ex)

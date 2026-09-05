@@ -31,45 +31,5 @@ namespace S1Jarvis.SoftoneIntegration
                     MessageBoxImage.Error);
             }
         }
-
-        public string ActivateVerilicAll()
-        {
-            return InvokeRuntime("ActivateVerilicAll");
-        }
-
-        public string ActivateVerilicJarvis()
-        {
-            return InvokeRuntime("ActivateVerilicJarvis");
-        }
-
-        public string ActivateVerilicCourier()
-        {
-            return InvokeRuntime("ActivateVerilicCourier");
-        }
-
-        public string ActivateVerilicDocReader()
-        {
-            return InvokeRuntime("ActivateVerilicDocReader");
-        }
-
-        public string GetVerilicReadiness()
-        {
-            return InvokeRuntime("GetVerilicReadiness");
-        }
-
-        private static string InvokeRuntime(string methodName)
-        {
-            try
-            {
-                return JarvisRuntimeLoader.InvokeString(methodName);
-            }
-            catch (Exception ex)
-            {
-                Exception root = ex;
-                while (root.InnerException != null)
-                    root = root.InnerException;
-                return "Jarvis runtime error: " + root.Message;
-            }
-        }
     }
 }

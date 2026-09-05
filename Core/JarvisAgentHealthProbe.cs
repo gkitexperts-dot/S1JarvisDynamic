@@ -1,12 +1,7 @@
 using System;
 using System.Collections.Generic;
-using System.Net;
-using System.Net.Http;
-using System.Net.Http.Headers;
-using System.Text;
-using System.Threading;
 using System.Threading.Tasks;
-using Newtonsoft.Json;
+using Newtonsoft.Json.Linq;
 using Softone;
 using S1Jarvis.Access;
 using S1Jarvis.Access.Verilic;
@@ -21,6 +16,7 @@ namespace S1Jarvis.Core
         public string AgentAccountRef { get; set; }
         public string Provider { get; set; }
         public string Model { get; set; }
+        public string RuntimeTransport { get; set; }
         public string ApiKey { get; set; }
         public bool Inherited { get; set; }
         public string DiagnosticCode { get; set; }
@@ -38,10 +34,7 @@ namespace S1Jarvis.Core
         public string DiagnosticMessage { get; private set; }
         public IReadOnlyList<JarvisAgentHealthTargetResult> Targets { get; private set; }
 
-        public static JarvisAgentHealthResult Success(
-            string provider,
-            string model,
-            IReadOnlyList<JarvisAgentHealthTargetResult> targets)
+        public static JarvisAgentHealthResult Success(string provider, string model, IReadOnlyList<JarvisAgentHealthTargetResult> targets)
         {
             return new JarvisAgentHealthResult
             {
@@ -66,9 +59,7 @@ namespace S1Jarvis.Core
             {
                 Ready = false,
                 CreditsExhausted = creditsExhausted,
-                ReasonCode = string.IsNullOrWhiteSpace(reasonCode)
-                    ? "provider_unavailable"
-                    : reasonCode,
+                ReasonCode = string.IsNullOrWhiteSpace(reasonCode) ? "provider_unavailable" : reasonCode,
                 Provider = Normalize(provider),
                 Model = Normalize(model),
                 DiagnosticCode = Normalize(diagnosticCode),
@@ -84,284 +75,214 @@ namespace S1Jarvis.Core
     }
 
     /// <summary>
-    /// Performs the only normal-session Verilic AI provisioning request.
-    /// It is called at Jarvis boot, and may be called again only by the
-    /// explicit HEALTH command. The response supplies the complete execution
-    /// material for every logical agent: Provider + Model + session API key.
-    /// Normal prompts must never call this endpoint.
+    /// Boot/HEALTH provisioning uses the same canonical NativeS1 /verify contract
+    /// as licensing. The response owns provider/model/transport selection and carries
+    /// the provider credential only as an AES-GCM envelope derived from the compiled
+    /// product recognition secret. No ApiUsername/clientKey/access-check path is used.
     /// </summary>
     internal sealed class JarvisAgentHealthProbe
     {
-        private static readonly HttpClient Http = new HttpClient();
-        private static readonly TimeSpan Timeout = TimeSpan.FromSeconds(15);
-
-        private sealed class ProviderHealthTargetResponse
+        private static readonly string[] Agents =
         {
-            public string Agent { get; set; }
-            public bool Ready { get; set; }
-            public string ReasonCode { get; set; }
-            public string AgentAccountRef { get; set; }
-            public string Provider { get; set; }
-            public string Model { get; set; }
-            public string ApiKey { get; set; }
-            public bool Inherited { get; set; }
-            public string DiagnosticCode { get; set; }
-            public string DiagnosticMessage { get; set; }
-        }
+            "Jarvis", "Atlas", "Forge", "Compass", "Echo", "Sprint", "Scout", "Sage"
+        };
 
-        private sealed class ProviderHealthResponse
-        {
-            public bool Ready { get; set; }
-            public string ReasonCode { get; set; }
-            public string Provider { get; set; }
-            public string Model { get; set; }
-            public string DiagnosticCode { get; set; }
-            public string DiagnosticMessage { get; set; }
-            public List<ProviderHealthTargetResponse> Targets { get; set; }
-        }
-
-        static JarvisAgentHealthProbe()
-        {
-            ServicePointManager.SecurityProtocol =
-                SecurityProtocolType.Tls12 | SecurityProtocolType.Tls13;
-        }
-
-        public Task<JarvisAgentHealthResult> ProbeAsync(
-            XSupport xSupport,
-            string expectedAgentAccountRef)
+        public Task<JarvisAgentHealthResult> ProbeAsync(XSupport xSupport, string expectedAgentAccountRef)
         {
             return ProbeAsync(xSupport, expectedAgentAccountRef, null);
         }
 
-        // expectedAgentAccountRef / expectedModel are retained only for source
-        // compatibility with old callers. BOOT/HEALTH no longer pre-resolves
-        // any AI target; the signed health response is authoritative.
-        public async Task<JarvisAgentHealthResult> ProbeAsync(
+        public Task<JarvisAgentHealthResult> ProbeAsync(
             XSupport xSupport,
             string expectedAgentAccountRef,
             string expectedModel)
         {
             if (xSupport == null)
-                return JarvisAgentHealthResult.Failure("provider_probe_identity_missing");
-
-            string selectedModel = string.IsNullOrWhiteSpace(expectedModel)
-                ? null
-                : expectedModel.Trim();
+                return Task.FromResult(JarvisAgentHealthResult.Failure("provider_probe_identity_missing"));
 
             try
             {
-                VerilicRuntimeConfiguration configuration =
-                    VerilicRuntimeConfiguration.Load();
-                if (configuration.Mode != VerilicRuntimeMode.Verilic ||
-                    configuration.ProviderHealthUri == null)
-                    return JarvisAgentHealthResult.Failure(
-                        "provider_health_configuration_invalid",
-                        model: selectedModel);
+                DebugLog.Log("[AI-SESSION-REGISTRY] NativeS1 /verify provisioning start");
+                VerilicNativeS1VerificationSession session =
+                    VerilicRuntimeLicenceProvider.Verify(xSupport, JarvisProducts.Jarvis);
 
-                string productId = configuration.ResolveProductId(
-                    JarvisProducts.Jarvis);
+                if (session == null || session.Verification == null || session.Credential == null)
+                    return Task.FromResult(JarvisAgentHealthResult.Failure("verification_response_invalid"));
 
-                var stateStore = new VerilicInstallationStateStore(
-                    configuration.StateDirectory,
-                    configuration.ProtectionScope);
-                VerilicInstallationState state = stateStore.Load(
-                    JarvisProducts.Jarvis);
-
-                if (state == null || !state.ActivationCompleted ||
-                    string.IsNullOrWhiteSpace(state.InstallationId) ||
-                    state.InstallationId.StartsWith("pending_", StringComparison.Ordinal) ||
-                    !string.Equals(state.VerilicProductId, productId, StringComparison.Ordinal) ||
-                    !string.Equals(state.KeyAlgorithm, "ES256", StringComparison.Ordinal) ||
-                    state.PrivateKeyMaterial == null || state.PrivateKeyMaterial.Length == 0)
-                    return JarvisAgentHealthResult.Failure(
-                        "provider_health_installation_invalid",
-                        model: selectedModel);
-
-                var info = xSupport.ConnectionInfo;
-                if (info == null)
-                    return JarvisAgentHealthResult.Failure(
-                        "provider_probe_identity_missing",
-                        model: selectedModel);
-
-                var requestBody = new VerilicAiRoutingRequest
+                VerilicVerifyLicenceResult verification = session.Verification;
+                VerilicVerifyProductResult product = session.Product;
+                if (!verification.Allowed || product == null || !product.Allowed)
                 {
-                    ProductId = productId,
-                    InstallationId = state.InstallationId,
-                    ProductVersion = configuration.ProductVersion,
-                    // Session credential provisioning is transport/runtime material,
-                    // not a separately licensed product feature. Keep the normal
-                    // licence verification intact without requesting a synthetic
-                    // entitlement that would incorrectly produce feature_denied.
-                    RequestedFeatures = new string[0],
-                    Soft1Serial = info.SerialNum == null
-                        ? null
-                        : info.SerialNum.ToString(),
-                    CompanyCode = info.CompanyId.ToString(),
-                    BranchCode = info.BranchId.ToString(),
-                    Soft1UserId = info.UserId.ToString()
-                };
-
-                string json = JsonConvert.SerializeObject(requestBody);
-                byte[] bodyBytes = Encoding.UTF8.GetBytes(json);
-
-                var proofState = new VerilicInstallationState
-                {
-                    ProductCode = productId,
-                    InstallationId = state.InstallationId,
-                    KeyAlgorithm = state.KeyAlgorithm,
-                    PrivateKeyMaterial = state.PrivateKeyMaterial
-                };
-
-                using (var authorizer = new VerilicEs256RequestAuthorizer(proofState))
-                using (var request = new HttpRequestMessage(
-                    HttpMethod.Post,
-                    configuration.ProviderHealthUri))
-                using (var cts = new CancellationTokenSource(Timeout))
-                {
-                    var content = new ByteArrayContent(bodyBytes);
-                    content.Headers.ContentType = new MediaTypeHeaderValue("application/json")
-                    {
-                        CharSet = "utf-8"
-                    };
-                    request.Content = content;
-                    authorizer.Authorize(request, bodyBytes);
-
-                    using (HttpResponseMessage response = await Http.SendAsync(request, cts.Token))
-                    {
-                        if (!response.IsSuccessStatusCode)
-                            return JarvisAgentHealthResult.Failure(
-                                "provider_health_http_" + ((int)response.StatusCode).ToString(),
-                                model: selectedModel);
-
-                        string responseJson = await response.Content.ReadAsStringAsync();
-                        ProviderHealthResponse health;
-                        try
-                        {
-                            health = JsonConvert.DeserializeObject<ProviderHealthResponse>(
-                                responseJson);
-                        }
-                        catch (JsonException)
-                        {
-                            return JarvisAgentHealthResult.Failure(
-                                "provider_health_response_invalid",
-                                model: selectedModel);
-                        }
-
-                        if (health == null || string.IsNullOrWhiteSpace(health.ReasonCode))
-                            return JarvisAgentHealthResult.Failure(
-                                "provider_health_response_invalid",
-                                model: selectedModel);
-
-                        string returnedModel = string.IsNullOrWhiteSpace(health.Model)
-                            ? selectedModel
-                            : health.Model.Trim();
-
-                        IReadOnlyList<JarvisAgentHealthTargetResult> targets =
-                            ConvertTargets(health.Targets);
-
-                        // Preserve the authoritative server failure before validating
-                        // success-only execution material. Failed provisioning responses
-                        // are allowed to omit Model/Provider/ApiKey; masking their reason
-                        // as provider_model_missing made diagnostics impossible.
-                        if (!health.Ready)
-                        {
-                            return JarvisAgentHealthResult.Failure(
-                                health.ReasonCode.Trim(),
-                                string.Equals(
-                                    health.ReasonCode.Trim(),
-                                    "provider_credits_exhausted",
-                                    StringComparison.Ordinal),
-                                health.Provider,
-                                returnedModel,
-                                targets,
-                                health.DiagnosticCode,
-                                health.DiagnosticMessage);
-                        }
-
-                        if (string.IsNullOrWhiteSpace(returnedModel))
-                            return JarvisAgentHealthResult.Failure(
-                                "provider_model_missing",
-                                provider: health.Provider,
-                                targets: targets,
-                                diagnosticCode: health.DiagnosticCode,
-                                diagnosticMessage: health.DiagnosticMessage);
-
-                        if (!string.IsNullOrWhiteSpace(selectedModel) &&
-                            !string.Equals(
-                                returnedModel,
-                                selectedModel,
-                                StringComparison.Ordinal))
-                            return JarvisAgentHealthResult.Failure(
-                                "provider_routing_changed",
-                                provider: health.Provider,
-                                model: returnedModel,
-                                targets: targets,
-                                diagnosticCode: health.DiagnosticCode,
-                                diagnosticMessage: health.DiagnosticMessage);
-
-                        return JarvisAgentHealthResult.Success(
-                            health.Provider,
-                            returnedModel,
-                            targets);
-                    }
+                    string reason = string.IsNullOrWhiteSpace(verification.ReasonCode)
+                        ? "access_denied"
+                        : verification.ReasonCode.Trim();
+                    return Task.FromResult(JarvisAgentHealthResult.Failure(reason));
                 }
+
+                if (!product.RuntimeReady)
+                {
+                    string reason = string.IsNullOrWhiteSpace(product.RuntimeReasonCode)
+                        ? "provider_credential_unavailable"
+                        : product.RuntimeReasonCode.Trim();
+                    return Task.FromResult(JarvisAgentHealthResult.Failure(
+                        reason,
+                        diagnosticMessage: product.RuntimeMessage));
+                }
+
+                JObject configuration;
+                JObject defaultTarget;
+                string configurationError;
+                if (!TryResolveSingleConfiguration(product, out configuration, out defaultTarget, out configurationError))
+                {
+                    return Task.FromResult(JarvisAgentHealthResult.Failure(
+                        configurationError,
+                        diagnosticMessage: product.RuntimeMessage));
+                }
+
+                string contractId = ReadRequired(configuration, "contractId");
+                JObject helperOverrides = configuration["helperOverrides"] as JObject;
+                var targets = new List<JarvisAgentHealthTargetResult>(Agents.Length);
+
+                foreach (string agent in Agents)
+                {
+                    bool inherited = true;
+                    JObject target = defaultTarget;
+                    if (!string.Equals(agent, "Jarvis", StringComparison.OrdinalIgnoreCase) &&
+                        helperOverrides != null)
+                    {
+                        JProperty helper = helperOverrides.Property(agent, StringComparison.OrdinalIgnoreCase);
+                        JObject overrideTarget = helper == null ? null : helper.Value as JObject;
+                        if (overrideTarget != null)
+                        {
+                            target = overrideTarget;
+                            inherited = false;
+                        }
+                    }
+                    else if (string.Equals(agent, "Jarvis", StringComparison.OrdinalIgnoreCase))
+                    {
+                        inherited = false;
+                    }
+
+                    string agentAccountRef = ReadRequired(target, "agentAccountRef");
+                    string provider = ReadRequired(target, "provider");
+                    string model = ReadRequired(target, "model");
+                    string runtimeTransport = ReadOptional(target, "runtimeTransport");
+                    JObject encryptedCredential = target["credential"] as JObject;
+                    if (encryptedCredential == null)
+                        throw new InvalidOperationException("provider_credential_envelope_missing");
+
+                    if (!string.IsNullOrWhiteSpace(expectedAgentAccountRef) &&
+                        string.Equals(agent, "Jarvis", StringComparison.OrdinalIgnoreCase) &&
+                        !string.Equals(agentAccountRef, expectedAgentAccountRef.Trim(), StringComparison.Ordinal))
+                    {
+                        return Task.FromResult(JarvisAgentHealthResult.Failure("agent_account_mismatch"));
+                    }
+
+                    string apiKey = VerilicNativeS1CredentialDecryptor.Decrypt(
+                        encryptedCredential,
+                        session.Credential.Secret,
+                        verification.DecisionId,
+                        session.Credential.ProductId,
+                        product.ProductId,
+                        contractId,
+                        agentAccountRef,
+                        model);
+
+                    targets.Add(new JarvisAgentHealthTargetResult
+                    {
+                        Agent = agent,
+                        Ready = true,
+                        ReasonCode = "provider_ready",
+                        AgentAccountRef = agentAccountRef,
+                        Provider = provider,
+                        Model = model,
+                        RuntimeTransport = runtimeTransport,
+                        ApiKey = apiKey,
+                        Inherited = inherited
+                    });
+                }
+
+                string defaultProvider = ReadRequired(defaultTarget, "provider");
+                string defaultModel = ReadRequired(defaultTarget, "model");
+                DebugLog.Log("[AI-SESSION-REGISTRY] NativeS1 /verify provisioning accepted; targets=" +
+                    targets.Count.ToString());
+                return Task.FromResult(JarvisAgentHealthResult.Success(
+                    defaultProvider,
+                    defaultModel,
+                    targets));
             }
-            catch (OperationCanceledException)
+            catch (Exception ex)
             {
-                return JarvisAgentHealthResult.Failure(
-                    "provider_timeout",
-                    model: selectedModel);
-            }
-            catch
-            {
-                return JarvisAgentHealthResult.Failure(
+                DebugLog.Log("[AI-SESSION-REGISTRY] NativeS1 /verify provisioning exception: " +
+                    ex.GetType().Name + " - " + ex.Message);
+                return Task.FromResult(JarvisAgentHealthResult.Failure(
                     "provider_health_failed",
-                    model: selectedModel);
+                    diagnosticMessage: ex.Message));
             }
         }
 
-        private static IReadOnlyList<JarvisAgentHealthTargetResult> ConvertTargets(
-            IList<ProviderHealthTargetResponse> source)
+        private static bool TryResolveSingleConfiguration(
+            VerilicVerifyProductResult product,
+            out JObject configuration,
+            out JObject defaultTarget,
+            out string reasonCode)
         {
-            var result = new List<JarvisAgentHealthTargetResult>();
-            if (source == null)
-                return result;
+            configuration = null;
+            defaultTarget = null;
+            reasonCode = null;
 
-            foreach (ProviderHealthTargetResponse target in source)
+            if (product == null || product.AiConfigurations == null)
             {
-                if (target == null || string.IsNullOrWhiteSpace(target.Agent))
-                    continue;
-
-                result.Add(new JarvisAgentHealthTargetResult
-                {
-                    Agent = target.Agent.Trim(),
-                    Ready = target.Ready,
-                    ReasonCode = string.IsNullOrWhiteSpace(target.ReasonCode)
-                        ? "provider_unavailable"
-                        : target.ReasonCode.Trim(),
-                    AgentAccountRef = string.IsNullOrWhiteSpace(target.AgentAccountRef)
-                        ? null
-                        : target.AgentAccountRef.Trim(),
-                    Provider = string.IsNullOrWhiteSpace(target.Provider)
-                        ? null
-                        : target.Provider.Trim(),
-                    Model = string.IsNullOrWhiteSpace(target.Model)
-                        ? null
-                        : target.Model.Trim(),
-                    ApiKey = string.IsNullOrWhiteSpace(target.ApiKey)
-                        ? null
-                        : target.ApiKey.Trim(),
-                    Inherited = target.Inherited,
-                    DiagnosticCode = string.IsNullOrWhiteSpace(target.DiagnosticCode)
-                        ? null
-                        : target.DiagnosticCode.Trim(),
-                    DiagnosticMessage = string.IsNullOrWhiteSpace(target.DiagnosticMessage)
-                        ? null
-                        : target.DiagnosticMessage.Trim()
-                });
+                reasonCode = "ai_default_target_unavailable";
+                return false;
             }
 
-            return result;
+            int usable = 0;
+            foreach (JObject candidate in product.AiConfigurations)
+            {
+                if (candidate == null)
+                    continue;
+                JObject candidateDefault = candidate["defaultTarget"] as JObject;
+                if (candidateDefault == null)
+                    continue;
+
+                usable++;
+                configuration = candidate;
+                defaultTarget = candidateDefault;
+            }
+
+            if (usable == 0)
+            {
+                reasonCode = "ai_default_target_unavailable";
+                return false;
+            }
+            if (usable > 1)
+            {
+                configuration = null;
+                defaultTarget = null;
+                reasonCode = "ai_multiple_configurations_available";
+                return false;
+            }
+
+            return true;
+        }
+
+        private static string ReadRequired(JObject source, string propertyName)
+        {
+            string value = ReadOptional(source, propertyName);
+            if (string.IsNullOrWhiteSpace(value))
+                throw new InvalidOperationException("runtime_configuration_missing_" + propertyName);
+            return value;
+        }
+
+        private static string ReadOptional(JObject source, string propertyName)
+        {
+            if (source == null)
+                throw new InvalidOperationException("runtime_configuration_invalid");
+
+            JToken value = source[propertyName];
+            string text = value == null ? null : value.ToString();
+            return string.IsNullOrWhiteSpace(text) ? null : text.Trim();
         }
     }
 }

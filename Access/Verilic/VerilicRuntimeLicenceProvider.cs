@@ -1,256 +1,190 @@
 using System;
-using System.Collections.Generic;
+using Softone;
+using S1Jarvis.Access;
 
 namespace S1Jarvis.Access.Verilic
 {
-    internal interface IVerilicRuntimeLicenceProvider
+    internal sealed class VerilicNativeS1VerificationSession
     {
-        JarvisLicenceAccessDecision Check(string productCode);
+        internal VerilicRuntimeConfiguration Configuration { get; set; }
+        internal VerilicProductRecognitionCredential Credential { get; set; }
+        internal VerilicVerifyLicenceResult Verification { get; set; }
+        internal VerilicVerifyProductResult Product { get; set; }
     }
 
-    /// <summary>
-    /// Authoritative Verilic runtime licensing check for an already activated
-    /// installation. The commercial Jarvis product code is mapped explicitly to
-    /// the registered Verilic ProductId; the two identities are never assumed to
-    /// be equal.
-    ///
-    /// Successful server decisions may be cached in memory only until the
-    /// earliest server/client re-verification bound. Denials are never cached.
-    /// </summary>
-    internal sealed class VerilicRuntimeLicenceProvider :
-        IVerilicRuntimeLicenceProvider
+    internal interface IVerilicRuntimeLicenceProvider
     {
-        private static readonly TimeSpan MaximumAllowCacheDuration =
-            TimeSpan.FromMinutes(5);
+        JarvisLicenceAccessDecision Check(XSupport xSupport, string productCode);
+    }
 
-        private readonly VerilicInstallationStateStore _stateStore;
-        private readonly Uri _verificationUri;
-        private readonly string _productVersion;
-        private readonly Func<string, string> _productIdResolver;
-        private readonly object _cacheLock = new object();
-        private readonly Dictionary<string, CachedAllowDecision> _allowCache =
-            new Dictionary<string, CachedAllowDecision>(StringComparer.Ordinal);
+    internal sealed class VerilicRuntimeLicenceProvider : IVerilicRuntimeLicenceProvider
+    {
+        private static readonly object CompatibilityCacheSync = new object();
+        private static PendingVerification _pendingVerification;
 
-        public VerilicRuntimeLicenceProvider(
-            VerilicInstallationStateStore stateStore,
-            Uri verificationUri,
-            string productVersion,
-            Func<string, string> productIdResolver)
+        public JarvisLicenceAccessDecision Check(XSupport xSupport, string productCode)
         {
-            _stateStore = stateStore ??
-                throw new ArgumentNullException(nameof(stateStore));
-
-            if (verificationUri == null ||
-                !verificationUri.IsAbsoluteUri ||
-                !string.Equals(
-                    verificationUri.Scheme,
-                    Uri.UriSchemeHttps,
-                    StringComparison.OrdinalIgnoreCase))
-                throw new ArgumentException(
-                    "An absolute HTTPS Verilic verification URI is required.",
-                    nameof(verificationUri));
-
-            if (string.IsNullOrWhiteSpace(productVersion) ||
-                productVersion.Length > 200)
-                throw new ArgumentException(
-                    "A product version is required.",
-                    nameof(productVersion));
-            if (productIdResolver == null)
-                throw new ArgumentNullException(nameof(productIdResolver));
-
-            _verificationUri = verificationUri;
-            _productVersion = productVersion.Trim();
-            _productIdResolver = productIdResolver;
-        }
-
-        public JarvisLicenceAccessDecision Check(string productCode)
-        {
-            if (string.IsNullOrWhiteSpace(productCode))
+            if (xSupport == null || string.IsNullOrWhiteSpace(productCode))
                 return JarvisLicenceAccessDecision.Deny(
                     productCode,
                     "verification_request_invalid");
 
             try
             {
-                string productId = _productIdResolver(productCode);
-                if (string.IsNullOrWhiteSpace(productId))
-                    return JarvisLicenceAccessDecision.Deny(
-                        productCode,
-                        "product_binding_invalid");
+                VerilicNativeS1VerificationSession session;
+                if (!TryTakeBootVerification(xSupport, productCode, out session))
+                    session = Verify(xSupport, productCode);
 
-                VerilicInstallationState state =
-                    _stateStore.Load(productCode);
-
-                if (state == null || !state.ActivationCompleted)
-                    return JarvisLicenceAccessDecision.Deny(
-                        productCode,
-                        "installation_not_activated");
-
-                if (!string.Equals(
-                        state.VerilicProductId,
-                        productId,
-                        StringComparison.Ordinal))
-                    return JarvisLicenceAccessDecision.Deny(
-                        productCode,
-                        "product_binding_invalid");
-
-                if (string.IsNullOrWhiteSpace(state.InstallationId) ||
-                    state.InstallationId.StartsWith(
-                        "pending_",
-                        StringComparison.Ordinal))
-                    return JarvisLicenceAccessDecision.Deny(
-                        productCode,
-                        "installation_binding_invalid");
-
-                if (!string.Equals(
-                        state.KeyAlgorithm,
-                        "ES256",
-                        StringComparison.Ordinal) ||
-                    state.PrivateKeyMaterial == null ||
-                    state.PrivateKeyMaterial.Length == 0)
-                    return JarvisLicenceAccessDecision.Deny(
-                        productCode,
-                        "installation_key_invalid");
-
-                string cacheKey = BuildCacheKey(
+                return JarvisLicenceAccessDecision.FromVerilic(
                     productCode,
-                    productId,
-                    state.InstallationId);
-                JarvisLicenceAccessDecision cached =
-                    TryGetCachedAllow(cacheKey, DateTime.UtcNow);
-                if (cached != null)
-                    return cached;
-
-                // The existing net48 authorizer snapshots its proof ProductId
-                // from ProductCode. Give it a proof-only view containing the
-                // registered Verilic ProductId while keeping persistent state
-                // keyed by the stable Jarvis commercial code.
-                var proofState = new VerilicInstallationState
-                {
-                    ProductCode = productId,
-                    InstallationId = state.InstallationId,
-                    KeyAlgorithm = state.KeyAlgorithm,
-                    PrivateKeyMaterial = state.PrivateKeyMaterial
-                };
-
-                using (var authorizer =
-                    new VerilicEs256RequestAuthorizer(proofState))
-                {
-                    IVerilicLicenceTransport transport =
-                        new VerilicLicenceHttpTransport(
-                            _verificationUri,
-                            authorizer);
-
-                    VerilicVerifyLicenceResult result =
-                        transport.Verify(
-                            new VerilicVerifyLicenceRequest
-                            {
-                                ProductId = productId,
-                                InstallationId = state.InstallationId,
-                                ProductVersion = _productVersion,
-                                RequestedFeatures = new List<string>()
-                            });
-
-                    JarvisLicenceAccessDecision decision =
-                        JarvisLicenceAccessDecision.FromVerilic(
-                            productCode,
-                            result);
-
-                    if (decision.Allowed)
-                        TryCacheAllow(
-                            cacheKey,
-                            decision,
-                            result,
-                            DateTime.UtcNow);
-
-                    return decision;
-                }
+                    session.Credential.ProductId,
+                    session.Verification);
             }
-            catch
+            catch (Exception ex)
             {
+                try
+                {
+                    S1Jarvis.Core.DebugLog.Log(
+                        "[LICENSING] NativeS1 verification failed for product=" +
+                        (productCode ?? "-") + ": " +
+                        ex.GetType().Name + " - " + ex.Message);
+                }
+                catch { }
+
                 return JarvisLicenceAccessDecision.Deny(
                     productCode,
                     "verification_failed");
             }
         }
 
-        private JarvisLicenceAccessDecision TryGetCachedAllow(
-            string cacheKey,
-            DateTime nowUtc)
+        internal static VerilicNativeS1VerificationSession Verify(
+            XSupport xSupport,
+            string productCode)
         {
-            lock (_cacheLock)
-            {
-                CachedAllowDecision cached;
-                if (!_allowCache.TryGetValue(cacheKey, out cached))
-                    return null;
+            if (xSupport == null)
+                throw new ArgumentNullException(nameof(xSupport));
+            if (string.IsNullOrWhiteSpace(productCode))
+                throw new ArgumentException("Product code is required.", nameof(productCode));
 
-                if (cached.ExpiresAtUtc <= nowUtc)
+            VerilicRuntimeConfiguration configuration =
+                VerilicRuntimeConfiguration.Load();
+            VerilicProductRecognitionCredential credential =
+                configuration.ResolveProductCredential(productCode);
+
+            var connection = xSupport.ConnectionInfo;
+            if (connection == null)
+                throw new InvalidOperationException("Soft1 connection identity is unavailable.");
+
+            var request = new VerilicVerifyLicenceRequest
+            {
+                ProductId = credential.ProductId,
+                ProductVersion = configuration.ProductVersion,
+                RuntimeContext = new VerilicRuntimeContext
                 {
-                    _allowCache.Remove(cacheKey);
-                    return null;
+                    Soft1Serial = connection.SerialNum == null
+                        ? string.Empty
+                        : connection.SerialNum.ToString(),
+                    CompanyCode = connection.CompanyId.ToString(),
+                    BranchCode = connection.BranchId.ToString(),
+                    Soft1UserId = connection.UserId.ToString()
                 }
+            };
 
-                return cached.Decision;
-            }
+            var authorizer = new VerilicRecognitionRequestAuthorizer(
+                credential.KeyId,
+                credential.Secret);
+            var transport = new VerilicLicenceHttpTransport(
+                configuration.VerificationUri,
+                authorizer);
+
+            VerilicVerifyLicenceResult verification = transport.Verify(request);
+            if (verification == null)
+                throw new InvalidOperationException("verification_response_invalid");
+
+            var session = new VerilicNativeS1VerificationSession
+            {
+                Configuration = configuration,
+                Credential = credential,
+                Verification = verification,
+                Product = verification.FindRequestedProduct(credential.ProductId)
+            };
+
+            RememberBootVerification(xSupport, productCode, session);
+            return session;
         }
 
-        private void TryCacheAllow(
-            string cacheKey,
-            JarvisLicenceAccessDecision decision,
-            VerilicVerifyLicenceResult result,
-            DateTime nowUtc)
-        {
-            if (decision == null || !decision.Allowed || result == null ||
-                !result.Allowed || !result.RefreshAfterUtc.HasValue)
-                return;
-
-            DateTime refreshAfterUtc =
-                result.RefreshAfterUtc.Value.ToUniversalTime();
-            if (refreshAfterUtc <= nowUtc)
-                return;
-
-            DateTime expiresAtUtc = refreshAfterUtc;
-
-            if (result.ValidUntilUtc.HasValue)
-            {
-                DateTime validUntilUtc =
-                    result.ValidUntilUtc.Value.ToUniversalTime();
-                if (validUntilUtc <= nowUtc)
-                    return;
-                if (validUntilUtc < expiresAtUtc)
-                    expiresAtUtc = validUntilUtc;
-            }
-
-            DateTime clientMaximumUtc =
-                nowUtc.Add(MaximumAllowCacheDuration);
-            if (clientMaximumUtc < expiresAtUtc)
-                expiresAtUtc = clientMaximumUtc;
-
-            if (expiresAtUtc <= nowUtc)
-                return;
-
-            lock (_cacheLock)
-            {
-                _allowCache[cacheKey] = new CachedAllowDecision
-                {
-                    Decision = decision,
-                    ExpiresAtUtc = expiresAtUtc
-                };
-            }
-        }
-
-        private static string BuildCacheKey(
+        private static void RememberBootVerification(
+            XSupport xSupport,
             string productCode,
-            string productId,
-            string installationId)
+            VerilicNativeS1VerificationSession session)
         {
-            return productCode + "\n" + productId + "\n" + installationId;
+            var connection = xSupport == null ? null : xSupport.ConnectionInfo;
+            if (connection == null || session == null)
+                return;
+
+            var pending = new PendingVerification
+            {
+                ProductCode = productCode == null ? null : productCode.Trim(),
+                Soft1Serial = connection.SerialNum == null ? string.Empty : connection.SerialNum.ToString(),
+                CompanyCode = connection.CompanyId.ToString(),
+                BranchCode = connection.BranchId.ToString(),
+                Soft1UserId = connection.UserId.ToString(),
+                Session = session
+            };
+
+            lock (CompatibilityCacheSync)
+                _pendingVerification = pending;
         }
 
-        private sealed class CachedAllowDecision
+        private static bool TryTakeBootVerification(
+            XSupport xSupport,
+            string productCode,
+            out VerilicNativeS1VerificationSession session)
         {
-            public JarvisLicenceAccessDecision Decision { get; set; }
-            public DateTime ExpiresAtUtc { get; set; }
+            session = null;
+            var connection = xSupport == null ? null : xSupport.ConnectionInfo;
+            if (connection == null)
+                return false;
+
+            lock (CompatibilityCacheSync)
+            {
+                PendingVerification pending = _pendingVerification;
+                if (pending == null)
+                    return false;
+
+                bool matches =
+                    string.Equals(pending.ProductCode, productCode == null ? null : productCode.Trim(), StringComparison.Ordinal) &&
+                    string.Equals(pending.Soft1Serial, connection.SerialNum == null ? string.Empty : connection.SerialNum.ToString(), StringComparison.Ordinal) &&
+                    string.Equals(pending.CompanyCode, connection.CompanyId.ToString(), StringComparison.Ordinal) &&
+                    string.Equals(pending.BranchCode, connection.BranchId.ToString(), StringComparison.Ordinal) &&
+                    string.Equals(pending.Soft1UserId, connection.UserId.ToString(), StringComparison.Ordinal);
+
+                if (!matches)
+                    return false;
+
+                session = pending.Session;
+                _pendingVerification = null;
+            }
+
+            try
+            {
+                S1Jarvis.Core.DebugLog.Log(
+                    "[LICENSING] reused boot /verify result for compatibility access check; product=" +
+                    (productCode ?? "-"));
+            }
+            catch { }
+
+            return session != null;
+        }
+
+        private sealed class PendingVerification
+        {
+            internal string ProductCode { get; set; }
+            internal string Soft1Serial { get; set; }
+            internal string CompanyCode { get; set; }
+            internal string BranchCode { get; set; }
+            internal string Soft1UserId { get; set; }
+            internal VerilicNativeS1VerificationSession Session { get; set; }
         }
     }
 }

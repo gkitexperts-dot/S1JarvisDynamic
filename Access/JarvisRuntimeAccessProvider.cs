@@ -9,46 +9,7 @@ namespace S1Jarvis.Access
         JarvisRuntimeAccessResult Check(XSupport xSupport, string productCode);
     }
 
-    /// <summary>
-    /// Transitional provider used before the Verilic cutover is explicitly
-    /// enabled. It preserves the existing combined Nexus behaviour.
-    /// </summary>
-    internal sealed class LegacyNexusRuntimeAccessProvider :
-        IJarvisRuntimeAccessProvider
-    {
-        private readonly Func<XSupport, string, AccessCheckResponse> _legacyCheck;
-
-        public LegacyNexusRuntimeAccessProvider(
-            Func<XSupport, string, AccessCheckResponse> legacyCheck)
-        {
-            _legacyCheck = legacyCheck ??
-                throw new ArgumentNullException(nameof(legacyCheck));
-        }
-
-        public JarvisRuntimeAccessResult Check(
-            XSupport xSupport,
-            string productCode)
-        {
-            if (xSupport == null)
-                throw new ArgumentNullException(nameof(xSupport));
-            if (string.IsNullOrWhiteSpace(productCode))
-                throw new ArgumentException(
-                    "Product code is required.",
-                    nameof(productCode));
-
-            AccessCheckResponse legacy =
-                _legacyCheck(xSupport, productCode);
-            return JarvisRuntimeAccessResult.FromLegacy(legacy);
-        }
-    }
-
-    /// <summary>
-    /// Used when Verilic mode was explicitly requested but its composition is
-    /// invalid. This is deliberately different from legacy mode: explicit
-    /// Verilic configuration failure never falls back to Nexus authorization.
-    /// </summary>
-    internal sealed class FailClosedRuntimeAccessProvider :
-        IJarvisRuntimeAccessProvider
+    internal sealed class FailClosedRuntimeAccessProvider : IJarvisRuntimeAccessProvider
     {
         private readonly string _reasonCode;
 
@@ -59,92 +20,41 @@ namespace S1Jarvis.Access
                 : reasonCode;
         }
 
-        public JarvisRuntimeAccessResult Check(
-            XSupport xSupport,
-            string productCode)
+        public JarvisRuntimeAccessResult Check(XSupport xSupport, string productCode)
         {
             return JarvisRuntimeAccessResult.Create(
-                JarvisLicenceAccessDecision.Deny(
-                    productCode,
-                    _reasonCode),
+                JarvisLicenceAccessDecision.Deny(productCode, _reasonCode),
                 JarvisAgentRoutingDecision.None());
         }
     }
 
     /// <summary>
-    /// Cutover provider: Verilic is the only licensing authority and the only
-    /// runtime AI-routing source. A licensing denial stops immediately and never
-    /// falls back to legacy Nexus authorization or routing.
-    ///
-    /// AI routing is resolved only for the base Jarvis product. Courier and
-    /// DocReader are independent child licence gates and reuse the base Jarvis
-    /// AI routing already established by the shell.
+    /// Verilic NativeS1 runtime access. Each product uses its own build-time
+    /// Recognition Key ID + Secret and verifies the active Soft1 named-user
+    /// identity through POST /api/licensing/v1/verify. No workstation or
+    /// per-customer credential provisioning is required.
     /// </summary>
-    internal sealed class SplitVerilicRuntimeAccessProvider :
-        IJarvisRuntimeAccessProvider
+    internal sealed class VerilicContractRuntimeAccessProvider : IJarvisRuntimeAccessProvider
     {
         private readonly IVerilicRuntimeLicenceProvider _licensing;
-        private readonly IVerilicRuntimeAiRoutingProvider _routing;
 
-        public SplitVerilicRuntimeAccessProvider(
-            IVerilicRuntimeLicenceProvider licensing,
-            IVerilicRuntimeAiRoutingProvider routing)
+        public VerilicContractRuntimeAccessProvider(IVerilicRuntimeLicenceProvider licensing)
         {
-            _licensing = licensing ??
-                throw new ArgumentNullException(nameof(licensing));
-            _routing = routing ??
-                throw new ArgumentNullException(nameof(routing));
+            _licensing = licensing ?? throw new ArgumentNullException(nameof(licensing));
         }
 
-        public JarvisRuntimeAccessResult Check(
-            XSupport xSupport,
-            string productCode)
+        public JarvisRuntimeAccessResult Check(XSupport xSupport, string productCode)
         {
             if (xSupport == null)
                 throw new ArgumentNullException(nameof(xSupport));
-            if (string.IsNullOrWhiteSpace(productCode))
-                throw new ArgumentException(
-                    "Product code is required.",
-                    nameof(productCode));
 
-            JarvisLicenceAccessDecision licence =
-                _licensing.Check(productCode);
-
-            if (licence == null || !licence.Allowed)
-            {
-                return JarvisRuntimeAccessResult.Create(
-                    licence ?? JarvisLicenceAccessDecision.Deny(
-                        productCode,
-                        "verification_failed"),
-                    JarvisAgentRoutingDecision.None());
-            }
-
-            if (!string.Equals(
-                    productCode,
-                    JarvisProducts.Jarvis,
-                    StringComparison.Ordinal))
-            {
-                return JarvisRuntimeAccessResult.Create(
-                    licence,
-                    JarvisAgentRoutingDecision.None());
-            }
-
-            VerilicAiRoutingResult routingResult;
-            try
-            {
-                routingResult = _routing.Resolve(
-                    xSupport,
-                    productCode);
-            }
-            catch
-            {
-                routingResult = null;
-            }
+            JarvisLicenceAccessDecision licence = _licensing.Check(xSupport, productCode);
+            if (licence == null)
+                licence = JarvisLicenceAccessDecision.Deny(productCode, "verification_failed");
 
             return JarvisRuntimeAccessResult.Create(
                 licence,
-                JarvisAgentRoutingDecision.FromVerilic(
-                    routingResult));
+                JarvisAgentRoutingDecision.None(licence.RuntimeReasonCode));
         }
     }
 }

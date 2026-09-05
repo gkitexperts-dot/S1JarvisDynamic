@@ -18,6 +18,7 @@ namespace S1Jarvis.Core
             ValidateKnowledgeCompanion(issues);
             ValidateLastMileContextInjection(issues);
             ValidateActiveContextLifecycle(issues);
+            ValidateControlledPilotRoutingBoundary(issues);
             ValidateExportContract(issues);
             ValidateStructuredDocumentScope(issues);
             return issues.Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
@@ -85,6 +86,31 @@ namespace S1Jarvis.Core
             context.Complete();
             if (context.HasOpenRun)
                 issues.Add("Active context regression: Complete must close the run.");
+        }
+
+        private static void ValidateControlledPilotRoutingBoundary(List<string> issues)
+        {
+            // Ordinary free-form conversation must stay on the normal processing
+            // path and must not trigger a second semantic-provider call merely
+            // because NEW routing is enabled.
+            if (JarvisExecutionShadowHarness.ShouldAttemptControlledPilot("πως σε λενε;"))
+                issues.Add("Routing regression: ordinary conversation must not invoke the controlled semantic planner.");
+
+            // Promoted tasks are identified from the authoritative task registry,
+            // not a private UI keyword table. Keep one representative read and one
+            // representative external-action assertion here.
+            if (!JarvisExecutionShadowHarness.ShouldAttemptControlledPilot("sales report for this month"))
+                issues.Add("Routing regression: promoted ReportData intent must invoke the controlled semantic planner.");
+            if (!JarvisExecutionShadowHarness.ShouldAttemptControlledPilot("send email to the customer"))
+                issues.Add("Routing regression: promoted SendEmail intent must invoke the controlled semantic planner.");
+
+            // Once Jarvis owns an orchestration run, every continuation belongs to
+            // that run even when the follow-up wording itself contains no task hint.
+            var activeContext = new JarvisActiveOrchestrationContext();
+            activeContext.Begin("sales report for this month");
+            if (!JarvisExecutionShadowHarness.ShouldAttemptControlledPilot("και στειλτο και στον Γιωργο", activeContext))
+                issues.Add("Routing regression: an open Jarvis orchestration run must remain planner-owned for continuation turns.");
+            activeContext.Complete();
         }
 
         private static void ValidateExportContract(List<string> issues)
