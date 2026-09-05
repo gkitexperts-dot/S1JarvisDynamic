@@ -7,6 +7,7 @@ using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 using Newtonsoft.Json;
+using Newtonsoft.Json.Linq;
 
 namespace S1Jarvis.Access.Verilic
 {
@@ -135,8 +136,10 @@ namespace S1Jarvis.Access.Verilic
                 using (var response = await Http.SendAsync(message, cts.Token))
                 {
                     string responseJson = await response.Content.ReadAsStringAsync();
-                    VerilicVerifyLicenceResult payload = TryDeserialize(responseJson);
                     int status = (int)response.StatusCode;
+                    LogVerificationResponse(status, responseJson);
+
+                    VerilicVerifyLicenceResult payload = TryDeserialize(responseJson);
                     int? retryAfter = ReadRetryAfterSeconds(response);
 
                     if (!response.IsSuccessStatusCode)
@@ -170,6 +173,64 @@ namespace S1Jarvis.Access.Verilic
                     return payload;
                 }
             }
+        }
+
+        private static void LogVerificationResponse(int status, string responseJson)
+        {
+            try
+            {
+                string safeBody = SanitizeVerificationResponse(responseJson);
+                S1Jarvis.Core.DebugLog.Log(
+                    "[VERILIC-VERIFY-RESPONSE] http=" +
+                    status.ToString(CultureInfo.InvariantCulture) +
+                    " body=" + safeBody);
+            }
+            catch
+            {
+                try
+                {
+                    S1Jarvis.Core.DebugLog.Log(
+                        "[VERILIC-VERIFY-RESPONSE] http=" +
+                        status.ToString(CultureInfo.InvariantCulture) +
+                        " body=<unavailable>");
+                }
+                catch { }
+            }
+        }
+
+        private static string SanitizeVerificationResponse(string responseJson)
+        {
+            if (string.IsNullOrWhiteSpace(responseJson))
+                return "<empty>";
+
+            JToken root;
+            try
+            {
+                root = JToken.Parse(responseJson);
+            }
+            catch (JsonException)
+            {
+                return responseJson.Length <= 4096
+                    ? responseJson
+                    : responseJson.Substring(0, 4096) + "<truncated>";
+            }
+
+            foreach (JProperty credential in root.SelectTokens("$..credential")
+                         .OfType<JObject>()
+                         .SelectMany(o => o.Properties()))
+            {
+                if (string.Equals(credential.Name, "ciphertext", StringComparison.OrdinalIgnoreCase) ||
+                    string.Equals(credential.Name, "nonce", StringComparison.OrdinalIgnoreCase) ||
+                    string.Equals(credential.Name, "tag", StringComparison.OrdinalIgnoreCase))
+                {
+                    credential.Value = "<redacted>";
+                }
+            }
+
+            string safe = root.ToString(Formatting.None);
+            return safe.Length <= 12000
+                ? safe
+                : safe.Substring(0, 12000) + "<truncated>";
         }
 
         private static VerilicVerifyLicenceResult TryDeserialize(string json)
