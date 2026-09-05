@@ -22,24 +22,8 @@ namespace S1Jarvis.Access
 
         private static IJarvisRuntimeAccessProvider CreateRuntimeAccessProvider()
         {
-            try
-            {
-                VerilicRuntimeConfiguration configuration = VerilicRuntimeConfiguration.Load();
-                IVerilicRuntimeLicenceProvider licensing = new VerilicRuntimeLicenceProvider(
-                    configuration.VerificationUri,
-                    configuration.ProductVersion,
-                    configuration.ResolveProductId,
-                    configuration.RecognitionKeyId,
-                    configuration.RecognitionSecret);
-
-                return new VerilicNativeS1RuntimeAccessProvider(licensing);
-            }
-            catch (Exception ex)
-            {
-                DebugLog.Log("[LICENSING] NativeS1 configuration failed: " +
-                    ex.GetType().Name + " - " + ex.Message);
-                return new FailClosedRuntimeAccessProvider("runtime_configuration_invalid");
-            }
+            return new VerilicNativeS1RuntimeAccessProvider(
+                new VerilicRuntimeLicenceProvider());
         }
 
         public static JarvisRuntimeAccessResult CheckRuntimeAccessSilent(
@@ -61,13 +45,11 @@ namespace S1Jarvis.Access
             }
             catch (Exception ex)
             {
-                DebugLog.Log("[LICENSING] NativeS1 verification failed: " +
+                DebugLog.Log("[LICENSING] Verilic contract runtime verification failed: " +
                     ex.GetType().Name + " - " + ex.Message);
                 string effectiveProduct = productCode ?? JarvisProducts.Jarvis;
                 return JarvisRuntimeAccessResult.Create(
-                    JarvisLicenceAccessDecision.Deny(
-                        effectiveProduct,
-                        "runtime_access_failed"),
+                    JarvisLicenceAccessDecision.Deny(effectiveProduct, "runtime_access_failed"),
                     JarvisAgentRoutingDecision.None());
             }
         }
@@ -100,7 +82,7 @@ namespace S1Jarvis.Access
                 }
                 catch (Exception ex)
                 {
-                    DebugLog.Log("[dr] direct AI vision bridge install failed: " +
+                    DebugLog.Log("[dr] Verilic vision bridge install failed: " +
                         ex.GetType().Name + " - " + ex.Message);
                 }
             }
@@ -240,8 +222,6 @@ namespace S1Jarvis.Access
             }
         }
 
-        // Compatibility surface for existing UI callers only. The decision itself
-        // comes exclusively from Verilic NativeS1 /verify.
         public static AccessCheckResponse CheckAccessSilent(
             XSupport xSupport,
             string toolName = null)
