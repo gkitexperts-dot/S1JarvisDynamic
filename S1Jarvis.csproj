@@ -56,9 +56,6 @@
     <Compile Include="SoftoneIntegration\JarvisHostFormBootstrap.cs">
       <SubType>Form</SubType>
     </Compile>
-    <Compile Include="SoftoneIntegration\VerilicMaintenanceHostFormBootstrap.cs">
-      <SubType>Form</SubType>
-    </Compile>
   </ItemGroup>
   <ItemGroup>
     <None Include="app.config" />
