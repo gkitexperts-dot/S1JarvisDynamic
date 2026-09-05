@@ -1,0 +1,43 @@
+name: Fix HttpClient timeout
+
+on:
+  push:
+    branches:
+      - fix/native-s1-boot-verification
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: fix/native-s1-boot-verification
+      - name: Fix conflicting HttpClient default timeout
+        shell: python
+        run: |
+          from pathlib import Path
+
+          p = Path('Access/Verilic/JarvisDirectAiTransport.cs')
+          s = p.read_text(encoding='utf-8')
+          old = '''        static JarvisDirectAiTransport()\n        {\n            ServicePointManager.SecurityProtocol = SecurityProtocolType.Tls12 | SecurityProtocolType.Tls13;\n        }'''
+          new = '''        static JarvisDirectAiTransport()\n        {\n            ServicePointManager.SecurityProtocol = SecurityProtocolType.Tls12 | SecurityProtocolType.Tls13;\n\n            // HttpClient defaults to a 100-second global timeout. That global\n            // timeout was silently overriding the explicit per-transport CTS\n            // values below (ResponsesTimeout is 5 minutes), producing false\n            // provider_timeout failures at ~100 seconds. Per-request linked CTS\n            // instances are the single timeout authority for this adapter.\n            Http.Timeout = Timeout.InfiniteTimeSpan;\n        }'''
+          count = s.count(old)
+          if count != 1:
+              raise SystemExit(f'expected one static constructor block, got {count}')
+          s = s.replace(old, new, 1)
+          p.write_text(s, encoding='utf-8')
+      - name: Run routing policy checks
+        run: |
+          python3 scripts/verify_ai_routing_policy.py
+          python3 scripts/verify_policy_consolidation.py
+      - name: Commit fix
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add Access/Verilic/JarvisDirectAiTransport.cs
+          git commit -m "Honor per-transport provider timeouts"
+          git push origin HEAD:fix/native-s1-boot-verification
