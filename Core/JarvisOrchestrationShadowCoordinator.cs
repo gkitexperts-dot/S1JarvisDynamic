@@ -111,10 +111,10 @@ namespace S1Jarvis.Core
 
         internal static Task RunAndLogSafeAsync(XSupport xSupport, string userPrompt)
         {
-            // Shadow orchestration is diagnostic-only and must never sit on the
-            // interactive chat critical path. Run it detached from the caller so
-            // a slow provider/decomposer cannot delay the real Atlas response.
-            return Task.Run(async () =>
+            // Shadow orchestration is diagnostic-only. Fire it independently and
+            // return a completed task so even an awaiting caller cannot put the
+            // decomposer/provider latency on the interactive chat critical path.
+            _ = Task.Run(async () =>
             {
                 try
                 {
@@ -125,6 +125,8 @@ namespace S1Jarvis.Core
                     DebugLog.Log("[ORCH-SHADOW] UNHANDLED SUPPRESSED: " + ex);
                 }
             });
+
+            return Task.CompletedTask;
         }
 
         private static void LogResult(JarvisShadowOrchestrationResult result, string prompt)
