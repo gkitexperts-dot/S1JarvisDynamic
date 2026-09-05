@@ -34,6 +34,7 @@ namespace S1Jarvis.Access.Verilic
         private static DateTime _expiresAtUtc;
         private static string _credentialFingerprint;
         private static string _agentAccountRef;
+        private static string _contractToolName;
 
         static VerilicRuntimeSession()
         {
@@ -53,11 +54,17 @@ namespace S1Jarvis.Access.Verilic
             CancellationToken cancellationToken = default(CancellationToken))
         {
             if (xSupport == null) throw new ArgumentNullException(nameof(xSupport));
-            if (string.IsNullOrWhiteSpace(toolName)) throw new ArgumentException("Tool name is required.", nameof(toolName));
 
             string clientKey = await EnsureClientKeyAsync(xSupport, cancellationToken).ConfigureAwait(false);
             var info = xSupport.ConnectionInfo;
             if (info == null) throw new InvalidOperationException("Soft1 connection identity is unavailable.");
+
+            string authenticatedTool;
+            lock (Sync) authenticatedTool = _contractToolName;
+            if (string.IsNullOrWhiteSpace(authenticatedTool))
+                authenticatedTool = toolName;
+            if (string.IsNullOrWhiteSpace(authenticatedTool))
+                throw new InvalidOperationException("Authenticated contract tool is unavailable.");
 
             var payload = new AccessCheckRequest
             {
@@ -65,7 +72,7 @@ namespace S1Jarvis.Access.Verilic
                 CompanyCode = info.CompanyId.ToString(),
                 BranchCode = info.BranchId.ToString(),
                 Soft1UserId = info.UserId.ToString(),
-                ToolName = toolName.Trim()
+                ToolName = authenticatedTool.Trim()
             };
 
             AccessCheckResponse access = await SendAccessCheckAsync(payload, clientKey, cancellationToken).ConfigureAwait(false);
@@ -132,6 +139,8 @@ namespace S1Jarvis.Access.Verilic
                                 : auth.ReasonCode.Trim();
                             throw new InvalidOperationException(reason);
                         }
+                        if (string.IsNullOrWhiteSpace(auth.ToolName))
+                            throw new InvalidOperationException("runtime_auth_tool_missing");
 
                         DateTime expires = auth.ExpiresAtUtc.HasValue
                             ? auth.ExpiresAtUtc.Value.ToUniversalTime()
@@ -142,9 +151,11 @@ namespace S1Jarvis.Access.Verilic
                             _clientKey = auth.ClientKey.Trim();
                             _expiresAtUtc = expires;
                             _credentialFingerprint = fingerprint;
+                            _contractToolName = auth.ToolName.Trim();
                         }
 
-                        DebugLog.Log("[VERILIC-AUTH] contract authentication accepted; expires=" + expires.ToString("o"));
+                        DebugLog.Log("[VERILIC-AUTH] contract authentication accepted; tool=" +
+                            auth.ToolName.Trim() + " expires=" + expires.ToString("o"));
                         return auth.ClientKey.Trim();
                     }
                 }
@@ -163,6 +174,7 @@ namespace S1Jarvis.Access.Verilic
                 _expiresAtUtc = default(DateTime);
                 _credentialFingerprint = null;
                 _agentAccountRef = null;
+                _contractToolName = null;
             }
         }
 
@@ -222,6 +234,9 @@ namespace S1Jarvis.Access.Verilic
 
             [JsonProperty("clientKey")]
             public string ClientKey { get; set; }
+
+            [JsonProperty("toolName")]
+            public string ToolName { get; set; }
 
             [JsonProperty("expiresAtUtc")]
             public DateTime? ExpiresAtUtc { get; set; }
