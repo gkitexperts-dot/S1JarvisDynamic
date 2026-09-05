@@ -29,9 +29,10 @@ namespace S1Jarvis.Access
     }
 
     /// <summary>
-    /// Verilic contract runtime access. Authentication is contract-scoped and
-    /// workstation-independent: ApiUsername/ApiValue issue a short-lived clientKey,
-    /// then /access/check authorizes the active Soft1 Serial/Company/Branch/User.
+    /// Verilic NativeS1 runtime access. Each product uses its own build-time
+    /// Recognition Key ID + Secret and verifies the active Soft1 named-user
+    /// identity through POST /api/licensing/v1/verify. No workstation or
+    /// per-customer credential provisioning is required.
     /// </summary>
     internal sealed class VerilicContractRuntimeAccessProvider : IJarvisRuntimeAccessProvider
     {
