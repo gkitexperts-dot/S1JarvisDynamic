@@ -104,7 +104,7 @@
   </ItemGroup>
   <Target Name="BuildJarvisRuntime" BeforeTargets="PrepareResources">
     <PropertyGroup>
-      <VerilicRecognitionBuildProperties>Configuration=$(Configuration);Platform=AnyCPU;VerilicJarvisRecognitionKeyId=$(VerilicJarvisRecognitionKeyId);VerilicJarvisRecognitionSecret=$(VerilicJarvisRecognitionSecret);VerilicJarvisCourierRecognitionKeyId=$(VerilicJarvisCourierRecognitionKeyId);VerilicJarvisCourierRecognitionSecret=$(VerilicJarvisCourierRecognitionSecret);VerilicJarvisDocReaderRecognitionKeyId=$(VerilicJarvisDocReaderRecognitionKeyId);VerilicJarvisDocReaderRecognitionSecret=$(VerilicJarvisDocReaderRecognitionSecret)</VerilicRecognitionBuildProperties>
+      <VerilicRecognitionBuildProperties>Configuration=$(Configuration);Platform=AnyCPU</VerilicRecognitionBuildProperties>
     </PropertyGroup>
     <MSBuild Projects="$(MSBuildProjectDirectory)\S1Jarvis.Runtime\S1Jarvis.Runtime.csproj" Targets="Restore" Properties="$(VerilicRecognitionBuildProperties)" BuildInParallel="false" />
     <MSBuild Projects="$(MSBuildProjectDirectory)\S1Jarvis.Runtime\S1Jarvis.Runtime.csproj" Targets="Build" Properties="$(VerilicRecognitionBuildProperties)" BuildInParallel="false" />
