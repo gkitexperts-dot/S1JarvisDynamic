@@ -109,24 +109,16 @@ namespace S1Jarvis.Core
             }
         }
 
-        internal static Task RunAndLogSafeAsync(XSupport xSupport, string userPrompt)
+        internal static async Task RunAndLogSafeAsync(XSupport xSupport, string userPrompt)
         {
-            // Shadow orchestration is diagnostic-only. Fire it independently and
-            // return a completed task so even an awaiting caller cannot put the
-            // decomposer/provider latency on the interactive chat critical path.
-            _ = Task.Run(async () =>
+            try
             {
-                try
-                {
-                    await RunAsync(xSupport, userPrompt).ConfigureAwait(false);
-                }
-                catch (Exception ex)
-                {
-                    DebugLog.Log("[ORCH-SHADOW] UNHANDLED SUPPRESSED: " + ex);
-                }
-            });
-
-            return Task.CompletedTask;
+                await RunAsync(xSupport, userPrompt);
+            }
+            catch (Exception ex)
+            {
+                DebugLog.Log("[ORCH-SHADOW] UNHANDLED SUPPRESSED: " + ex);
+            }
         }
 
         private static void LogResult(JarvisShadowOrchestrationResult result, string prompt)

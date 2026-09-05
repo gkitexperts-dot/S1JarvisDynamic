@@ -158,9 +158,19 @@ namespace S1Jarvis.UI
                     }
                 }
 
-                JarvisControlledPilotOutcome pilot = await JarvisExecutionShadowHarness.TryRunControlledPilotAsync(
-                    _xSupport, userText, _orchestrationPendingConfirmation, _orchestrationDatasetSession,
-                    _orchestrationActiveContext, _orchestrationSessionContext);
+                JarvisControlledPilotOutcome pilot = null;
+                if (JarvisExecutionShadowHarness.ShouldAttemptControlledPilot(
+                    userText, _orchestrationActiveContext))
+                {
+                    pilot = await JarvisExecutionShadowHarness.TryRunControlledPilotAsync(
+                        _xSupport, userText, _orchestrationPendingConfirmation, _orchestrationDatasetSession,
+                        _orchestrationActiveContext, _orchestrationSessionContext);
+                }
+                else
+                {
+                    DebugLog.Log("[ORCH-CONTROL] skipped semantic planner: no promoted task intent hint.");
+                }
+
                 if (pilot != null && pilot.Handled)
                 {
                     if (!string.IsNullOrWhiteSpace(pilot.UserMessage))

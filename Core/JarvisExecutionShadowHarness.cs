@@ -22,6 +22,40 @@ namespace S1Jarvis.Core
             new[] { "ReportData", "ExportData", "SendEmail", "CreateCrmTask", "CreateCalendarEvent" },
             StringComparer.OrdinalIgnoreCase);
 
+        internal static bool ShouldAttemptControlledPilot(
+            string userPrompt,
+            JarvisActiveOrchestrationContext activeContext = null)
+        {
+            // An open Jarvis-owned run is always eligible for continuation.
+            if (activeContext != null && activeContext.HasOpenRun)
+                return true;
+
+            if (string.IsNullOrWhiteSpace(userPrompt))
+                return false;
+
+            // The rollout boundary is the promoted task set itself. Use the
+            // authoritative task registry's IntentHints to decide whether the
+            // controlled planner should run at all. This avoids a second provider
+            // call for ordinary conversation while keeping task capability truth
+            // in JarvisTaskRegistry rather than in UI/private keyword tables.
+            string prompt = userPrompt.Trim();
+            foreach (string taskType in PromotedControlledTasks)
+            {
+                JarvisTaskDescriptor descriptor = JarvisTaskRegistry.Find(taskType);
+                if (descriptor == null)
+                    continue;
+
+                foreach (string hint in descriptor.IntentHints ?? new string[0])
+                {
+                    if (!string.IsNullOrWhiteSpace(hint) &&
+                        prompt.IndexOf(hint.Trim(), StringComparison.OrdinalIgnoreCase) >= 0)
+                        return true;
+                }
+            }
+
+            return false;
+        }
+
         internal static async Task RunAndLogSafeAsync(XSupport xSupport, string userPrompt,
             JarvisPendingConfirmationSession pendingSession = null, JarvisDatasetSession datasetSession = null,
             JarvisActiveOrchestrationContext activeContext = null)
