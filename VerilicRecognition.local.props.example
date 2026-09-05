@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Project xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <PropertyGroup>
+    <!-- S1JARVIS -->
+    <VerilicJarvisRecognitionKeyId>Rpk_REPLACE_WITH_ACTIVE_KEY_ID</VerilicJarvisRecognitionKeyId>
+    <VerilicJarvisRecognitionSecret>REPLACE_WITH_SHOWN_ONCE_SECRET</VerilicJarvisRecognitionSecret>
+
+    <!-- JarvisCourier -->
+    <VerilicJarvisCourierRecognitionKeyId>Rpk_REPLACE_WITH_ACTIVE_KEY_ID</VerilicJarvisCourierRecognitionKeyId>
+    <VerilicJarvisCourierRecognitionSecret>REPLACE_WITH_SHOWN_ONCE_SECRET</VerilicJarvisCourierRecognitionSecret>
+
+    <!-- JarvisDocReader -->
+    <VerilicJarvisDocReaderRecognitionKeyId>Rpk_REPLACE_WITH_ACTIVE_KEY_ID</VerilicJarvisDocReaderRecognitionKeyId>
+    <VerilicJarvisDocReaderRecognitionSecret>REPLACE_WITH_SHOWN_ONCE_SECRET</VerilicJarvisDocReaderRecognitionSecret>
+  </PropertyGroup>
+</Project>
