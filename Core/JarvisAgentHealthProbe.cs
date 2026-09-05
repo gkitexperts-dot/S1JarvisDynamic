@@ -32,10 +32,7 @@ namespace S1Jarvis.Core
         public string DiagnosticMessage { get; private set; }
         public IReadOnlyList<JarvisAgentHealthTargetResult> Targets { get; private set; }
 
-        public static JarvisAgentHealthResult Success(
-            string provider,
-            string model,
-            IReadOnlyList<JarvisAgentHealthTargetResult> targets)
+        public static JarvisAgentHealthResult Success(string provider, string model, IReadOnlyList<JarvisAgentHealthTargetResult> targets)
         {
             return new JarvisAgentHealthResult
             {
@@ -76,11 +73,11 @@ namespace S1Jarvis.Core
     }
 
     /// <summary>
-    /// Authoritative boot provisioning using the Verilic two-step contract flow:
-    /// ApiUsername/ApiValue -> short-lived clientKey -> /access/check with the
-    /// active Soft1 Serial/Company/Branch/User. No installation/device identity.
-    /// The provider API key stays on Verilic; Jarvis receives only the opaque
-    /// AgentAccountRef and routes normal requests through the Verilic proxy.
+    /// Boot provisioning is exactly two remote steps:
+    /// 1) contract ApiUsername/ApiValue -> short-lived Verilic clientKey;
+    /// 2) clientKey + active Soft1 Serial/Company/Branch/User/Tool -> access approval
+    ///    and the AI runtime information required for this in-memory session.
+    /// No PC, Windows user, installation id or device binding is involved.
     /// </summary>
     internal sealed class JarvisAgentHealthProbe
     {
@@ -104,7 +101,7 @@ namespace S1Jarvis.Core
 
             try
             {
-                DebugLog.Log("[AI-SESSION-REGISTRY] Verilic contract auth provisioning request");
+                DebugLog.Log("[AI-SESSION-REGISTRY] Verilic step-1 contract authentication start");
                 VerilicRuntimeAuthorization auth = await VerilicRuntimeSession.AuthorizeAsync(
                     xSupport,
                     JarvisProducts.Jarvis);
@@ -113,13 +110,15 @@ namespace S1Jarvis.Core
                 if (access == null)
                     return JarvisAgentHealthResult.Failure("access_check_failed");
                 if (!access.Allowed)
-                    return JarvisAgentHealthResult.Failure(
-                        "access_denied",
-                        diagnosticMessage: access.Message);
+                    return JarvisAgentHealthResult.Failure("access_denied", diagnosticMessage: access.Message);
                 if (string.IsNullOrWhiteSpace(access.AgentAccountRef))
                     return JarvisAgentHealthResult.Failure("agent_account_unavailable");
-                if (string.IsNullOrWhiteSpace(auth.ClientKey))
-                    return JarvisAgentHealthResult.Failure("runtime_client_key_missing");
+                if (string.IsNullOrWhiteSpace(access.RuntimeProvider))
+                    return JarvisAgentHealthResult.Failure("provider_model_missing", diagnosticMessage: "Verilic did not return runtimeProvider.");
+                if (string.IsNullOrWhiteSpace(access.RuntimeCredential))
+                    return JarvisAgentHealthResult.Failure("provider_credential_unavailable");
+
+                DebugLog.Log("[AI-SESSION-REGISTRY] Verilic step-2 entitlement approved; agent=" + access.AgentAccountRef);
 
                 var targets = new List<JarvisAgentHealthTargetResult>(Agents.Length);
                 foreach (string agent in Agents)
@@ -131,18 +130,16 @@ namespace S1Jarvis.Core
                         Ready = true,
                         ReasonCode = "provider_ready",
                         AgentAccountRef = access.AgentAccountRef.Trim(),
-                        Provider = "verilic-proxy",
+                        Provider = access.RuntimeProvider.Trim(),
                         Model = model,
-                        // This slot contains the short-lived Verilic clientKey,
-                        // never a provider API key. It exists only in memory.
-                        ApiKey = auth.ClientKey,
+                        ApiKey = access.RuntimeCredential,
                         Inherited = !string.Equals(agent, "Jarvis", StringComparison.OrdinalIgnoreCase)
                     });
                 }
 
-                DebugLog.Log("[AI-SESSION-REGISTRY] Verilic contract auth accepted; targets=" + targets.Count);
+                DebugLog.Log("[AI-SESSION-REGISTRY] Verilic boot provisioning accepted; targets=" + targets.Count);
                 return JarvisAgentHealthResult.Success(
-                    "verilic-proxy",
+                    access.RuntimeProvider,
                     targets[0].Model,
                     targets);
             }
@@ -150,9 +147,7 @@ namespace S1Jarvis.Core
             {
                 DebugLog.Log("[AI-SESSION-REGISTRY] Verilic contract provisioning exception: " +
                     ex.GetType().Name + " - " + ex.Message);
-                return JarvisAgentHealthResult.Failure(
-                    "provider_health_failed",
-                    diagnosticMessage: ex.Message);
+                return JarvisAgentHealthResult.Failure("provider_health_failed", diagnosticMessage: ex.Message);
             }
         }
 
