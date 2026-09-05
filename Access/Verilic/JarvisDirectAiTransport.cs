@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Net;
@@ -114,6 +114,15 @@ namespace S1Jarvis.Access.Verilic
             // Anthropic wire contract where unknown fields are rejected.
             request.Remove("output_config");
 
+            // cache_control is optional optimization metadata, not request semantics.
+            // Jarvis can compose policy/system/tool fragments from several sources and
+            // may legitimately exceed Anthropic's maximum number of cache breakpoints.
+            // Strip the metadata at the provider boundary rather than letting an
+            // otherwise valid request fail with HTTP 400. This keeps the common Jarvis
+            // request provider-neutral and makes Anthropic Messages resilient to future
+            // context/tool composition changes.
+            RemovePropertyRecursive(request, "cache_control");
+
             using (var message = new HttpRequestMessage(HttpMethod.Post, "https://api.anthropic.com/v1/messages"))
             using (var timeout = new CancellationTokenSource(DefaultTimeout))
             using (var linked = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, timeout.Token))
@@ -134,6 +143,25 @@ namespace S1Jarvis.Access.Verilic
                         ReadNestedInt(parsed, "usage", "output_tokens"));
                 }
             }
+        }
+
+        private static void RemovePropertyRecursive(JToken token, string propertyName)
+        {
+            if (token == null || string.IsNullOrWhiteSpace(propertyName)) return;
+
+            JObject obj = token as JObject;
+            if (obj != null)
+            {
+                obj.Remove(propertyName);
+                foreach (JProperty property in obj.Properties().ToList())
+                    RemovePropertyRecursive(property.Value, propertyName);
+                return;
+            }
+
+            JArray array = token as JArray;
+            if (array == null) return;
+            foreach (JToken item in array)
+                RemovePropertyRecursive(item, propertyName);
         }
 
         private static async Task<AgentProxyResponse> SendOpenAiResponsesAsync(
