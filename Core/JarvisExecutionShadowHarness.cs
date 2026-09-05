@@ -70,6 +70,16 @@ namespace S1Jarvis.Core
             JarvisRuntimeContext runtimeContext = null)
         {
             var outcome = new JarvisControlledPilotOutcome { Handled = false, Completed = false };
+
+            // The harness itself owns the rollout boundary. Callers may pre-gate
+            // for diagnostics/UI flow, but an accidental direct call must never
+            // create a second semantic provider request for ordinary conversation.
+            if (!ShouldAttemptControlledPilot(userPrompt, activeContext))
+            {
+                DebugLog.Log("[ORCH-CONTROL] skipped semantic planner at harness boundary.");
+                return outcome;
+            }
+
             try
             {
                 runtimeContext = runtimeContext ?? JarvisRuntimeContext.Capture(xSupport);
