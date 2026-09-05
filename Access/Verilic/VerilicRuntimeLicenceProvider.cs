@@ -19,6 +19,9 @@ namespace S1Jarvis.Access.Verilic
 
     internal sealed class VerilicRuntimeLicenceProvider : IVerilicRuntimeLicenceProvider
     {
+        private static readonly object CompatibilityCacheSync = new object();
+        private static PendingVerification _pendingVerification;
+
         public JarvisLicenceAccessDecision Check(XSupport xSupport, string productCode)
         {
             if (xSupport == null || string.IsNullOrWhiteSpace(productCode))
@@ -28,7 +31,10 @@ namespace S1Jarvis.Access.Verilic
 
             try
             {
-                VerilicNativeS1VerificationSession session = Verify(xSupport, productCode);
+                VerilicNativeS1VerificationSession session;
+                if (!TryTakeBootVerification(xSupport, productCode, out session))
+                    session = Verify(xSupport, productCode);
+
                 return JarvisLicenceAccessDecision.FromVerilic(
                     productCode,
                     session.Credential.ProductId,
@@ -95,13 +101,90 @@ namespace S1Jarvis.Access.Verilic
             if (verification == null)
                 throw new InvalidOperationException("verification_response_invalid");
 
-            return new VerilicNativeS1VerificationSession
+            var session = new VerilicNativeS1VerificationSession
             {
                 Configuration = configuration,
                 Credential = credential,
                 Verification = verification,
                 Product = verification.FindRequestedProduct(credential.ProductId)
             };
+
+            RememberBootVerification(xSupport, productCode, session);
+            return session;
+        }
+
+        private static void RememberBootVerification(
+            XSupport xSupport,
+            string productCode,
+            VerilicNativeS1VerificationSession session)
+        {
+            var connection = xSupport == null ? null : xSupport.ConnectionInfo;
+            if (connection == null || session == null)
+                return;
+
+            var pending = new PendingVerification
+            {
+                ProductCode = productCode == null ? null : productCode.Trim(),
+                Soft1Serial = connection.SerialNum == null ? string.Empty : connection.SerialNum.ToString(),
+                CompanyCode = connection.CompanyId.ToString(),
+                BranchCode = connection.BranchId.ToString(),
+                Soft1UserId = connection.UserId.ToString(),
+                Session = session
+            };
+
+            lock (CompatibilityCacheSync)
+                _pendingVerification = pending;
+        }
+
+        private static bool TryTakeBootVerification(
+            XSupport xSupport,
+            string productCode,
+            out VerilicNativeS1VerificationSession session)
+        {
+            session = null;
+            var connection = xSupport == null ? null : xSupport.ConnectionInfo;
+            if (connection == null)
+                return false;
+
+            lock (CompatibilityCacheSync)
+            {
+                PendingVerification pending = _pendingVerification;
+                if (pending == null)
+                    return false;
+
+                bool matches =
+                    string.Equals(pending.ProductCode, productCode == null ? null : productCode.Trim(), StringComparison.Ordinal) &&
+                    string.Equals(pending.Soft1Serial, connection.SerialNum == null ? string.Empty : connection.SerialNum.ToString(), StringComparison.Ordinal) &&
+                    string.Equals(pending.CompanyCode, connection.CompanyId.ToString(), StringComparison.Ordinal) &&
+                    string.Equals(pending.BranchCode, connection.BranchId.ToString(), StringComparison.Ordinal) &&
+                    string.Equals(pending.Soft1UserId, connection.UserId.ToString(), StringComparison.Ordinal);
+
+                if (!matches)
+                    return false;
+
+                session = pending.Session;
+                _pendingVerification = null;
+            }
+
+            try
+            {
+                S1Jarvis.Core.DebugLog.Log(
+                    "[LICENSING] reused boot /verify result for compatibility access check; product=" +
+                    (productCode ?? "-"));
+            }
+            catch { }
+
+            return session != null;
+        }
+
+        private sealed class PendingVerification
+        {
+            internal string ProductCode { get; set; }
+            internal string Soft1Serial { get; set; }
+            internal string CompanyCode { get; set; }
+            internal string BranchCode { get; set; }
+            internal string Soft1UserId { get; set; }
+            internal VerilicNativeS1VerificationSession Session { get; set; }
         }
     }
 }
