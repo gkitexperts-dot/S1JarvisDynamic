@@ -1,21 +1,29 @@
 using System;
 using System.Collections.Generic;
-using System.IO;
 using System.Reflection;
 
 namespace S1Jarvis.Access.Verilic
 {
-    internal enum VerilicRuntimeMode { Legacy = 0, Verilic = 1 }
+    internal enum VerilicRuntimeMode
+    {
+        Verilic = 1
+    }
 
+    /// <summary>
+    /// Configuration for the single supported Verilic NativeS1 contract.
+    /// The runtime exposes only /api/licensing/v1/verify plus product recognition.
+    /// There is no Nexus mode, local installation state, activation licence id,
+    /// device binding, routing/resolve endpoint or provider-health endpoint here.
+    /// </summary>
     internal sealed class VerilicRuntimeConfiguration
     {
-        private const string ModeVariable = "S1JARVIS_VERILIC_MODE";
         private const string OriginVariable = "S1JARVIS_VERILIC_ORIGIN";
-        private const string StateDirectoryVariable = "S1JARVIS_VERILIC_STATE_DIR";
-        private const string DpapiScopeVariable = "S1JARVIS_VERILIC_DPAPI_SCOPE";
-        private const string VendorIdVariable = "S1JARVIS_VERILIC_VENDOR_ID";
-        private const string RecognitionKeyIdVariable = "S1JARVIS_VERILIC_RECOGNITION_KEY_ID";
-        private const string RecognitionSecretVariable = "S1JARVIS_VERILIC_RECOGNITION_SECRET";
+        private const string RecognitionKeyIdVariable =
+            "S1JARVIS_VERILIC_RECOGNITION_KEY_ID";
+        private const string RecognitionSecretVariable =
+            "S1JARVIS_VERILIC_RECOGNITION_SECRET";
+
+        private const string DefaultOrigin = "https://verilic.gr";
 
         private const string JarvisRegisteredProductId =
             "prd_6ece7bc271a54fd6ba945be8a8189e0b";
@@ -25,127 +33,90 @@ namespace S1Jarvis.Access.Verilic
             "prd_dfc9315f4e8242faa679be0aa49b474f";
 
         private readonly Dictionary<string, string> _productIds;
-        private readonly Dictionary<string, string> _licenceIds;
 
         private VerilicRuntimeConfiguration(
-            VerilicRuntimeMode mode, Uri licensingOrigin, string stateDirectory,
-            VerilicInstallationProtectionScope protectionScope,
-            Dictionary<string, string> productIds, Dictionary<string, string> licenceIds,
-            string vendorId, string productVersion,
-            string recognitionKeyId, string recognitionSecret)
+            Uri origin,
+            Dictionary<string, string> productIds,
+            string productVersion,
+            string recognitionKeyId,
+            string recognitionSecret)
         {
-            Mode = mode;
-            LicensingOrigin = licensingOrigin;
-            StateDirectory = stateDirectory;
-            ProtectionScope = protectionScope;
-            _productIds = productIds ?? new Dictionary<string, string>(StringComparer.Ordinal);
-            _licenceIds = licenceIds ?? new Dictionary<string, string>(StringComparer.Ordinal);
-            VendorId = vendorId;
+            LicensingOrigin = origin;
+            _productIds = productIds;
             ProductVersion = productVersion;
             RecognitionKeyId = recognitionKeyId;
             RecognitionSecret = recognitionSecret;
         }
 
-        public VerilicRuntimeMode Mode { get; private set; }
+        public VerilicRuntimeMode Mode => VerilicRuntimeMode.Verilic;
         public Uri LicensingOrigin { get; private set; }
-        public string StateDirectory { get; private set; }
-        public VerilicInstallationProtectionScope ProtectionScope { get; private set; }
-        public string VendorId { get; private set; }
         public string ProductVersion { get; private set; }
         public string RecognitionKeyId { get; private set; }
         public string RecognitionSecret { get; private set; }
-        public Uri VerificationUri => BuildApiUri("api/licensing/v1/verify");
-        public Uri RoutingUri => BuildApiUri("api/jarvis-ai/routing/resolve");
-        public Uri ProviderHealthUri => BuildApiUri("api/jarvis-ai/routing/health");
+        public Uri VerificationUri => new Uri(
+            new Uri(LicensingOrigin.GetLeftPart(UriPartial.Authority) + "/"),
+            "api/licensing/v1/verify");
 
-        public string ResolveProductId(string productCode) => ResolveMappedIdentifier(
-            _productIds, productCode, "No Verilic ProductId is configured for the Jarvis product.");
-
-        public string ResolveActivationVendorId()
+        public string ResolveProductId(string productCode)
         {
-            if (string.IsNullOrWhiteSpace(VendorId))
-                throw new InvalidOperationException("No Verilic VendorId is configured for activation.");
-            return VendorId;
-        }
+            string value;
+            if (string.IsNullOrWhiteSpace(productCode) ||
+                !_productIds.TryGetValue(productCode, out value) ||
+                string.IsNullOrWhiteSpace(value))
+            {
+                throw new InvalidOperationException(
+                    "No Verilic ProductId is configured for the Jarvis product.");
+            }
 
-        public string ResolveLicenceId(string productCode) => ResolveMappedIdentifier(
-            _licenceIds, productCode, "No Verilic LicenceId is configured for activation of this Jarvis product.");
+            return value;
+        }
 
         public static VerilicRuntimeConfiguration Load()
         {
-            return LoadCore(true);
+            string originText = ReadDeploymentValue(OriginVariable);
+            if (string.IsNullOrWhiteSpace(originText))
+                originText = DefaultOrigin;
+
+            Uri origin = RequireHttpsOrigin(originText);
+            string recognitionKeyId = RequireIdentifier(
+                ReadDeploymentValue(RecognitionKeyIdVariable),
+                RecognitionKeyIdVariable);
+            string recognitionSecret = ReadDeploymentValue(RecognitionSecretVariable);
+            if (string.IsNullOrWhiteSpace(recognitionSecret) ||
+                recognitionSecret.Length > 4096)
+            {
+                throw new InvalidOperationException(
+                    RecognitionSecretVariable +
+                    " is required by the Verilic NativeS1 /verify contract.");
+            }
+
+            var productIds = new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                [JarvisProducts.Jarvis] = JarvisRegisteredProductId,
+                [JarvisProducts.JarvisCourier] = JarvisCourierRegisteredProductId,
+                [JarvisProducts.JarvisDocReader] = JarvisDocReaderRegisteredProductId
+            };
+
+            return new VerilicRuntimeConfiguration(
+                origin,
+                productIds,
+                GetProductVersion(),
+                recognitionKeyId,
+                recognitionSecret.Trim());
         }
 
-        internal static VerilicRuntimeConfiguration LoadWithoutRecognition()
-        {
-            return LoadCore(false);
-        }
-
-        private static VerilicRuntimeConfiguration LoadCore(bool requireRecognition)
-        {
-            VerilicLocalConfiguration local = VerilicLocalConfigurationStore.Load();
-            return local != null
-                ? LoadLocal(local, requireRecognition)
-                : LoadRuntimeEnvironment(requireRecognition);
-        }
-
-        internal static void ValidateLocalConfiguration(VerilicLocalConfiguration local)
-        {
-            if (local == null)
-                throw new ArgumentNullException(nameof(local));
-
-            Create(local.Mode, local.Origin, local.StateDirectory, local.DpapiScope,
-                local.VendorId, local.JarvisProductId, local.JarvisLicenceId,
-                local.CourierProductId, local.CourierLicenceId,
-                local.DocReaderProductId, local.DocReaderLicenceId,
-                null, null, "local Verilic configuration", false);
-        }
-
-        private static VerilicRuntimeConfiguration LoadLocal(
-            VerilicLocalConfiguration local,
-            bool requireRecognition)
-        {
-            return Create(local.Mode, local.Origin, local.StateDirectory, local.DpapiScope,
-                local.VendorId, local.JarvisProductId, local.JarvisLicenceId,
-                local.CourierProductId, local.CourierLicenceId,
-                local.DocReaderProductId, local.DocReaderLicenceId,
-                ReadRuntimeVariable(RecognitionKeyIdVariable),
-                ReadRuntimeVariable(RecognitionSecretVariable),
-                "local Verilic configuration + deployment credential configuration",
-                requireRecognition);
-        }
-
-        private static VerilicRuntimeConfiguration LoadRuntimeEnvironment(bool requireRecognition)
-        {
-            return Create(
-                ReadRuntimeVariable(ModeVariable),
-                ReadRuntimeVariable(OriginVariable),
-                ReadRuntimeVariable(StateDirectoryVariable),
-                ReadRuntimeVariable(DpapiScopeVariable),
-                ReadRuntimeVariable(VendorIdVariable),
-                ReadRuntimeVariable("S1JARVIS_VERILIC_PRODUCT_ID"),
-                ReadRuntimeVariable("S1JARVIS_VERILIC_LICENCE_ID"),
-                ReadRuntimeVariable("S1JARVISCOURIER_VERILIC_PRODUCT_ID"),
-                ReadRuntimeVariable("S1JARVISCOURIER_VERILIC_LICENCE_ID"),
-                ReadRuntimeVariable("S1JARVISDOCREADER_VERILIC_PRODUCT_ID"),
-                ReadRuntimeVariable("S1JARVISDOCREADER_VERILIC_LICENCE_ID"),
-                ReadRuntimeVariable(RecognitionKeyIdVariable),
-                ReadRuntimeVariable(RecognitionSecretVariable),
-                "runtime environment",
-                requireRecognition);
-        }
-
-        // Soft1/Xplorer may remain alive while deployment values are updated.
-        // Use process values first, then current-user deployment values, and
-        // finally machine-wide deployment values. This supports workstation
-        // installs where the product-recognition credential is provisioned once
-        // for every Soft1 user without requiring it to be copied into source or
-        // the non-secret local config.json.
-        private static string ReadRuntimeVariable(string name)
+        /// <summary>
+        /// Product-recognition credentials are deployment material for the new
+        /// NativeS1 contract. They are intentionally not obtained from any legacy
+        /// activation/provisioning/installation store. Process values are preferred;
+        /// User/Machine targets are accepted only as normal Windows deployment
+        /// locations for the same NativeS1 credential.
+        /// </summary>
+        private static string ReadDeploymentValue(string name)
         {
             string value = Environment.GetEnvironmentVariable(name);
             if (!string.IsNullOrWhiteSpace(value))
-                return value;
+                return value.Trim();
 
             try
             {
@@ -153,7 +124,7 @@ namespace S1Jarvis.Access.Verilic
                     name,
                     EnvironmentVariableTarget.User);
                 if (!string.IsNullOrWhiteSpace(value))
-                    return value;
+                    return value.Trim();
             }
             catch { }
 
@@ -163,143 +134,11 @@ namespace S1Jarvis.Access.Verilic
                     name,
                     EnvironmentVariableTarget.Machine);
                 if (!string.IsNullOrWhiteSpace(value))
-                    return value;
+                    return value.Trim();
             }
             catch { }
 
             return null;
-        }
-
-        private static VerilicRuntimeConfiguration Create(
-            string modeText, string originText, string stateDirectoryText, string scopeText,
-            string vendorIdText, string jarvisProductIdText, string jarvisLicenceIdText,
-            string courierProductIdText, string courierLicenceIdText,
-            string docReaderProductIdText, string docReaderLicenceIdText,
-            string recognitionKeyIdText, string recognitionSecretText,
-            string sourceName, bool requireRecognition)
-        {
-            if (string.IsNullOrWhiteSpace(modeText) ||
-                string.Equals(modeText.Trim(), "legacy", StringComparison.OrdinalIgnoreCase))
-            {
-                return new VerilicRuntimeConfiguration(
-                    VerilicRuntimeMode.Legacy, null, null,
-                    VerilicInstallationProtectionScope.CurrentUser,
-                    null, null, null, GetProductVersion(), null, null);
-            }
-
-            if (!string.Equals(modeText.Trim(), "verilic", StringComparison.OrdinalIgnoreCase))
-                throw new InvalidOperationException(
-                    "S1Jarvis Verilic runtime mode is invalid in " + sourceName + ".");
-
-            Uri origin = RequireHttpsOrigin(originText);
-            string stateDirectory = string.IsNullOrWhiteSpace(stateDirectoryText)
-                ? VerilicLocalConfigurationStore.GetDefaultDirectory()
-                : stateDirectoryText;
-            VerilicInstallationProtectionScope scope = ParseProtectionScope(scopeText);
-
-            var productIds = new Dictionary<string, string>(StringComparer.Ordinal)
-            {
-                [JarvisProducts.Jarvis] = ProductIdOrDefault(
-                    jarvisProductIdText,
-                    JarvisRegisteredProductId,
-                    "S1JARVIS_VERILIC_PRODUCT_ID"),
-                [JarvisProducts.JarvisCourier] = ProductIdOrDefault(
-                    courierProductIdText,
-                    JarvisCourierRegisteredProductId,
-                    "S1JARVISCOURIER_VERILIC_PRODUCT_ID"),
-                [JarvisProducts.JarvisDocReader] = ProductIdOrDefault(
-                    docReaderProductIdText,
-                    JarvisDocReaderRegisteredProductId,
-                    "S1JARVISDOCREADER_VERILIC_PRODUCT_ID")
-            };
-
-            var licenceIds = new Dictionary<string, string>(StringComparer.Ordinal);
-            AddOptionalIdentifier(licenceIds, JarvisProducts.Jarvis,
-                jarvisLicenceIdText, "S1JARVIS_VERILIC_LICENCE_ID");
-            AddOptionalIdentifier(licenceIds, JarvisProducts.JarvisCourier,
-                courierLicenceIdText, "S1JARVISCOURIER_VERILIC_LICENCE_ID");
-            AddOptionalIdentifier(licenceIds, JarvisProducts.JarvisDocReader,
-                docReaderLicenceIdText, "S1JARVISDOCREADER_VERILIC_LICENCE_ID");
-
-            string recognitionKeyId = null;
-            string recognitionSecret = null;
-            if (requireRecognition)
-            {
-                recognitionKeyId = RequireIdentifier(
-                    recognitionKeyIdText, RecognitionKeyIdVariable);
-                if (string.IsNullOrWhiteSpace(recognitionSecretText) ||
-                    recognitionSecretText.Length > 4096)
-                {
-                    throw new InvalidOperationException(
-                        RecognitionSecretVariable +
-                        " is required for NativeS1 startup verification.");
-                }
-                recognitionSecret = recognitionSecretText.Trim();
-            }
-
-            return new VerilicRuntimeConfiguration(
-                VerilicRuntimeMode.Verilic,
-                origin,
-                Path.GetFullPath(stateDirectory),
-                scope,
-                productIds,
-                licenceIds,
-                OptionalIdentifier(vendorIdText, VendorIdVariable),
-                GetProductVersion(),
-                recognitionKeyId,
-                recognitionSecret);
-        }
-
-        private Uri BuildApiUri(string relativePath)
-        {
-            if (LicensingOrigin == null)
-                return null;
-            return new Uri(
-                new Uri(LicensingOrigin.GetLeftPart(UriPartial.Authority) + "/"),
-                relativePath);
-        }
-
-        private static string ProductIdOrDefault(
-            string configuredValue,
-            string defaultProductId,
-            string variableName)
-        {
-            return string.IsNullOrWhiteSpace(configuredValue)
-                ? RequireIdentifier(defaultProductId, variableName)
-                : RequireIdentifier(configuredValue, variableName);
-        }
-
-        private static void AddOptionalIdentifier(
-            Dictionary<string, string> values,
-            string productCode,
-            string value,
-            string variableName)
-        {
-            string normalized = OptionalIdentifier(value, variableName);
-            if (!string.IsNullOrEmpty(normalized))
-                values[productCode] = normalized;
-        }
-
-        private static string OptionalIdentifier(string value, string variableName)
-        {
-            return string.IsNullOrWhiteSpace(value)
-                ? null
-                : RequireIdentifier(value, variableName);
-        }
-
-        private static string ResolveMappedIdentifier(
-            Dictionary<string, string> values,
-            string productCode,
-            string errorMessage)
-        {
-            string value;
-            if (string.IsNullOrWhiteSpace(productCode) ||
-                !values.TryGetValue(productCode, out value) ||
-                string.IsNullOrWhiteSpace(value))
-            {
-                throw new InvalidOperationException(errorMessage);
-            }
-            return value;
         }
 
         private static Uri RequireHttpsOrigin(string value)
@@ -307,39 +146,26 @@ namespace S1Jarvis.Access.Verilic
             Uri uri;
             if (string.IsNullOrWhiteSpace(value) ||
                 !Uri.TryCreate(value.Trim(), UriKind.Absolute, out uri) ||
-                !string.Equals(uri.Scheme, Uri.UriSchemeHttps,
+                !string.Equals(
+                    uri.Scheme,
+                    Uri.UriSchemeHttps,
                     StringComparison.OrdinalIgnoreCase))
             {
                 throw new InvalidOperationException(
                     "S1Jarvis Verilic origin must be an absolute HTTPS URI.");
             }
+
             return uri;
-        }
-
-        private static VerilicInstallationProtectionScope ParseProtectionScope(string value)
-        {
-            if (string.IsNullOrWhiteSpace(value) ||
-                string.Equals(value.Trim(), "CurrentUser",
-                    StringComparison.OrdinalIgnoreCase))
-            {
-                return VerilicInstallationProtectionScope.CurrentUser;
-            }
-
-            if (string.Equals(value.Trim(), "LocalMachine",
-                    StringComparison.OrdinalIgnoreCase))
-            {
-                return VerilicInstallationProtectionScope.LocalMachine;
-            }
-
-            throw new InvalidOperationException(
-                "S1Jarvis Verilic DPAPI scope must be CurrentUser or LocalMachine.");
         }
 
         private static string RequireIdentifier(string value, string variableName)
         {
             if (string.IsNullOrWhiteSpace(value) || value.Length > 200)
+            {
                 throw new InvalidOperationException(
-                    variableName + " must contain a registered Verilic identifier.");
+                    variableName +
+                    " must contain the registered Verilic product-recognition key id.");
+            }
 
             string normalized = value.Trim();
             for (int i = 0; i < normalized.Length; i++)
@@ -347,9 +173,11 @@ namespace S1Jarvis.Access.Verilic
                 if (char.IsControl(normalized[i]) || char.IsWhiteSpace(normalized[i]))
                 {
                     throw new InvalidOperationException(
-                        variableName + " contains an invalid Verilic identifier.");
+                        variableName +
+                        " contains an invalid Verilic product-recognition key id.");
                 }
             }
+
             return normalized;
         }
 
