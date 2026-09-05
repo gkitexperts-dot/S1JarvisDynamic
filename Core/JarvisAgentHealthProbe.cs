@@ -16,6 +16,7 @@ namespace S1Jarvis.Core
         public string AgentAccountRef { get; set; }
         public string Provider { get; set; }
         public string Model { get; set; }
+        public string RuntimeTransport { get; set; }
         public string ApiKey { get; set; }
         public bool Inherited { get; set; }
         public string DiagnosticCode { get; set; }
@@ -75,8 +76,8 @@ namespace S1Jarvis.Core
 
     /// <summary>
     /// Boot/HEALTH provisioning uses the same canonical NativeS1 /verify contract
-    /// as licensing. The response owns provider/model selection and carries the
-    /// provider credential only as an AES-GCM envelope derived from the compiled
+    /// as licensing. The response owns provider/model/transport selection and carries
+    /// the provider credential only as an AES-GCM envelope derived from the compiled
     /// product recognition secret. No ApiUsername/clientKey/access-check path is used.
     /// </summary>
     internal sealed class JarvisAgentHealthProbe
@@ -165,6 +166,7 @@ namespace S1Jarvis.Core
                     string agentAccountRef = ReadRequired(target, "agentAccountRef");
                     string provider = ReadRequired(target, "provider");
                     string model = ReadRequired(target, "model");
+                    string runtimeTransport = ReadOptional(target, "runtimeTransport");
                     JObject encryptedCredential = target["credential"] as JObject;
                     if (encryptedCredential == null)
                         throw new InvalidOperationException("provider_credential_envelope_missing");
@@ -194,13 +196,12 @@ namespace S1Jarvis.Core
                         AgentAccountRef = agentAccountRef,
                         Provider = provider,
                         Model = model,
+                        RuntimeTransport = runtimeTransport,
                         ApiKey = apiKey,
                         Inherited = inherited
                     });
                 }
 
-                // expectedModel is intentionally not authoritative. NativeS1 /verify
-                // owns model selection; callers may observe the returned model only.
                 string defaultProvider = ReadRequired(defaultTarget, "provider");
                 string defaultModel = ReadRequired(defaultTarget, "model");
                 DebugLog.Log("[AI-SESSION-REGISTRY] NativeS1 /verify provisioning accepted; targets=" +
@@ -268,14 +269,20 @@ namespace S1Jarvis.Core
 
         private static string ReadRequired(JObject source, string propertyName)
         {
+            string value = ReadOptional(source, propertyName);
+            if (string.IsNullOrWhiteSpace(value))
+                throw new InvalidOperationException("runtime_configuration_missing_" + propertyName);
+            return value;
+        }
+
+        private static string ReadOptional(JObject source, string propertyName)
+        {
             if (source == null)
                 throw new InvalidOperationException("runtime_configuration_invalid");
 
             JToken value = source[propertyName];
             string text = value == null ? null : value.ToString();
-            if (string.IsNullOrWhiteSpace(text))
-                throw new InvalidOperationException("runtime_configuration_missing_" + propertyName);
-            return text.Trim();
+            return string.IsNullOrWhiteSpace(text) ? null : text.Trim();
         }
     }
 }
