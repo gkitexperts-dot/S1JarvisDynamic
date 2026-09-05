@@ -373,8 +373,8 @@ namespace S1Jarvis.Access.Verilic
                     JObject normalized = NormalizeChat(parsed);
                     return Success(agentName, target, normalized.ToString(Formatting.None),
                         FirstText(normalized["content"] as JArray),
-                        ReadInt(parsed["usage"]?["prompt_tokens"]),
-                        ReadInt(parsed["usage"]?["completion_tokens"]));
+                        ReadNestedInt(parsed, "usage", "prompt_tokens"),
+                        ReadNestedInt(parsed, "usage", "completion_tokens"));
                 }
             }
         }
@@ -504,8 +504,8 @@ namespace S1Jarvis.Access.Verilic
                 ["stop_reason"] = calls != null && calls.Count > 0 ? "tool_use" : (finish == "length" ? "max_tokens" : "end_turn"),
                 ["usage"] = new JObject
                 {
-                    ["input_tokens"] = ReadInt(response["usage"]?["prompt_tokens"]),
-                    ["output_tokens"] = ReadInt(response["usage"]?["completion_tokens"])
+                    ["input_tokens"] = ReadNestedInt(response, "usage", "prompt_tokens"),
+                    ["output_tokens"] = ReadNestedInt(response, "usage", "completion_tokens")
                 }
             };
         }
@@ -533,8 +533,8 @@ namespace S1Jarvis.Access.Verilic
                     JObject normalized = NormalizeGoogle(parsed);
                     return Success(agentName, target, normalized.ToString(Formatting.None),
                         FirstText(normalized["content"] as JArray),
-                        ReadInt(parsed["usageMetadata"]?["promptTokenCount"]),
-                        ReadInt(parsed["usageMetadata"]?["candidatesTokenCount"]));
+                        ReadNestedInt(parsed, "usageMetadata", "promptTokenCount"),
+                        ReadNestedInt(parsed, "usageMetadata", "candidatesTokenCount"));
                 }
             }
         }
@@ -620,7 +620,8 @@ namespace S1Jarvis.Access.Verilic
             var content = new JArray();
             bool hasTool = false;
             JObject candidate = (response["candidates"] as JArray)?.OfType<JObject>().FirstOrDefault();
-            JArray parts = candidate?["content"]?["parts"] as JArray;
+            JObject candidateContent = candidate?["content"] as JObject;
+            JArray parts = candidateContent?["parts"] as JArray;
             if (parts != null)
             {
                 foreach (JObject part in parts.OfType<JObject>())
@@ -635,7 +636,7 @@ namespace S1Jarvis.Access.Verilic
                     }
                 }
             }
-            return new JObject { ["content"] = content, ["stop_reason"] = hasTool ? "tool_use" : "end_turn", ["usage"] = new JObject { ["input_tokens"] = ReadInt(response["usageMetadata"]?["promptTokenCount"]), ["output_tokens"] = ReadInt(response["usageMetadata"]?["candidatesTokenCount"]) } };
+            return new JObject { ["content"] = content, ["stop_reason"] = hasTool ? "tool_use" : "end_turn", ["usage"] = new JObject { ["input_tokens"] = ReadNestedInt(response, "usageMetadata", "promptTokenCount"), ["output_tokens"] = ReadNestedInt(response, "usageMetadata", "candidatesTokenCount") } };
         }
 
         private static StringContent JsonContent(JObject value)
