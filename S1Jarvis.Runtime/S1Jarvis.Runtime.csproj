@@ -3,7 +3,8 @@
 
   <Import Project="$(MSBuildExtensionsPath)\$(MSBuildToolsVersion)\Microsoft.Common.props"
           Condition="Exists('$(MSBuildExtensionsPath)\$(MSBuildToolsVersion)\Microsoft.Common.props')" />
-  <Import Project="..\VerilicRecognition.local.props" Condition="Exists('..\VerilicRecognition.local.props')" />
+  <Import Project="$(MSBuildProjectDirectory)\..\VerilicRecognition.local.props"
+          Condition="Exists('$(MSBuildProjectDirectory)\..\VerilicRecognition.local.props')" />
 
   <PropertyGroup>
     <Configuration Condition=" '$(Configuration)' == '' ">Debug</Configuration>
@@ -80,8 +81,11 @@
   </ItemGroup>
 
   <ItemGroup>
-    <Compile Include="..\Access\**\*.cs">
+    <Compile Include="..\Access\**\*.cs" Exclude="..\Access\JarvisProducts.cs">
       <Link>Access\%(RecursiveDir)%(Filename)%(Extension)</Link>
+    </Compile>
+    <Compile Include="..\Access\JarvisProducts.cs">
+      <Link>Access\JarvisProducts.cs</Link>
     </Compile>
     <Compile Include="..\Core\**\*.cs">
       <Link>Core\%(RecursiveDir)%(Filename)%(Extension)</Link>
@@ -138,11 +142,6 @@
     </EmbeddedResource>
   </ItemGroup>
 
-  <!--
-    NativeS1 recognition credentials are build-time product credentials.
-    Each embedded product has an independent Key ID + Secret so Verilic rotation
-    can be performed per product. Customer PCs require no local credential setup.
-  -->
   <Target Name="GenerateVerilicRecognitionMetadata" BeforeTargets="CoreCompile">
     <Error Condition="'$(VerilicJarvisRecognitionKeyId)' == ''" Text="VerilicJarvisRecognitionKeyId is required." />
     <Error Condition="'$(VerilicJarvisRecognitionSecret)' == ''" Text="VerilicJarvisRecognitionSecret is required." />
