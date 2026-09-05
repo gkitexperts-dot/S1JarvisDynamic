@@ -22,7 +22,7 @@ namespace S1Jarvis.Access
 
         private static IJarvisRuntimeAccessProvider CreateRuntimeAccessProvider()
         {
-            return new VerilicNativeS1RuntimeAccessProvider(
+            return new VerilicContractRuntimeAccessProvider(
                 new VerilicRuntimeLicenceProvider());
         }
 
@@ -75,9 +75,7 @@ namespace S1Jarvis.Access
                     if (httpField == null || httpField.FieldType != typeof(HttpClient))
                         return;
 
-                    httpField.SetValue(
-                        null,
-                        new HttpClient(new VerilicDrVisionBridgeHandler(), true));
+                    httpField.SetValue(null, new HttpClient(new VerilicDrVisionBridgeHandler(), true));
                     _drVisionBridgeInstalled = true;
                 }
                 catch (Exception ex)
@@ -95,65 +93,49 @@ namespace S1Jarvis.Access
                 CancellationToken cancellationToken)
             {
                 if (request == null || request.RequestUri == null ||
-                    !string.Equals(
-                        request.RequestUri.AbsolutePath,
-                        "/agent/vision",
-                        StringComparison.OrdinalIgnoreCase))
+                    !string.Equals(request.RequestUri.AbsolutePath, "/agent/vision", StringComparison.OrdinalIgnoreCase))
                 {
-                    return CreateJsonResponse(
-                        HttpStatusCode.NotFound,
-                        new AgentProxyResponse
-                        {
-                            Success = false,
-                            ErrorMessage = "Μη υποστηριζόμενη τοπική διαδρομή AI."
-                        });
+                    return CreateJsonResponse(HttpStatusCode.NotFound, new AgentProxyResponse
+                    {
+                        Success = false,
+                        ErrorMessage = "Μη υποστηριζόμενη τοπική διαδρομή AI."
+                    });
                 }
 
                 try
                 {
-                    string json = request.Content == null
-                        ? string.Empty
-                        : await request.Content.ReadAsStringAsync();
-                    AgentProxyRequest legacyRequest =
-                        JsonConvert.DeserializeObject<AgentProxyRequest>(json);
-                    if (legacyRequest == null ||
-                        string.IsNullOrWhiteSpace(legacyRequest.AnthropicRequestJson))
+                    string json = request.Content == null ? string.Empty : await request.Content.ReadAsStringAsync();
+                    AgentProxyRequest legacyRequest = JsonConvert.DeserializeObject<AgentProxyRequest>(json);
+                    if (legacyRequest == null || string.IsNullOrWhiteSpace(legacyRequest.AnthropicRequestJson))
                     {
-                        return CreateJsonResponse(
-                            HttpStatusCode.OK,
-                            new AgentProxyResponse
-                            {
-                                Success = false,
-                                ErrorMessage = "Το αίτημα ανάγνωσης παραστατικού δεν είναι έγκυρο."
-                            });
+                        return CreateJsonResponse(HttpStatusCode.OK, new AgentProxyResponse
+                        {
+                            Success = false,
+                            ErrorMessage = "Το αίτημα ανάγνωσης παραστατικού δεν είναι έγκυρο."
+                        });
                     }
 
                     XSupport xSupport = GetCurrentXSupport();
                     if (xSupport == null)
                     {
-                        return CreateJsonResponse(
-                            HttpStatusCode.OK,
-                            new AgentProxyResponse
-                            {
-                                Success = false,
-                                ErrorMessage = "Δεν είναι διαθέσιμο το τρέχον Soft1 runtime context."
-                            });
+                        return CreateJsonResponse(HttpStatusCode.OK, new AgentProxyResponse
+                        {
+                            Success = false,
+                            ErrorMessage = "Δεν είναι διαθέσιμο το τρέχον Soft1 runtime context."
+                        });
                     }
 
-                    string providerRequestJson =
-                        EnsureDrOutputBudget(legacyRequest.AnthropicRequestJson);
+                    string providerRequestJson = EnsureDrOutputBudget(legacyRequest.AnthropicRequestJson);
                     AgentProxyResponse result = await new VerilicAiMessagesClient().SendAsync(
                         xSupport,
                         "Atlas",
                         providerRequestJson,
                         cancellationToken);
 
-                    if (result != null && result.Success &&
-                        IsOutputTruncated(result.RawResponseJson))
+                    if (result != null && result.Success && IsOutputTruncated(result.RawResponseJson))
                     {
                         result.Success = false;
-                        result.ErrorMessage =
-                            "Η απάντηση του AI κόπηκε πριν ολοκληρωθεί η ανάγνωση του παραστατικού. Δοκίμασε ξανά.";
+                        result.ErrorMessage = "Η απάντηση του AI κόπηκε πριν ολοκληρωθεί η ανάγνωση του παραστατικού. Δοκίμασε ξανά.";
                         result.RawResponseJson = string.Empty;
                     }
 
@@ -165,13 +147,11 @@ namespace S1Jarvis.Access
                 }
                 catch
                 {
-                    return CreateJsonResponse(
-                        HttpStatusCode.OK,
-                        new AgentProxyResponse
-                        {
-                            Success = false,
-                            ErrorMessage = "Η ασφαλής ανάγνωση παραστατικού δεν μπόρεσε να ολοκληρωθεί."
-                        });
+                    return CreateJsonResponse(HttpStatusCode.OK, new AgentProxyResponse
+                    {
+                        Success = false,
+                        ErrorMessage = "Η ασφαλής ανάγνωση παραστατικού δεν μπόρεσε να ολοκληρωθεί."
+                    });
                 }
             }
 
@@ -222,13 +202,9 @@ namespace S1Jarvis.Access
             }
         }
 
-        public static AccessCheckResponse CheckAccessSilent(
-            XSupport xSupport,
-            string toolName = null)
+        public static AccessCheckResponse CheckAccessSilent(XSupport xSupport, string toolName = null)
         {
-            return CheckRuntimeAccessSilent(
-                    xSupport,
-                    toolName ?? JarvisProducts.Jarvis)
+            return CheckRuntimeAccessSilent(xSupport, toolName ?? JarvisProducts.Jarvis)
                 .ToLegacyCompatibilityResponse();
         }
 
