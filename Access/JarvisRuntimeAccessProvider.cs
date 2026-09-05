@@ -43,10 +43,10 @@ namespace S1Jarvis.Access
 
     /// <summary>
     /// Verilic is the only licensing authority. NativeS1 verification receives
-    /// the active Soft1 identity. The older routing provider is retained only as
-    /// a compatibility layer for existing agent execution until the encrypted
-    /// NativeS1 AI envelope is consumed directly; it can never turn a licence or
-    /// runtime-readiness denial into an allow.
+    /// the active Soft1 identity. For a NativeS1 verification result, AI runtime
+    /// material is supplied by /api/licensing/v1/verify and loaded into the
+    /// session registry at BOOT/explicit HEALTH. The old installation routing
+    /// provider is therefore never consulted for a NativeS1 decision.
     /// </summary>
     internal sealed class SplitVerilicRuntimeAccessProvider : IJarvisRuntimeAccessProvider
     {
@@ -79,6 +79,14 @@ namespace S1Jarvis.Access
                         licence == null ? null : licence.RuntimeReasonCode));
             }
 
+            // NativeS1 /verify is authoritative and already carries the encrypted
+            // AI configuration. Do not make an installation-bound /routing/resolve
+            // request after a NativeS1 licence decision.
+            if (licence.Verification != null)
+                return JarvisRuntimeAccessResult.Create(
+                    licence, JarvisAgentRoutingDecision.None());
+
+            // Compatibility only for non-NativeS1/older composition callers.
             if (!string.Equals(productCode, JarvisProducts.Jarvis, StringComparison.Ordinal) ||
                 _routing == null)
                 return JarvisRuntimeAccessResult.Create(
