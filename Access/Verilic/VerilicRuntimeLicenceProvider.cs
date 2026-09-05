@@ -4,6 +4,14 @@ using S1Jarvis.Access;
 
 namespace S1Jarvis.Access.Verilic
 {
+    internal sealed class VerilicNativeS1VerificationSession
+    {
+        internal VerilicRuntimeConfiguration Configuration { get; set; }
+        internal VerilicProductRecognitionCredential Credential { get; set; }
+        internal VerilicVerifyLicenceResult Verification { get; set; }
+        internal VerilicVerifyProductResult Product { get; set; }
+    }
+
     internal interface IVerilicRuntimeLicenceProvider
     {
         JarvisLicenceAccessDecision Check(XSupport xSupport, string productCode);
@@ -20,46 +28,11 @@ namespace S1Jarvis.Access.Verilic
 
             try
             {
-                VerilicRuntimeConfiguration configuration =
-                    VerilicRuntimeConfiguration.Load();
-                VerilicProductRecognitionCredential credential =
-                    configuration.ResolveProductCredential(productCode);
-
-                var connection = xSupport.ConnectionInfo;
-                if (connection == null)
-                {
-                    return JarvisLicenceAccessDecision.Deny(
-                        productCode,
-                        "verification_request_invalid");
-                }
-
-                var request = new VerilicVerifyLicenceRequest
-                {
-                    ProductId = credential.ProductId,
-                    ProductVersion = configuration.ProductVersion,
-                    RuntimeContext = new VerilicRuntimeContext
-                    {
-                        Soft1Serial = connection.SerialNum == null
-                            ? string.Empty
-                            : connection.SerialNum.ToString(),
-                        CompanyCode = connection.CompanyId.ToString(),
-                        BranchCode = connection.BranchId.ToString(),
-                        Soft1UserId = connection.UserId.ToString()
-                    }
-                };
-
-                var authorizer = new VerilicRecognitionRequestAuthorizer(
-                    credential.KeyId,
-                    credential.Secret);
-                var transport = new VerilicLicenceHttpTransport(
-                    configuration.VerificationUri,
-                    authorizer);
-
-                VerilicVerifyLicenceResult verification = transport.Verify(request);
+                VerilicNativeS1VerificationSession session = Verify(xSupport, productCode);
                 return JarvisLicenceAccessDecision.FromVerilic(
                     productCode,
-                    credential.ProductId,
-                    verification);
+                    session.Credential.ProductId,
+                    session.Verification);
             }
             catch (Exception ex)
             {
@@ -76,6 +49,59 @@ namespace S1Jarvis.Access.Verilic
                     productCode,
                     "verification_failed");
             }
+        }
+
+        internal static VerilicNativeS1VerificationSession Verify(
+            XSupport xSupport,
+            string productCode)
+        {
+            if (xSupport == null)
+                throw new ArgumentNullException(nameof(xSupport));
+            if (string.IsNullOrWhiteSpace(productCode))
+                throw new ArgumentException("Product code is required.", nameof(productCode));
+
+            VerilicRuntimeConfiguration configuration =
+                VerilicRuntimeConfiguration.Load();
+            VerilicProductRecognitionCredential credential =
+                configuration.ResolveProductCredential(productCode);
+
+            var connection = xSupport.ConnectionInfo;
+            if (connection == null)
+                throw new InvalidOperationException("Soft1 connection identity is unavailable.");
+
+            var request = new VerilicVerifyLicenceRequest
+            {
+                ProductId = credential.ProductId,
+                ProductVersion = configuration.ProductVersion,
+                RuntimeContext = new VerilicRuntimeContext
+                {
+                    Soft1Serial = connection.SerialNum == null
+                        ? string.Empty
+                        : connection.SerialNum.ToString(),
+                    CompanyCode = connection.CompanyId.ToString(),
+                    BranchCode = connection.BranchId.ToString(),
+                    Soft1UserId = connection.UserId.ToString()
+                }
+            };
+
+            var authorizer = new VerilicRecognitionRequestAuthorizer(
+                credential.KeyId,
+                credential.Secret);
+            var transport = new VerilicLicenceHttpTransport(
+                configuration.VerificationUri,
+                authorizer);
+
+            VerilicVerifyLicenceResult verification = transport.Verify(request);
+            if (verification == null)
+                throw new InvalidOperationException("verification_response_invalid");
+
+            return new VerilicNativeS1VerificationSession
+            {
+                Configuration = configuration,
+                Credential = credential,
+                Verification = verification,
+                Product = verification.FindRequestedProduct(credential.ProductId)
+            };
         }
     }
 }

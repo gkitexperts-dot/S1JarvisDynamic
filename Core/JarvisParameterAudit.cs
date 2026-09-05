@@ -14,7 +14,6 @@ namespace S1Jarvis.Core
         }
 
         private static readonly int[] RequiredNumeric = { 500008, 500012, 500017 };
-        private static readonly int[] RuntimeRequiredString = { 500060, 500061 };
         private static readonly int[] FeatureScopedRequiredString = { 500019, 500020, 500021 };
 
         public static Result Run(XSupport xSupport)
@@ -45,9 +44,6 @@ namespace S1Jarvis.Core
 
                 foreach (int code in RequiredNumeric)
                     AuditNumeric(xSupport, code, true, result);
-
-                foreach (int code in RuntimeRequiredString)
-                    AuditString(xSupport, code, true, result);
 
                 foreach (int code in FeatureScopedRequiredString)
                     AuditString(xSupport, code, false, result);
@@ -128,7 +124,7 @@ namespace S1Jarvis.Core
                     if (globallyRequired) result.MissingRequired.Add(code);
                     DebugLog.Log("[PARAM-AUDIT] missing string param " + code +
                                  (globallyRequired
-                                     ? " (required for Verilic runtime boot)"
+                                     ? " (required by feature)"
                                      : " (feature-scoped; Jarvis boot continues)"));
                 }
             }
