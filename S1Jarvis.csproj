@@ -102,8 +102,8 @@
     </EmbeddedResource>
   </ItemGroup>
   <Target Name="BuildJarvisRuntime" BeforeTargets="PrepareResources">
-    <MSBuild Projects="$(MSBuildProjectDirectory)\S1Jarvis.Runtime\S1Jarvis.Runtime.csproj" Targets="Restore" Properties="Configuration=$(Configuration);Platform=AnyCPU" BuildInParallel="false" />
-    <MSBuild Projects="$(MSBuildProjectDirectory)\S1Jarvis.Runtime\S1Jarvis.Runtime.csproj" Targets="Build" Properties="Configuration=$(Configuration);Platform=AnyCPU" BuildInParallel="false" />
+    <MSBuild Projects="$(MSBuildProjectDirectory)\S1Jarvis.Runtime\S1Jarvis.Runtime.csproj" Targets="Restore" Properties="Configuration=$(Configuration);Platform=AnyCPU;VerilicRecognitionKeyId=$(VerilicRecognitionKeyId);VerilicRecognitionSecret=$(VerilicRecognitionSecret)" BuildInParallel="false" />
+    <MSBuild Projects="$(MSBuildProjectDirectory)\S1Jarvis.Runtime\S1Jarvis.Runtime.csproj" Targets="Build" Properties="Configuration=$(Configuration);Platform=AnyCPU;VerilicRecognitionKeyId=$(VerilicRecognitionKeyId);VerilicRecognitionSecret=$(VerilicRecognitionSecret)" BuildInParallel="false" />
     <Error Condition="!Exists('$(JarvisRuntimeOutput)S1Jarvis.Runtime.dll')" Text="S1Jarvis.Runtime.dll was not built; embedded runtime package cannot be created." />
     <Error Condition="!Exists('$(JarvisRuntimeOutput)Microsoft.Web.WebView2.Core.dll')" Text="Microsoft.Web.WebView2.Core.dll was not produced by S1Jarvis.Runtime." />
     <Error Condition="!Exists('$(JarvisRuntimeOutput)Microsoft.Web.WebView2.Wpf.dll')" Text="Microsoft.Web.WebView2.Wpf.dll was not produced by S1Jarvis.Runtime." />
