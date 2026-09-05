@@ -109,16 +109,22 @@ namespace S1Jarvis.Core
             }
         }
 
-        internal static async Task RunAndLogSafeAsync(XSupport xSupport, string userPrompt)
+        internal static Task RunAndLogSafeAsync(XSupport xSupport, string userPrompt)
         {
-            try
+            // Shadow orchestration is diagnostic-only and must never sit on the
+            // interactive chat critical path. Run it detached from the caller so
+            // a slow provider/decomposer cannot delay the real Atlas response.
+            return Task.Run(async () =>
             {
-                await RunAsync(xSupport, userPrompt);
-            }
-            catch (Exception ex)
-            {
-                DebugLog.Log("[ORCH-SHADOW] UNHANDLED SUPPRESSED: " + ex);
-            }
+                try
+                {
+                    await RunAsync(xSupport, userPrompt).ConfigureAwait(false);
+                }
+                catch (Exception ex)
+                {
+                    DebugLog.Log("[ORCH-SHADOW] UNHANDLED SUPPRESSED: " + ex);
+                }
+            });
         }
 
         private static void LogResult(JarvisShadowOrchestrationResult result, string prompt)

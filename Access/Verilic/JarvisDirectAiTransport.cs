@@ -259,7 +259,7 @@ namespace S1Jarvis.Access.Verilic
                 {
                     string text = (string)(block["text"] ?? block["thinking"]);
                     if (!string.IsNullOrEmpty(text))
-                        messageContent.Add(new JObject { ["type"] = "input_text", ["text"] = text });
+                        messageContent.Add(new JObject { ["type"] = role == "assistant" ? "output_text" : "input_text", ["text"] = text });
                 }
                 else if (type == "image")
                 {
