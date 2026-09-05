@@ -1,4 +1,5 @@
 using System;
+using Newtonsoft.Json.Linq;
 using S1Jarvis.Access.Verilic;
 
 namespace S1Jarvis.Access
@@ -39,8 +40,9 @@ namespace S1Jarvis.Access
             };
         }
 
-        // Compatibility parser for historical /verify DTOs. No current Jarvis
-        // boot path calls this method.
+        // Compatibility parser for the NativeS1 /verify DTO. The boot path owns
+        // provisioning; this parser lets older in-process UI callers reuse that
+        // exact boot response without issuing another network verification.
         public static JarvisLicenceAccessDecision FromVerilic(
             string productCode,
             string requestedProductId,
@@ -78,6 +80,7 @@ namespace S1Jarvis.Access
                 ToolName = productCode,
                 Message = message,
                 ValidUntil = validUntil.HasValue ? validUntil.Value.ToUniversalTime().ToString("o") : null,
+                AgentAccountRef = ExtractSingleDefaultAgentAccountRef(product),
                 Verification = result,
                 Product = product
             };
@@ -93,6 +96,35 @@ namespace S1Jarvis.Access
                 ToolName = productCode,
                 Message = SafeReason(reasonCode)
             };
+        }
+
+        private static string ExtractSingleDefaultAgentAccountRef(VerilicVerifyProductResult product)
+        {
+            if (product == null || product.AiConfigurations == null)
+                return null;
+
+            string found = null;
+            foreach (JObject configuration in product.AiConfigurations)
+            {
+                JObject target = configuration == null
+                    ? null
+                    : configuration["defaultTarget"] as JObject;
+                string candidate = target == null
+                    ? null
+                    : target["agentAccountRef"] == null
+                        ? null
+                        : target["agentAccountRef"].ToString();
+
+                if (string.IsNullOrWhiteSpace(candidate))
+                    continue;
+
+                candidate = candidate.Trim();
+                if (found != null && !string.Equals(found, candidate, StringComparison.Ordinal))
+                    return null;
+                found = candidate;
+            }
+
+            return found;
         }
 
         private static string SafeReason(string reasonCode)
