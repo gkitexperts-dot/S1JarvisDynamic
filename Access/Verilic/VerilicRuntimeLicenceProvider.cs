@@ -1,5 +1,6 @@
 using System;
 using Softone;
+using S1Jarvis.Access;
 
 namespace S1Jarvis.Access.Verilic
 {
@@ -8,13 +9,6 @@ namespace S1Jarvis.Access.Verilic
         JarvisLicenceAccessDecision Check(XSupport xSupport, string productCode);
     }
 
-    /// <summary>
-    /// Runtime authorization is deliberately workstation-independent:
-    /// 1) authenticate ApiUsername/ApiValue from Soft1 cccParams and receive a
-    ///    short-lived clientKey from Verilic;
-    /// 2) call /access/check with that clientKey plus the active Soft1
-    ///    Serial + Company + Branch + User + ToolName.
-    /// </summary>
     internal sealed class VerilicRuntimeLicenceProvider : IVerilicRuntimeLicenceProvider
     {
         public JarvisLicenceAccessDecision Check(XSupport xSupport, string productCode)
