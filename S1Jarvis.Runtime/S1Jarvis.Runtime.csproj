@@ -137,5 +137,36 @@
     </EmbeddedResource>
   </ItemGroup>
 
+  <!--
+    NativeS1 product recognition is a build-time product credential.
+    Supply VerilicRecognitionKeyId and VerilicRecognitionSecret as MSBuild
+    properties (or build-process environment properties). They are compiled
+    into S1Jarvis.Runtime.dll as assembly metadata; customer PCs require no
+    Recognition environment variables or local provisioning.
+  -->
+  <Target Name="GenerateVerilicRecognitionMetadata" BeforeTargets="CoreCompile">
+    <Error Condition="'$(VerilicRecognitionKeyId)' == ''"
+           Text="VerilicRecognitionKeyId is required to build S1JARVIS NativeS1 runtime." />
+    <Error Condition="'$(VerilicRecognitionSecret)' == ''"
+           Text="VerilicRecognitionSecret is required to build S1JARVIS NativeS1 runtime." />
+
+    <ItemGroup>
+      <_VerilicAssemblyAttribute Include="System.Reflection.AssemblyMetadataAttribute">
+        <_Parameter1>VerilicRecognitionKeyId</_Parameter1>
+        <_Parameter2>$(VerilicRecognitionKeyId)</_Parameter2>
+      </_VerilicAssemblyAttribute>
+      <_VerilicAssemblyAttribute Include="System.Reflection.AssemblyMetadataAttribute">
+        <_Parameter1>VerilicRecognitionSecret</_Parameter1>
+        <_Parameter2>$(VerilicRecognitionSecret)</_Parameter2>
+      </_VerilicAssemblyAttribute>
+    </ItemGroup>
+
+    <WriteCodeFragment Language="C#"
+                       OutputFile="$(IntermediateOutputPath)VerilicRecognitionCredentials.g.cs"
+                       AssemblyAttributes="@(_VerilicAssemblyAttribute)">
+      <Output TaskParameter="OutputFile" ItemName="Compile" />
+    </WriteCodeFragment>
+  </Target>
+
   <Import Project="$(MSBuildToolsPath)\Microsoft.CSharp.targets" />
 </Project>
