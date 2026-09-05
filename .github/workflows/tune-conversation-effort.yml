@@ -1,0 +1,41 @@
+name: Tune conversation effort
+
+on:
+  push:
+    branches:
+      - fix/native-s1-boot-verification
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: fix/native-s1-boot-verification
+      - name: Tune conversational reasoning effort
+        shell: python
+        run: |
+          from pathlib import Path
+
+          p = Path('Access/Verilic/VerilicProviderRequestOptimizer.cs')
+          s = p.read_text(encoding='utf-8-sig')
+          old = '''                if (IsClearlyConversational(userText) && !HasStructuredCurrentUserContent(messages))\n                {\n                    request["tools"] = new JArray();\n                    request["system"] = CompactSystem(\n                        BuildConversationalPrompt(agentName, contextLine, durableContext));\n                    request["max_tokens"] = ConversationalMaxOutputTokens;\n                    CompactPlainTextHistory(request, ConversationalHistoryMessages);'''
+          new = '''                if (IsClearlyConversational(userText) && !HasStructuredCurrentUserContent(messages))\n                {\n                    request["tools"] = new JArray();\n                    request["system"] = CompactSystem(\n                        BuildConversationalPrompt(agentName, contextLine, durableContext));\n                    request["max_tokens"] = ConversationalMaxOutputTokens;\n\n                    // Conversation fast path: this is an intent-level neutral reasoning\n                    // control, not a provider/model branch. Simple greetings/identity\n                    // questions do not need medium reasoning effort. Provider adapters\n                    // translate this neutral control to their native wire format.\n                    JObject outputConfig = request["output_config"] as JObject;\n                    if (outputConfig == null)\n                    {\n                        outputConfig = new JObject();\n                        request["output_config"] = outputConfig;\n                    }\n                    outputConfig["effort"] = "low";\n\n                    CompactPlainTextHistory(request, ConversationalHistoryMessages);'''
+          count = s.count(old)
+          if count != 1:
+              raise SystemExit(f'expected one conversational optimizer block, got {count}')
+          s = s.replace(old, new, 1)
+          p.write_text(s, encoding='utf-8-sig')
+      - name: Run routing policy check
+        run: python scripts/verify_ai_routing_policy.py
+      - name: Commit latency fix
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add Access/Verilic/VerilicProviderRequestOptimizer.cs
+          git commit -m "Use low reasoning effort for conversational fast path"
+          git push origin HEAD:fix/native-s1-boot-verification
