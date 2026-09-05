@@ -10,18 +10,18 @@ namespace S1Jarvis.Access.Verilic
     }
 
     /// <summary>
-    /// Configuration for the single supported Verilic NativeS1 contract.
-    /// The runtime exposes only /api/licensing/v1/verify plus product recognition.
-    /// There is no Nexus mode, local installation state, activation licence id,
-    /// device binding, routing/resolve endpoint or provider-health endpoint here.
+    /// Configuration for the single supported Verilic NativeS1 startup contract.
+    /// Product-recognition credentials are compiled into the runtime at build time.
+    /// They are product-level credentials shared by every installation of the same
+    /// compiled S1JARVIS build; no PC/user environment provisioning is required.
     /// </summary>
     internal sealed class VerilicRuntimeConfiguration
     {
         private const string OriginVariable = "S1JARVIS_VERILIC_ORIGIN";
-        private const string RecognitionKeyIdVariable =
-            "S1JARVIS_VERILIC_RECOGNITION_KEY_ID";
-        private const string RecognitionSecretVariable =
-            "S1JARVIS_VERILIC_RECOGNITION_SECRET";
+        private const string RecognitionKeyIdMetadata =
+            "VerilicRecognitionKeyId";
+        private const string RecognitionSecretMetadata =
+            "VerilicRecognitionSecret";
 
         private const string DefaultOrigin = "https://verilic.gr";
 
@@ -73,21 +73,25 @@ namespace S1Jarvis.Access.Verilic
 
         public static VerilicRuntimeConfiguration Load()
         {
-            string originText = ReadDeploymentValue(OriginVariable);
+            string originText = Environment.GetEnvironmentVariable(OriginVariable);
             if (string.IsNullOrWhiteSpace(originText))
                 originText = DefaultOrigin;
 
             Uri origin = RequireHttpsOrigin(originText);
+
+            // The Recognition credential is deployment/build material, not runtime
+            // machine configuration. The build injects it as assembly metadata into
+            // S1Jarvis.Runtime.dll; every customer receives the same compiled product
+            // credential until the next Verilic Rotate + grace-period rollout.
             string recognitionKeyId = RequireIdentifier(
-                ReadDeploymentValue(RecognitionKeyIdVariable),
-                RecognitionKeyIdVariable);
-            string recognitionSecret = ReadDeploymentValue(RecognitionSecretVariable);
+                ReadBuildMetadata(RecognitionKeyIdMetadata),
+                RecognitionKeyIdMetadata);
+            string recognitionSecret = ReadBuildMetadata(RecognitionSecretMetadata);
             if (string.IsNullOrWhiteSpace(recognitionSecret) ||
                 recognitionSecret.Length > 4096)
             {
                 throw new InvalidOperationException(
-                    RecognitionSecretVariable +
-                    " is required by the Verilic NativeS1 /verify contract.");
+                    "S1JARVIS was built without a valid Verilic Recognition secret.");
             }
 
             var productIds = new Dictionary<string, string>(StringComparer.Ordinal)
@@ -105,38 +109,22 @@ namespace S1Jarvis.Access.Verilic
                 recognitionSecret.Trim());
         }
 
-        /// <summary>
-        /// Product-recognition credentials are deployment material for the new
-        /// NativeS1 contract. They are intentionally not obtained from any legacy
-        /// activation/provisioning/installation store. Process values are preferred;
-        /// User/Machine targets are accepted only as normal Windows deployment
-        /// locations for the same NativeS1 credential.
-        /// </summary>
-        private static string ReadDeploymentValue(string name)
+        private static string ReadBuildMetadata(string key)
         {
-            string value = Environment.GetEnvironmentVariable(name);
-            if (!string.IsNullOrWhiteSpace(value))
-                return value.Trim();
+            object[] values = Assembly.GetExecutingAssembly().GetCustomAttributes(
+                typeof(AssemblyMetadataAttribute), false);
 
-            try
+            for (int i = 0; i < values.Length; i++)
             {
-                value = Environment.GetEnvironmentVariable(
-                    name,
-                    EnvironmentVariableTarget.User);
-                if (!string.IsNullOrWhiteSpace(value))
-                    return value.Trim();
+                var metadata = values[i] as AssemblyMetadataAttribute;
+                if (metadata != null &&
+                    string.Equals(metadata.Key, key, StringComparison.Ordinal))
+                {
+                    return string.IsNullOrWhiteSpace(metadata.Value)
+                        ? null
+                        : metadata.Value.Trim();
+                }
             }
-            catch { }
-
-            try
-            {
-                value = Environment.GetEnvironmentVariable(
-                    name,
-                    EnvironmentVariableTarget.Machine);
-                if (!string.IsNullOrWhiteSpace(value))
-                    return value.Trim();
-            }
-            catch { }
 
             return null;
         }
@@ -158,13 +146,13 @@ namespace S1Jarvis.Access.Verilic
             return uri;
         }
 
-        private static string RequireIdentifier(string value, string variableName)
+        private static string RequireIdentifier(string value, string metadataName)
         {
             if (string.IsNullOrWhiteSpace(value) || value.Length > 200)
             {
                 throw new InvalidOperationException(
-                    variableName +
-                    " must contain the registered Verilic product-recognition key id.");
+                    "S1JARVIS was built without a valid Verilic Recognition key id (" +
+                    metadataName + ").");
             }
 
             string normalized = value.Trim();
@@ -173,8 +161,7 @@ namespace S1Jarvis.Access.Verilic
                 if (char.IsControl(normalized[i]) || char.IsWhiteSpace(normalized[i]))
                 {
                     throw new InvalidOperationException(
-                        variableName +
-                        " contains an invalid Verilic product-recognition key id.");
+                        "The compiled Verilic Recognition key id is invalid.");
                 }
             }
 
