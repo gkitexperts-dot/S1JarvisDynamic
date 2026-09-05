@@ -138,26 +138,42 @@
   </ItemGroup>
 
   <!--
-    NativeS1 product recognition is a build-time product credential.
-    Supply VerilicRecognitionKeyId and VerilicRecognitionSecret as MSBuild
-    properties (or build-process environment properties). They are compiled
-    into S1Jarvis.Runtime.dll as assembly metadata; customer PCs require no
-    Recognition environment variables or local provisioning.
+    NativeS1 recognition credentials are build-time product credentials.
+    Each embedded product has an independent Key ID + Secret so Verilic rotation
+    can be performed per product. Customer PCs require no local credential setup.
   -->
   <Target Name="GenerateVerilicRecognitionMetadata" BeforeTargets="CoreCompile">
-    <Error Condition="'$(VerilicRecognitionKeyId)' == ''"
-           Text="VerilicRecognitionKeyId is required to build S1JARVIS NativeS1 runtime." />
-    <Error Condition="'$(VerilicRecognitionSecret)' == ''"
-           Text="VerilicRecognitionSecret is required to build S1JARVIS NativeS1 runtime." />
+    <Error Condition="'$(VerilicJarvisRecognitionKeyId)' == ''" Text="VerilicJarvisRecognitionKeyId is required." />
+    <Error Condition="'$(VerilicJarvisRecognitionSecret)' == ''" Text="VerilicJarvisRecognitionSecret is required." />
+    <Error Condition="'$(VerilicJarvisCourierRecognitionKeyId)' == ''" Text="VerilicJarvisCourierRecognitionKeyId is required." />
+    <Error Condition="'$(VerilicJarvisCourierRecognitionSecret)' == ''" Text="VerilicJarvisCourierRecognitionSecret is required." />
+    <Error Condition="'$(VerilicJarvisDocReaderRecognitionKeyId)' == ''" Text="VerilicJarvisDocReaderRecognitionKeyId is required." />
+    <Error Condition="'$(VerilicJarvisDocReaderRecognitionSecret)' == ''" Text="VerilicJarvisDocReaderRecognitionSecret is required." />
 
     <ItemGroup>
       <_VerilicAssemblyAttribute Include="System.Reflection.AssemblyMetadataAttribute">
-        <_Parameter1>VerilicRecognitionKeyId</_Parameter1>
-        <_Parameter2>$(VerilicRecognitionKeyId)</_Parameter2>
+        <_Parameter1>VerilicJarvisRecognitionKeyId</_Parameter1>
+        <_Parameter2>$(VerilicJarvisRecognitionKeyId)</_Parameter2>
       </_VerilicAssemblyAttribute>
       <_VerilicAssemblyAttribute Include="System.Reflection.AssemblyMetadataAttribute">
-        <_Parameter1>VerilicRecognitionSecret</_Parameter1>
-        <_Parameter2>$(VerilicRecognitionSecret)</_Parameter2>
+        <_Parameter1>VerilicJarvisRecognitionSecret</_Parameter1>
+        <_Parameter2>$(VerilicJarvisRecognitionSecret)</_Parameter2>
+      </_VerilicAssemblyAttribute>
+      <_VerilicAssemblyAttribute Include="System.Reflection.AssemblyMetadataAttribute">
+        <_Parameter1>VerilicJarvisCourierRecognitionKeyId</_Parameter1>
+        <_Parameter2>$(VerilicJarvisCourierRecognitionKeyId)</_Parameter2>
+      </_VerilicAssemblyAttribute>
+      <_VerilicAssemblyAttribute Include="System.Reflection.AssemblyMetadataAttribute">
+        <_Parameter1>VerilicJarvisCourierRecognitionSecret</_Parameter1>
+        <_Parameter2>$(VerilicJarvisCourierRecognitionSecret)</_Parameter2>
+      </_VerilicAssemblyAttribute>
+      <_VerilicAssemblyAttribute Include="System.Reflection.AssemblyMetadataAttribute">
+        <_Parameter1>VerilicJarvisDocReaderRecognitionKeyId</_Parameter1>
+        <_Parameter2>$(VerilicJarvisDocReaderRecognitionKeyId)</_Parameter2>
+      </_VerilicAssemblyAttribute>
+      <_VerilicAssemblyAttribute Include="System.Reflection.AssemblyMetadataAttribute">
+        <_Parameter1>VerilicJarvisDocReaderRecognitionSecret</_Parameter1>
+        <_Parameter2>$(VerilicJarvisDocReaderRecognitionSecret)</_Parameter2>
       </_VerilicAssemblyAttribute>
     </ItemGroup>
 
