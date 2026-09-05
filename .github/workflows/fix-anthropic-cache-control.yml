@@ -1,0 +1,54 @@
+name: Fix Anthropic cache control
+
+on:
+  push:
+    branches:
+      - fix/native-s1-boot-verification
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: fix/native-s1-boot-verification
+      - name: Strip optional cache metadata at Anthropic boundary
+        shell: python
+        run: |
+          from pathlib import Path
+
+          p = Path('Access/Verilic/JarvisDirectAiTransport.cs')
+          s = p.read_text(encoding='utf-8-sig')
+
+          old = '''            // output_config is Jarvis-neutral metadata. Do not leak it onto the\n            // Anthropic wire contract where unknown fields are rejected.\n            request.Remove("output_config");\n\n            using (var message = new HttpRequestMessage(HttpMethod.Post, "https://api.anthropic.com/v1/messages"))'''
+          new = '''            // output_config is Jarvis-neutral metadata. Do not leak it onto the\n            // Anthropic wire contract where unknown fields are rejected.\n            request.Remove("output_config");\n\n            // cache_control is optional optimization metadata, not request semantics.\n            // Jarvis can compose policy/system/tool fragments from several sources and\n            // may legitimately exceed Anthropic's maximum number of cache breakpoints.\n            // Strip the metadata at the provider boundary rather than letting an\n            // otherwise valid request fail with HTTP 400. This keeps the common Jarvis\n            // request provider-neutral and makes Anthropic Messages resilient to future\n            // context/tool composition changes.\n            RemovePropertyRecursive(request, "cache_control");\n\n            using (var message = new HttpRequestMessage(HttpMethod.Post, "https://api.anthropic.com/v1/messages"))'''
+          if s.count(old) != 1:
+              raise SystemExit('Anthropic request preamble not found exactly once')
+          s = s.replace(old, new, 1)
+
+          marker = '''        private static async Task<AgentProxyResponse> SendOpenAiResponsesAsync('''
+          helper = '''        private static void RemovePropertyRecursive(JToken token, string propertyName)\n        {\n            if (token == null || string.IsNullOrWhiteSpace(propertyName)) return;\n\n            JObject obj = token as JObject;\n            if (obj != null)\n            {\n                obj.Remove(propertyName);\n                foreach (JProperty property in obj.Properties().ToList())\n                    RemovePropertyRecursive(property.Value, propertyName);\n                return;\n            }\n\n            JArray array = token as JArray;\n            if (array == null) return;\n            foreach (JToken item in array)\n                RemovePropertyRecursive(item, propertyName);\n        }\n\n'''
+          if s.count(marker) != 1:
+              raise SystemExit('OpenAI method marker not found exactly once')
+          s = s.replace(marker, helper + marker, 1)
+
+          p.write_text(s, encoding='utf-8-sig')
+
+          text = p.read_text(encoding='utf-8-sig')
+          if 'RemovePropertyRecursive(request, "cache_control")' not in text:
+              raise SystemExit('Anthropic cache-control sanitizer missing')
+      - name: Run repository guards
+        run: |
+          python3 scripts/verify_ai_routing_policy.py
+          python3 scripts/verify_policy_consolidation.py
+      - name: Commit repair
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add Access/Verilic/JarvisDirectAiTransport.cs
+          git commit -m "Harden Anthropic cache control handling"
+          git push origin HEAD:fix/native-s1-boot-verification
