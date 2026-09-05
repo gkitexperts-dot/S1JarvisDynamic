@@ -35,6 +35,13 @@ namespace S1Jarvis.Access.Verilic
         static JarvisDirectAiTransport()
         {
             ServicePointManager.SecurityProtocol = SecurityProtocolType.Tls12 | SecurityProtocolType.Tls13;
+
+            // HttpClient defaults to a 100-second global timeout. That global
+            // timeout was silently overriding the explicit per-transport CTS
+            // values below (ResponsesTimeout is 5 minutes), producing false
+            // provider_timeout failures at ~100 seconds. Per-request linked CTS
+            // instances are the single timeout authority for this adapter.
+            Http.Timeout = Timeout.InfiniteTimeSpan;
         }
 
         internal static async Task<AgentProxyResponse> SendAsync(
