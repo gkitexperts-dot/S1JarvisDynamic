@@ -14,21 +14,6 @@ namespace S1Jarvis.Access
         public VerilicVerifyLicenceResult Verification { get; private set; }
         public VerilicVerifyProductResult Product { get; private set; }
 
-        public static JarvisLicenceAccessDecision FromLegacy(AccessCheckResponse response)
-        {
-            if (response == null)
-                throw new ArgumentNullException(nameof(response));
-
-            return new JarvisLicenceAccessDecision
-            {
-                Allowed = response.Allowed,
-                RuntimeReady = response.Allowed,
-                ToolName = response.ToolName,
-                Message = response.Message,
-                ValidUntil = response.ValidUntil
-            };
-        }
-
         public static JarvisLicenceAccessDecision FromVerilic(
             string productCode,
             string requestedProductId,
@@ -110,43 +95,23 @@ namespace S1Jarvis.Access
         }
     }
 
+    /// <summary>
+    /// Retained only as a neutral compatibility shape for existing callers.
+    /// NativeS1 AI execution data comes from the verified aiConfigurations payload
+    /// and the session registry, never from a separate routing contract.
+    /// </summary>
     internal sealed class JarvisAgentRoutingDecision
     {
-        public string AgentAccountRef { get; private set; }
-        public string Model { get; private set; }
         public string ReasonCode { get; private set; }
-        public bool Available => !string.IsNullOrWhiteSpace(AgentAccountRef);
+        public bool Available => false;
 
         public static JarvisAgentRoutingDecision None(string reasonCode = null)
         {
             return new JarvisAgentRoutingDecision
             {
-                ReasonCode = string.IsNullOrWhiteSpace(reasonCode) ? null : reasonCode.Trim()
-            };
-        }
-
-        public static JarvisAgentRoutingDecision FromLegacy(AccessCheckResponse response)
-        {
-            if (response == null)
-                throw new ArgumentNullException(nameof(response));
-            return new JarvisAgentRoutingDecision
-            {
-                AgentAccountRef = response.Allowed ? response.AgentAccountRef : null,
-                Model = response.Allowed ? response.AiModel : null
-            };
-        }
-
-        public static JarvisAgentRoutingDecision FromVerilic(VerilicAiRoutingResult result)
-        {
-            if (result == null || !result.Success ||
-                string.IsNullOrWhiteSpace(result.AgentAccountRef))
-                return None(result == null ? "routing_result_missing" : result.ReasonCode);
-
-            return new JarvisAgentRoutingDecision
-            {
-                AgentAccountRef = result.AgentAccountRef.Trim(),
-                Model = string.IsNullOrWhiteSpace(result.Model) ? null : result.Model.Trim(),
-                ReasonCode = string.IsNullOrWhiteSpace(result.ReasonCode) ? null : result.ReasonCode.Trim()
+                ReasonCode = string.IsNullOrWhiteSpace(reasonCode)
+                    ? null
+                    : reasonCode.Trim()
             };
         }
     }
@@ -156,21 +121,13 @@ namespace S1Jarvis.Access
         public JarvisLicenceAccessDecision Licence { get; private set; }
         public JarvisAgentRoutingDecision AgentRouting { get; private set; }
 
-        public static JarvisRuntimeAccessResult FromLegacy(AccessCheckResponse response)
-        {
-            return new JarvisRuntimeAccessResult
-            {
-                Licence = JarvisLicenceAccessDecision.FromLegacy(response),
-                AgentRouting = JarvisAgentRoutingDecision.FromLegacy(response)
-            };
-        }
-
         public static JarvisRuntimeAccessResult Create(
             JarvisLicenceAccessDecision licence,
             JarvisAgentRoutingDecision agentRouting)
         {
             if (licence == null)
                 throw new ArgumentNullException(nameof(licence));
+
             return new JarvisRuntimeAccessResult
             {
                 Licence = licence,
@@ -178,21 +135,24 @@ namespace S1Jarvis.Access
             };
         }
 
+        // Existing UI code consumes AccessCheckResponse. This adapter does not
+        // call or model the old Nexus contract; it projects only the NativeS1
+        // /verify decision into the older in-process DTO shape.
         public AccessCheckResponse ToLegacyCompatibilityResponse()
         {
             if (Licence == null)
+            {
                 return AccessCheckResponse.Deny(
-                    JarvisProducts.Jarvis, "Η άδεια χρήσης δεν είναι διαθέσιμη.");
+                    JarvisProducts.Jarvis,
+                    "Η άδεια χρήσης δεν είναι διαθέσιμη.");
+            }
 
             bool baseJarvis = string.Equals(
-                Licence.ToolName, JarvisProducts.Jarvis, StringComparison.Ordinal);
-            bool routingAvailable = AgentRouting != null && AgentRouting.Available;
-
-            // NativeS1 AI readiness is an independent startup gate. For legacy
-            // mode RuntimeReady mirrors Allowed; for NativeS1 the server decides.
+                Licence.ToolName,
+                JarvisProducts.Jarvis,
+                StringComparison.Ordinal);
             bool operationallyAllowed = Licence.Allowed &&
-                (!baseJarvis || Licence.RuntimeReady) &&
-                (!baseJarvis || routingAvailable || Licence.Verification != null);
+                (!baseJarvis || Licence.RuntimeReady);
 
             return new AccessCheckResponse
             {
@@ -200,10 +160,8 @@ namespace S1Jarvis.Access
                 ToolName = Licence.ToolName,
                 Message = Licence.Message,
                 ValidUntil = Licence.ValidUntil,
-                AgentAccountRef = operationallyAllowed && routingAvailable
-                    ? AgentRouting.AgentAccountRef : null,
-                AiModel = operationallyAllowed && routingAvailable
-                    ? AgentRouting.Model : null
+                AgentAccountRef = null,
+                AiModel = null
             };
         }
     }
