@@ -326,6 +326,11 @@ namespace S1Jarvis.Core
                 : "Atlas";
             string resolvedModel = ResolveAgentModel(activeAgentName);
 
+            // Skills Library — τοπικό matching, injection στο extraInstructions block
+            string skillsText = JarvisSkills.Match(activeAgentName, userText);
+            if (!string.IsNullOrWhiteSpace(skillsText))
+                extraInstructions = string.IsNullOrWhiteSpace(extraInstructions) ? skillsText : extraInstructions + "\n\n" + skillsText;
+
             try
             {
                 for (int iteration = 0; iteration < maxIterations; iteration++)

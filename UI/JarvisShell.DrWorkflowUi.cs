@@ -64,6 +64,7 @@ namespace S1Jarvis.UI
             await ExecuteEmbeddedDrScriptAsync("S1Jarvis.web.dr-auto-recognition.js");
             await ExecuteEmbeddedDrScriptAsync("S1Jarvis.web.dr-precedent-proposal-ui.js");
             await ExecuteEmbeddedDrScriptAsync("S1Jarvis.web.dr-trader-role-ui.js");
+            await ExecuteEmbeddedDrScriptAsync("S1Jarvis.web.dr-batch-mode.js");
 
             // Safety bridge for the high-value precedent-learning action.  We use
             // pointerdown in capture phase and post directly to WebView2 instead of

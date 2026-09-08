@@ -288,6 +288,9 @@ namespace S1Jarvis.UI
 
                 _agentAccountRef = access.AgentAccountRef;
 
+                // Skills Library — fire-and-forget, fail-soft
+                _ = Task.Run(() => JarvisSkills.LoadAsync(_xSupport));
+
                 string name = GetDisplayName();
                 string greeting = name != null
                     ? $"Γεια σου, {name}! Πώς μπορώ να βοηθήσω;"

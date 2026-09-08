@@ -1404,6 +1404,29 @@ namespace S1Jarvis.Core
             return JsonConvert.SerializeObject(new { success = true, format, path });
         }
 
+        // ── DR BATCH helpers — ΙΔΙΑ λογική με S1DocReader.Soft1Bridge ─────────
+        public static bool IsValidGreekAfm(string afm)
+        {
+            if (string.IsNullOrEmpty(afm) || afm.Length != 9 || !afm.All(char.IsDigit)) return false;
+            int sum = 0;
+            for (int i = 0; i < 8; i++) sum += (afm[i] - '0') * (1 << (8 - i));
+            return (sum % 11) % 10 == (afm[8] - '0');
+        }
+
+        // MODE SOSOURCE+SERIES για TRDR από FINDOC ιστορικό → { sosource, series, sampleSize }
+        public static string ExecuteTraderHistoryProfile(XSupport xSupport, int trdrId)
+        {
+            try
+            {
+                XTable t = xSupport.GetSQLDataSet(
+                    "SELECT TOP 1 SOSOURCE, SERIES, COUNT(*) AS CNT FROM FINDOC WHERE COMPANY=:1 AND TRDR=:2 AND ISCANCEL=0 GROUP BY SOSOURCE, SERIES ORDER BY CNT DESC",
+                    xSupport.ConnectionInfo.CompanyId, trdrId);
+                if (t == null || t.Count == 0) return JsonConvert.SerializeObject(new { sampleSize = 0 });
+                return JsonConvert.SerializeObject(new { sosource = Convert.ToInt32(t.Current["SOSOURCE"]), series = Convert.ToInt32(t.Current["SERIES"]), sampleSize = Convert.ToInt32(t.Current["CNT"]) });
+            }
+            catch (Exception ex) { DebugLog.Log("[dr] ExecuteTraderHistoryProfile EXCEPTION: " + ex); return JsonConvert.SerializeObject(new { sampleSize = 0 }); }
+        }
+
         // Στάδιο 3β - ιστορικό σειράς + carry-over υποψήφια (Έργο/
         // Εγκατάσταση/Υποκατάστημα), ΝΕΟ 16/08. SQL/λογική disambiguation
         // ΡΗΤΑ δοσμένα από τον χρήστη ζωντανά: SELECT SERIES,FINCODE,

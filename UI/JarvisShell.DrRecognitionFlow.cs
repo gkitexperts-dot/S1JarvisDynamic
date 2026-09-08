@@ -138,6 +138,10 @@ namespace S1Jarvis.UI
                 return;
             }
 
+            // Batch mode (ΙΔΙΟ flow με S1DocReader) — βλ. JarvisShell.DrBatch.cs
+            if (TryHandleDrBatchCommand(cmd))
+                return;
+
             if (string.Equals(commandType, "dr_register_document", StringComparison.Ordinal) ||
                 string.Equals(commandType, "dr_register_document_v2", StringComparison.Ordinal))
             {
