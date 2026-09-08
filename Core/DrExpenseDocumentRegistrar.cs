@@ -227,13 +227,18 @@ namespace S1Jarvis.Core
                     if (string.IsNullOrWhiteSpace(ef.Name) || string.IsNullOrWhiteSpace(val)) continue;
                     try
                     {
-                        string key = ef.Name.Trim().ToUpperInvariant();
-                        // APPEND αν το πεδίο έχει ήδη τιμή (π.χ. REMARKS από default) — όχι overwrite.
-                        object existing = findoc.Current[key];
-                        string existingText = existing == null || existing == DBNull.Value ? "" : Convert.ToString(existing).Trim();
-                        string combined = string.IsNullOrEmpty(existingText) ? val.Trim() : existingText + " | " + val.Trim();
-                        findoc.Current[key] = ToSoft1GreekAnsi(combined);
-                        DebugLog.Log("[dr] extra_field " + key + (string.IsNullOrEmpty(existingText) ? "=" : " +=") + val);
+                        // Πρόθεμα "+" = APPEND στην υπάρχουσα τιμή, αλλιώς OVERWRITE. Το skill το ορίζει.
+                        bool append = ef.Name.TrimStart().StartsWith("+");
+                        string key = ef.Name.Trim().TrimStart('+').ToUpperInvariant();
+                        string final = val.Trim();
+                        if (append)
+                        {
+                            object existing = findoc.Current[key];
+                            string existingText = existing == null || existing == DBNull.Value ? "" : Convert.ToString(existing).Trim();
+                            if (!string.IsNullOrEmpty(existingText)) final = existingText + " | " + final;
+                        }
+                        findoc.Current[key] = ToSoft1GreekAnsi(final);
+                        DebugLog.Log("[dr] extra_field " + key + (append ? " +=" : " =") + val);
                     }
                     catch (Exception efEx) { DebugLog.Log("[dr] extra_field " + ef.Name + " FAILED: " + efEx.Message); }
                 }
