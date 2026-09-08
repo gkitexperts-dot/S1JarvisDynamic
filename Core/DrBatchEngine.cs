@@ -180,6 +180,7 @@ namespace S1Jarvis.Core
                         ["docNumber"] = r.Extraction["document_info"]?["number"],
                         ["docDate"] = r.Extraction["document_info"]?["date"],
                         ["lineItems"] = r.Extraction["line_items"],
+                        ["extraFields"] = r.Extraction["extra_fields"],
                         ["mode"] = "auto"
                     };
                     var reg = JObject.Parse(await Task.Run(() => JarvisTools.ExecuteRegisterDrDocument(_x, input)));

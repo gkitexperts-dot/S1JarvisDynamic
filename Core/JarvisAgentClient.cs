@@ -1401,11 +1401,19 @@ namespace S1Jarvis.Core
                 "               \"vat_total\": \"\", \"grand_total\": \"\" },\n" +
                 "  \"aade_link\": \"\",\n" +
                 "  \"remarks\": \"\",\n" +
+                "  \"extra_fields\": {},\n" +
                 "  \"confidence\": 0.95\n" +
                 "}\n\n" +
                 "Αριθμοί ΟΠΩΣ εμφανίζονται στο έντυπο (ελληνική μορφή, π.χ. 1.234,56). " +
                 "Κενά πεδία -> \"\" (ΟΧΙ null). \"code\" στις γραμμές = ο κωδικός είδους ΤΟΥ ΕΚΔΟΤΗ " +
-                "(όχι δικός μας), όπως τυπώνεται στο παραστατικό.";
+                "(όχι δικός μας), όπως τυπώνεται στο παραστατικό. " +
+                "\"extra_fields\": ΚΕΝΟ εκτός αν οι ΕΙΔΙΚΕΣ ΟΔΗΓΙΕΣ ζητούν ρητά τιμή σε πεδίο Soft1 " +
+                "(π.χ. {\"CCCDOCCODE\": \"ΤΠΥ 0022171\"}). ΚΛΕΙΔΙ = όνομα πεδίου FINDOC.";
+
+            // Skills Library — ΕΙΔΙΚΕΣ ΟΔΗΓΙΕΣ ΕΓΚΑΤΑΣΤΑΣΗΣ για τον DR subagent
+            string drSkills = JarvisSkills.Match("DocReader", companyAfm + " document extraction");
+            if (!string.IsNullOrWhiteSpace(drSkills))
+                prompt += "\n\n══ ΕΙΔΙΚΕΣ ΟΔΗΓΙΕΣ ΕΓΚΑΤΑΣΤΑΣΗΣ (υπερισχύουν) ══\n" + drSkills;
 
             var requestBody = new
             {

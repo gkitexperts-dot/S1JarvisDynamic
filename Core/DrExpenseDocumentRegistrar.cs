@@ -180,7 +180,8 @@ namespace S1Jarvis.Core
 
             return PostLinearDocument(
                 xSupport, company, trdrId, sosource, series, objectName,
-                docDateRaw, docNumber, docType, mode, lines, pendingLines);
+                docDateRaw, docNumber, docType, mode, lines, pendingLines,
+                input["extraFields"] as JObject);
         }
 
         private static string PostLinearDocument(
@@ -195,7 +196,8 @@ namespace S1Jarvis.Core
             string docType,
             string mode,
             List<LineRow> lines,
-            JArray pendingLines)
+            JArray pendingLines,
+            JObject extraFields = null)
         {
             XModule module = xSupport.CreateModule(objectName);
             XTable findoc = module.GetTable("FINDOC");
@@ -216,6 +218,15 @@ namespace S1Jarvis.Core
                 {
                     string remarks = "Jarvis DR - πηγή παραστατικό: " + fullDocIdentifier;
                     findoc.Current["REMARKS"] = ToSoft1GreekAnsi(remarks);
+                }
+
+                // Custom πεδία από skills (extra_fields) — ανά πεδίο try/catch.
+                foreach (var ef in (extraFields ?? new JObject()).Properties())
+                {
+                    string val = ef.Value?.ToString();
+                    if (string.IsNullOrWhiteSpace(ef.Name) || string.IsNullOrWhiteSpace(val)) continue;
+                    try { findoc.Current[ef.Name.Trim().ToUpperInvariant()] = ToSoft1GreekAnsi(val.Trim()); DebugLog.Log("[dr] extra_field " + ef.Name + "=" + val); }
+                    catch (Exception efEx) { DebugLog.Log("[dr] extra_field " + ef.Name + " FAILED: " + efEx.Message); }
                 }
 
                 string manualFincodeHint = null;

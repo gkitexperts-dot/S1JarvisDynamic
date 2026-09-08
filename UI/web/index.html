@@ -8616,7 +8616,7 @@
         postCommand({
           type: 'dr_register_document', fileId: String(id), mode: 'manualPerLine',
           trdrId: entry.trdrId, sosource: entry.manualSosource, series: entry.manualSeries,
-          docDate: docInfo.date || '', docNumber: docInfo.number || '', docType: docInfo.type || '', lineItems: lines
+          docDate: docInfo.date || '', docNumber: docInfo.number || '', docType: docInfo.type || '', lineItems: lines, extraFields: entry.extraction.extra_fields || {}
         });
       }
       return;
