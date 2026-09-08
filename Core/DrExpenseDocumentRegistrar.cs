@@ -225,7 +225,16 @@ namespace S1Jarvis.Core
                 {
                     string val = ef.Value?.ToString();
                     if (string.IsNullOrWhiteSpace(ef.Name) || string.IsNullOrWhiteSpace(val)) continue;
-                    try { findoc.Current[ef.Name.Trim().ToUpperInvariant()] = ToSoft1GreekAnsi(val.Trim()); DebugLog.Log("[dr] extra_field " + ef.Name + "=" + val); }
+                    try
+                    {
+                        string key = ef.Name.Trim().ToUpperInvariant();
+                        // APPEND αν το πεδίο έχει ήδη τιμή (π.χ. REMARKS από default) — όχι overwrite.
+                        object existing = findoc.Current[key];
+                        string existingText = existing == null || existing == DBNull.Value ? "" : Convert.ToString(existing).Trim();
+                        string combined = string.IsNullOrEmpty(existingText) ? val.Trim() : existingText + " | " + val.Trim();
+                        findoc.Current[key] = ToSoft1GreekAnsi(combined);
+                        DebugLog.Log("[dr] extra_field " + key + (string.IsNullOrEmpty(existingText) ? "=" : " +=") + val);
+                    }
                     catch (Exception efEx) { DebugLog.Log("[dr] extra_field " + ef.Name + " FAILED: " + efEx.Message); }
                 }
 
