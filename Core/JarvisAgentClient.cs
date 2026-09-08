@@ -1395,7 +1395,7 @@ namespace S1Jarvis.Core
                 "  \"line_items\": [\n" +
                 "    { \"code\": \"\", \"description\": \"\", \"quantity\": \"\", \"unit\": \"\",\n" +
                 "      \"unit_price\": \"\", \"discount\": \"\", \"net_value\": \"\",\n" +
-                "      \"vat_rate\": \"\", \"vat_amount\": \"\", \"line_total\": \"\" }\n" +
+                "      \"vat_rate\": \"\", \"vat_amount\": \"\", \"line_total\": \"\", \"extra_fields\": {} }\n" +
                 "  ],\n" +
                 "  \"totals\": { \"net_total\": \"\", \"discount_total\": \"\", \"expenses_total\": \"\",\n" +
                 "               \"vat_total\": \"\", \"grand_total\": \"\" },\n" +
@@ -1410,7 +1410,8 @@ namespace S1Jarvis.Core
                 "\"extra_fields\": ΚΕΝΟ εκτός αν οι ΕΙΔΙΚΕΣ ΟΔΗΓΙΕΣ ζητούν ρητά τιμή σε πεδίο Soft1. " +
                 "ΚΛΕΙΔΙ = όνομα πεδίου FINDOC. Πρόθεμα \"+\" στο κλειδί = ΠΡΟΣΘΗΚΗ στην υπάρχουσα τιμή " +
                 "(π.χ. {\"+REMARKS\": \"ΤΠΥ 0022171\"}), χωρίς πρόθεμα = ΑΝΤΙΚΑΤΑΣΤΑΣΗ (π.χ. {\"CCCDOCCODE\": \"ΤΠΥ 0022171\"}). " +
-                "Αν η οδηγία λέει \"συμπληρωματικά\"/\"πρόσθεσε\"/\"μαζί με\" → χρησιμοποίησε \"+\".";
+                "Αν η οδηγία λέει \"συμπληρωματικά\"/\"πρόσθεσε\"/\"μαζί με\" → χρησιμοποίησε \"+\". " +
+                "Το ίδιο ισχύει για extra_fields ΑΝΑ ΓΡΑΜΜΗ (κλειδί = πεδίο MTRLINES/LINLINES, π.χ. LINEREMARKS, COMMENTS).";
 
             // Skills Library — ΕΙΔΙΚΕΣ ΟΔΗΓΙΕΣ ΕΓΚΑΤΑΣΤΑΣΗΣ για τον DR subagent
             string drSkills = JarvisSkills.Match("DocReader", companyAfm + " document extraction");

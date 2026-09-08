@@ -1404,6 +1404,32 @@ namespace S1Jarvis.Core
             return JsonConvert.SerializeObject(new { success = true, format, path });
         }
 
+        // extra_fields από skills → XTable. Πρόθεμα "+" = append στην υπάρχουσα τιμή.
+        internal static void ApplyExtraFields(XTable table, JObject extra, string logTag)
+        {
+            if (table == null || extra == null) return;
+            foreach (var p in extra.Properties())
+            {
+                string v = p.Value?.ToString();
+                if (string.IsNullOrWhiteSpace(p.Name) || string.IsNullOrWhiteSpace(v)) continue;
+                try
+                {
+                    bool append = p.Name.Trim().StartsWith("+");
+                    string key = p.Name.Trim().TrimStart('+').ToUpperInvariant();
+                    string final = v.Trim();
+                    if (append)
+                    {
+                        object existing = table.Current[key];
+                        string ex = existing == null || existing == DBNull.Value ? "" : Convert.ToString(existing).Trim();
+                        if (!string.IsNullOrEmpty(ex)) final = ex + " | " + final;
+                    }
+                    table.Current[key] = final;
+                    DebugLog.Log(logTag + " extra_field " + key + (append ? " +=" : " =") + v);
+                }
+                catch (Exception ex) { DebugLog.Log(logTag + " extra_field " + p.Name + " FAILED: " + ex.Message); }
+            }
+        }
+
         // ── DR BATCH helpers — ΙΔΙΑ λογική με S1DocReader.Soft1Bridge ─────────
         public static bool IsValidGreekAfm(string afm)
         {
@@ -1851,6 +1877,8 @@ namespace S1Jarvis.Core
             // Value = η τιμή του ΣΤΟ ιστορικό (null αν η γραμμή δεν είχε τιμή
             // εκεί - ΔΕΝ γράφεται τότε στη νέα γραμμή, βλ. write loop).
             public Dictionary<string, object> Extra = new Dictionary<string, object>();
+            // Η αρχική AI γραμμή (για extra_fields από skills). null στο consolidate.
+            public JObject SourceLine;
         }
 
         // Διαβάζει τις γραμμές ΕΝΟΣ συγκεκριμένου FINDOC απευθείας από το
@@ -2271,7 +2299,7 @@ namespace S1Jarvis.Core
                     double qty = ParseInvariantDouble(line["quantity"]);
                     double price = ParseInvariantDouble(line["unit_price"]);
                     MtrLineRow profile = FindItemHistoryProfile(xSupport, company, trdrId, mtrlId.Value, docNumber);
-                    var newLine = new MtrLineRow { MtrL = mtrlId.Value, Qty1 = qty, Price = price };
+                    var newLine = new MtrLineRow { MtrL = mtrlId.Value, Qty1 = qty, Price = price, SourceLine = line };
                     if (profile != null)
                         foreach (var kv in profile.Extra) newLine.Extra[kv.Key] = kv.Value;
                     linesToWrite.Add(newLine);
@@ -2315,7 +2343,7 @@ namespace S1Jarvis.Core
                     foreach (var l in matchedLines)
                     {
                         MtrLineRow profile = FindItemHistoryProfile(xSupport, company, trdrId, l.mtrlId, docNumber);
-                        var newLine = new MtrLineRow { MtrL = l.mtrlId, Qty1 = l.qty, Price = l.price };
+                        var newLine = new MtrLineRow { MtrL = l.mtrlId, Qty1 = l.qty, Price = l.price, SourceLine = l.raw };
                         if (profile != null)
                             foreach (var kv in profile.Extra) newLine.Extra[kv.Key] = kv.Value;
                         linesToWrite.Add(newLine);
@@ -2372,6 +2400,8 @@ namespace S1Jarvis.Core
                 // REMARKS=2000).
                 if (!string.IsNullOrWhiteSpace(fullDocIdentifier))
                     FINDOC.Current["REMARKS"] = "Jarvis DR - πηγή παραστατικό: " + fullDocIdentifier;
+                // extra_fields header από skills — "+" = append
+                ApplyExtraFields(FINDOC, input["extraFields"] as JObject, "[dr] header");
 
                 // ΑΝΑΘΕΩΡΗΘΗΚΕ 16/08 (ζωντανό test, χρήστης εξήγησε το
                 // ΠΡΑΓΜΑΤΙΚΟ Soft1 UI behavior - βλ. GetFincodeMode πιο πάνω
@@ -2435,6 +2465,8 @@ namespace S1Jarvis.Core
                     // unboxing ΔΕΝ κάνει implicit widening) - InvalidCastException.
                     foreach (var kv in line.Extra)
                         if (kv.Value != null) lineTable.Current[kv.Key] = NormalizeNumeric(kv.Value);
+                    // extra_fields γραμμής από skills — "+" = append
+                    ApplyExtraFields(lineTable, line.SourceLine?["extra_fields"] as JObject, "[dr] line");
                     lineTable.Current.Post();
                 }
 

@@ -130,6 +130,7 @@ namespace S1Jarvis.Core
                     };
                     containsExpense |= sodType == SodTypeExpense;
                     CopyHistoryProfile(xSupport, company, trdrId, mtrlId.Value, docNumber, row.Extra);
+                    MergeLineExtraFields(line["extra_fields"] as JObject, row.Extra);
                     lines.Add(row);
                 }
 
@@ -280,8 +281,22 @@ namespace S1Jarvis.Core
 
                     foreach (var kv in line.Extra)
                     {
-                        if (kv.Value != null)
-                            lineTable.Current[kv.Key] = NormalizeNumeric(kv.Value);
+                        if (kv.Value == null) continue;
+                        try
+                        {
+                            bool append = kv.Key.StartsWith("+");
+                            string key = kv.Key.TrimStart('+');
+                            object val = NormalizeNumeric(kv.Value);
+                            if (append)
+                            {
+                                object existing = lineTable.Current[key];
+                                string ex = existing == null || existing == DBNull.Value ? "" : Convert.ToString(existing).Trim();
+                                val = string.IsNullOrEmpty(ex) ? Convert.ToString(val) : ex + " | " + Convert.ToString(val);
+                                if (val is string sv) val = ToSoft1GreekAnsi(sv);
+                            }
+                            lineTable.Current[key] = val;
+                        }
+                        catch (Exception efEx) { DebugLog.Log("[dr] line field " + kv.Key + " FAILED: " + efEx.Message); }
                     }
                     lineTable.Current.Post();
                 }
@@ -318,6 +333,20 @@ namespace S1Jarvis.Core
                 lineTable.Dispose();
                 findoc.Dispose();
                 module.Dispose();
+            }
+        }
+
+        // extra_fields γραμμής από skills → row.Extra. Κρατάει το "+" prefix για append στο write.
+        private static void MergeLineExtraFields(JObject extra, Dictionary<string, object> target)
+        {
+            if (extra == null) return;
+            foreach (var p in extra.Properties())
+            {
+                string v = p.Value?.ToString();
+                if (string.IsNullOrWhiteSpace(p.Name) || string.IsNullOrWhiteSpace(v)) continue;
+                bool append = p.Name.Trim().StartsWith("+");
+                string key = (append ? "+" : "") + p.Name.Trim().TrimStart('+').ToUpperInvariant();
+                target[key] = v.Trim();
             }
         }
 
