@@ -509,7 +509,248 @@ ppt_save_as
 
 ---
 
-# 4. Shared Office contracts
+# 4. Office Preview & Rendering
+
+Status: **Future capability only / NOT wired into UI or runtime**
+
+Preview should be treated as a deterministic rendering/presentation subsystem, not as an AI task.
+The LLM does not need to understand pixels in order to show the user a preview. The Office artifact
+is first created/validated, then a renderer produces preview assets that the Jarvis UI can display.
+
+Suggested flow:
+
+```text
+Office artifact (.xlsx/.docx/.pptx/.pdf)
+  -> OfficePreviewRenderer
+  -> PreviewArtifact
+  -> Jarvis UI
+```
+
+The preview subsystem should never mutate the source Office artifact.
+
+## 4.1 Shared preview contract
+
+### `OfficePreviewRequest`
+
+Suggested fields:
+
+```text
+SourceArtifactId
+FileType
+TargetSheetOrRange
+TargetPageOrSlide
+MaxPages
+MaxWidth
+MaxHeight
+OutputMode
+```
+
+Possible `OutputMode` values:
+
+```text
+Html
+PngPages
+Pdf
+ThumbnailSet
+```
+
+### `OfficePreviewArtifact`
+
+Suggested fields:
+
+```text
+PreviewId
+SourceArtifactId
+FileType
+PageCount
+SlideCount
+SheetCount
+HtmlContentOrHandle
+PreviewImages[]
+PdfArtifact
+Thumbnails[]
+Warnings[]
+CreatedUtc
+```
+
+Each image/page entry should expose only controlled artifact references, never arbitrary filesystem
+paths to the UI.
+
+## 4.2 Excel preview
+
+Recommended first implementation:
+
+### `excel_render_range_preview`
+Renders a selected worksheet range as safe HTML for the Jarvis UI.
+
+Use cases:
+- uploaded workbook inspection
+- before/after formatting preview
+- summary sheet preview
+- quick table preview without launching Excel
+
+Recommended behavior:
+- preserve row/column structure
+- basic number/date formatting where known
+- basic font/fill/alignment if available
+- cap rendered rows/columns
+- indicate truncated data
+- do not execute macros/external links
+
+### `excel_render_sheet_preview`
+Renders an entire sheet with a configurable row/column/page limit.
+
+For higher-fidelity print-layout preview, a later renderer may convert the workbook/sheet to PDF or
+images using an approved Office-compatible rendering engine.
+
+Recommended UI behavior:
+- sheet selector
+- zoom
+- horizontal/vertical scrolling
+- optional range highlight
+- source/download action beside preview
+
+## 4.3 Word preview
+
+Recommended approach:
+
+```text
+DOCX
+  -> trusted renderer
+  -> PDF or page images
+  -> Jarvis document viewer
+```
+
+### `word_render_preview`
+Creates page-level preview artifacts.
+
+Recommended output:
+- page count
+- per-page image/PDF page reference
+- thumbnail set
+- warnings when rendering differs from native Word
+
+A lightweight HTML preview may also be useful for fast text/table inspection, but it should not be
+presented as pixel-identical Word rendering.
+
+Recommended UI behavior:
+- paged viewer
+- zoom
+- page thumbnails
+- search text when available
+- download/open original artifact
+
+## 4.4 PowerPoint preview
+
+Recommended approach:
+
+```text
+PPTX
+  -> trusted renderer
+  -> one image per slide
+  -> Jarvis slide viewer
+```
+
+### `ppt_render_preview`
+Renders slides to preview images.
+
+Recommended output:
+- slide count
+- slide image references
+- thumbnails
+- aspect ratio
+- rendering warnings
+
+Recommended UI behavior:
+- main slide preview
+- thumbnail rail
+- previous/next navigation
+- zoom/fullscreen
+- slide number
+- download/open original artifact
+
+This preview is especially useful after AI-generated or AI-edited presentations so the user can
+visually verify the deck before sending or presenting it.
+
+## 4.5 PDF preview
+
+### `pdf_render_preview`
+Provides page previews for existing/generated PDF artifacts.
+
+Recommended behavior:
+- page thumbnails
+- paged main view
+- zoom
+- bounded page rendering
+- no active content execution
+
+PDF can also serve as an intermediate rendering format for Word/PowerPoint and, where reliable,
+Excel print-layout previews.
+
+## 4.6 Preview validation and safety
+
+Preview rendering should:
+- run after file validation
+- never execute Office macros
+- block or ignore external linked content by default
+- have CPU/memory/time limits
+- cap pages/slides/sheets rendered per request
+- isolate renderer crashes from Jarvis orchestration
+- delete transient preview assets according to workspace retention policy
+- never expose raw local paths when a controlled artifact reference exists
+- preserve the original artifact unchanged
+
+## 4.7 Suggested future code layout for preview
+
+```text
+Core/Office/Preview/
+  OfficePreviewRequest.cs
+  OfficePreviewArtifact.cs
+  JarvisOfficePreviewCoordinator.cs
+  JarvisExcelPreviewRenderer.cs
+  JarvisWordPreviewRenderer.cs
+  JarvisPptPreviewRenderer.cs
+  JarvisPdfPreviewRenderer.cs
+```
+
+A platform-specific rendering adapter can live behind these contracts if required. The rest of
+Jarvis should depend on the neutral preview contract rather than LibreOffice, Microsoft Office,
+or any other renderer directly.
+
+## 4.8 Suggested UI experience
+
+Future Jarvis result card:
+
+```text
+[ filename.xlsx ]
+[ Preview ] [ Open/Download ]
+
++------------------------------------------+
+|          rendered document area          |
+|                                          |
++------------------------------------------+
+
+Sheet/Page/Slide navigation
+Zoom
+Warnings when preview is truncated
+```
+
+For generated files, the ideal user flow is:
+
+```text
+User request
+  -> Jarvis creates/edits Office artifact
+  -> deterministic validation
+  -> automatic preview generation
+  -> Jarvis shows preview + artifact reference
+```
+
+Preview generation failure should **not** convert a valid Office artifact into an execution
+failure. Jarvis may return the validated file with a clear preview warning.
+
+---
+
+# 5. Shared Office contracts
 
 Future implementation should share a small set of provider-neutral contracts.
 
@@ -561,7 +802,7 @@ Recommended defaults:
 
 ---
 
-# 5. Suggested future code layout
+# 6. Suggested future code layout
 
 This is only a naming/layout proposal; nothing is implemented or referenced today.
 
@@ -571,6 +812,15 @@ Core/Office/
     OfficeArtifactRef.cs
     OfficeToolResult.cs
     OfficeEditPolicy.cs
+
+  Preview/
+    OfficePreviewRequest.cs
+    OfficePreviewArtifact.cs
+    JarvisOfficePreviewCoordinator.cs
+    JarvisExcelPreviewRenderer.cs
+    JarvisWordPreviewRenderer.cs
+    JarvisPptPreviewRenderer.cs
+    JarvisPdfPreviewRenderer.cs
 
   Excel/
     JarvisExcelInspector.cs
@@ -603,7 +853,7 @@ existing Jarvis provider-neutral agent/orchestration path.
 
 ---
 
-# 6. Future task ownership proposal
+# 7. Future task ownership proposal
 
 This is intentionally not registered yet.
 
@@ -615,7 +865,7 @@ Document/report construction       -> Atlas
 Presentation construction          -> Atlas
 Business-data acquisition          -> existing domain owner as today
 Emailing an Office artifact        -> Echo after deterministic dependency binding
-Soft1 write operations              -> existing registered domain owner
+Soft1 write operations             -> existing registered domain owner
 ```
 
 Jarvis remains user-facing and owns the execution graph. Agents do not call other agents.
@@ -628,9 +878,11 @@ ReportData.dataset
   -> SendEmail.artifact_reference
 ```
 
+Preview remains presentation infrastructure and should not become a separate AI owner-agent.
+
 ---
 
-# 7. Recommended rollout order
+# 8. Recommended rollout order
 
 ## Phase A - Safe editing core
 
@@ -643,6 +895,11 @@ Word:
 PowerPoint:
 - inspect/read/create/add slide/text/table/image/basic layout/save/validate
 
+Preview:
+- Excel safe HTML range/sheet preview
+- PDF viewer integration
+- basic generated-artifact preview contract
+
 ## Phase B - Business-quality output
 
 Excel:
@@ -654,17 +911,23 @@ Word:
 PowerPoint:
 - themes/charts/KPI cards/report decks
 
+Preview:
+- DOCX -> PDF/page preview
+- PPTX -> slide images/thumbnails
+- richer navigation/zoom
+
 ## Phase C - Advanced automation
 
 - structured analytics
 - company templates
 - richer charting
 - Office artifact chaining between Jarvis tasks
-- render/preview QA when reliable engines are available
+- high-fidelity render/preview QA when reliable engines are available
+- optional before/after visual comparison for edited Office artifacts
 
 ---
 
-# 8. Explicit non-goals for the preparation document
+# 9. Explicit non-goals for the preparation document
 
 This file does **not**:
 - register new tasks
@@ -675,6 +938,7 @@ This file does **not**:
 - add NuGet packages
 - modify current XLSX/DOCX readers or writer
 - change UI
+- add a renderer dependency
 - change Soft1 integration
 - introduce Python/Docker requirements
 
